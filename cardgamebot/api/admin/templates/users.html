@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}사용자 관리{% endblock %}
+{% block body %}
+<h1>사용자 관리</h1>
+<p class="sub">Owner 는 콘텐츠 편집과 사용자 관리를, Editor 는 콘텐츠 편집만 할 수 있습니다.</p>
+
+<div class="card">
+  <table>
+    <tr><th>디스코드</th><th>ID</th><th>권한</th><th>마지막 로그인</th><th></th></tr>
+    {% for u in admins %}
+    <tr>
+      <td>{{ u.username or '—' }}</td>
+      <td class="muted"><code>{{ u.discord_id }}</code></td>
+      <td>
+        <form class="inline" method="post" action="/admin/users/manage/{{ u.id }}">
+          <select name="role" style="width:auto;">
+            <option value="owner" {{ 'selected' if u.role.value == 'owner' else '' }}>owner</option>
+            <option value="editor" {{ 'selected' if u.role.value == 'editor' else '' }}>editor</option>
+          </select>
+          <label style="display:inline; margin-left:10px; font-weight:400;">
+            <input type="checkbox" name="is_active" {{ 'checked' if u.is_active else '' }}> 활성
+          </label>
+          <button class="btn" type="submit" style="margin-left:8px;">적용</button>
+        </form>
+      </td>
+      <td class="muted">{{ u.last_login_at.strftime('%Y-%m-%d %H:%M') if u.last_login_at else '—' }}</td>
+      <td></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="note">
+  새 팀원은 <code>/admin/login</code> 으로 한 번 로그인하면 Editor 로 자동 생성됩니다.
+  그 뒤 이 화면에서 권한을 조정하세요.
+</div>
+{% endblock %}

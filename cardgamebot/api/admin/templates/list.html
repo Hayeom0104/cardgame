@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}{{ spec.label }}{% endblock %}
+{% block body %}
+<div class="row">
+  <div>
+    <h1>{{ spec.label }}</h1>
+    <p class="sub" style="margin:0;">{{ rows|length }}개 등록됨</p>
+  </div>
+  <a class="btn primary" href="/admin/{{ spec.key }}/new">+ 새 {{ spec.label }}</a>
+</div>
+
+<div class="card">
+  {% if rows %}
+  <table>
+    <tr>
+      {% if spec.image_field %}<th></th>{% endif %}
+      {% for col in spec.list_columns %}<th>{{ col }}</th>{% endfor %}
+      <th>상태</th><th></th>
+    </tr>
+    {% for row in rows %}
+    <tr>
+      {% if spec.image_field %}
+      <td>
+        {% set img = row[spec.image_field] if row[spec.image_field] is defined else None %}
+        {% if img %}<img class="thumb" src="/uploads/{{ img }}" alt="">
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
+      {% endif %}
+      {% for col in spec.list_columns %}
+      <td>
+        {% set v = row[col] %}
+        {% if v.__class__.__name__ in ('CardKind', 'TargetType', 'EnemyTier') %}{{ v.value }}
+        {% elif v is none %}<span class="muted">공용</span>
+        {% else %}{{ v }}{% endif %}
+      </td>
+      {% endfor %}
+      <td>{% if row.is_active %}<span style="color:var(--ok)">활성</span>
+          {% else %}<span class="muted">비활성</span>{% endif %}</td>
+      <td style="text-align:right; white-space:nowrap;">
+        <a class="btn" href="/admin/{{ spec.key }}/{{ row.code }}/edit">수정</a>
+        <form class="inline" method="post" action="/admin/{{ spec.key }}/{{ row.code }}/delete"
+              onsubmit="return confirm('비활성화하시겠습니까? 진행 중인 런을 위해 데이터는 남습니다.');">
+          <button class="btn danger" type="submit">비활성화</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">아직 등록된 {{ spec.label }}이(가) 없습니다.</p>
+  {% endif %}
+</div>
+{% endblock %}

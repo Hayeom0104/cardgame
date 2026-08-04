@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}로그인{% endblock %}
+{% block body %}
+<div class="card" style="max-width: 460px; margin: 60px auto; text-align: center;">
+  <h1>🎴 {{ settings.bot_name }}</h1>
+  <p class="sub">콘텐츠 관리 대시보드</p>
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  <p class="muted">카드 · 적 · 캐릭터 데이터를 관리하려면 디스코드 계정으로 로그인하세요.</p>
+  <p style="margin-top: 20px;"><a class="btn primary" href="/admin/login">디스코드로 로그인</a></p>
+</div>
+{% endblock %}

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}대시보드{% endblock %}
+{% block body %}
+<h1>콘텐츠 대시보드</h1>
+<p class="sub">카드 · 적 · 캐릭터 데이터를 코드 수정 없이 관리합니다.</p>
+
+<div class="grid">
+  {% for key, s in specs.items() %}
+  <a class="stat" href="/admin/{{ key }}" style="display:block;">
+    <div class="n">{{ counts[key] }}</div>
+    <div class="l">{{ s.label }}</div>
+  </a>
+  {% endfor %}
+</div>
+
+<div class="note">
+  장비 관리는 설계 문서 §10.1 에서 대시보드 범위 밖으로 정해져 있어 포함하지 않았습니다.
+  필요해지면 <code>schema.py</code> 에 EntitySpec 하나만 추가하면 폼이 자동 생성됩니다.
+</div>
+
+<div class="card">
+  <div class="row"><h2 style="margin:0;font-size:16px;">최근 변경</h2></div>
+  {% if recent %}
+  <table>
+    <tr><th>시각</th><th>작업자</th><th>동작</th><th>대상</th></tr>
+    {% for log in recent %}
+    <tr>
+      <td class="muted">{{ log.created_at.strftime('%m-%d %H:%M') }}</td>
+      <td>{{ log.detail.get('by') or log.actor_discord_id }}</td>
+      <td>{{ log.action }}</td>
+      <td><code>{{ log.entity }}/{{ log.entity_code }}</code></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">아직 변경 이력이 없습니다.</p>
+  {% endif %}
+</div>
+{% endblock %}

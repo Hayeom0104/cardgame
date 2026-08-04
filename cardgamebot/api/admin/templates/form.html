@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}{{ spec.label }} {{ '수정' if row else '등록' }}{% endblock %}
+
+{% macro value_of(field) -%}
+  {%- if row -%}
+    {%- set v = row[field.name] -%}
+    {%- if v is none -%}{{ '' }}
+    {%- elif field.type == 'json' -%}{{ v | tojson(indent=2) }}
+    {%- elif v.__class__.__name__ in ('CardKind', 'TargetType', 'EnemyTier') -%}{{ v.value }}
+    {%- else -%}{{ v }}{%- endif -%}
+  {%- else -%}{{ field.default }}{%- endif -%}
+{%- endmacro %}
+
+{% block body %}
+<div class="row">
+  <h1>{{ spec.label }} {{ '수정' if row else '등록' }}</h1>
+  <a class="btn" href="/admin/{{ spec.key }}">목록으로</a>
+</div>
+
+<form class="card" method="post" enctype="multipart/form-data"
+      action="{{ '/admin/%s/%s/edit' % (spec.key, row.code) if row else '/admin/%s/new' % spec.key }}">
+  {% for field in spec.fields %}
+  <div class="field">
+    <label for="f_{{ field.name }}">
+      {{ field.label }}{% if field.required %} <span style="color:var(--danger)">*</span>{% endif %}
+    </label>
+
+    {% if field.type == 'textarea' %}
+      <textarea id="f_{{ field.name }}" name="{{ field.name }}">{{ value_of(field) }}</textarea>
+
+    {% elif field.type == 'json' %}
+      <textarea class="json" id="f_{{ field.name }}" name="{{ field.name }}">{{ value_of(field) }}</textarea>
+
+    {% elif field.type == 'int' %}
+      <input type="number" id="f_{{ field.name }}" name="{{ field.name }}" value="{{ value_of(field) }}">
+
+    {% elif field.type == 'bool' %}
+      {% set checked = row[field.name] if row else field.default %}
+      <input type="checkbox" id="f_{{ field.name }}" name="{{ field.name }}" {{ 'checked' if checked else '' }}>
+
+    {% elif field.type == 'select' %}
+      {% set current = value_of(field) %}
+      <select id="f_{{ field.name }}" name="{{ field.name }}">
+        {% for val, label in field.options %}
+        <option value="{{ val }}" {{ 'selected' if val == current else '' }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+
+    {% elif field.type == 'image' %}
+      {% set current = row[field.name] if row else None %}
+      {% if current %}
+        <p><img class="thumb" style="width:96px;height:96px;" src="/uploads/{{ current }}" alt=""></p>
+      {% endif %}
+      <input type="file" id="f_{{ field.name }}" name="image" accept="image/png,image/jpeg,image/webp,image/gif">
+      <div class="help">비워두면 기존 이미지가 유지됩니다. 최대 4MB.</div>
+
+    {% else %}
+      <input type="text" id="f_{{ field.name }}" name="{{ field.name }}"
+             value="{{ value_of(field) }}" {{ 'readonly' if row and field.name == 'code' else '' }}>
+    {% endif %}
+
+    {% if field.help %}<div class="help">{{ field.help }}</div>{% endif %}
+  </div>
+  {% endfor %}
+
+  <button class="btn primary" type="submit">{{ '저장' if row else '등록' }}</button>
+</form>
+{% endblock %}
