@@ -24,8 +24,10 @@ from app.content.seed import TUTORIAL_WORLD_ID, create_account
 from app.db.connection import Database
 from app.engine import achievements as ach
 from app.engine import battle as bt
+from app.engine import deck
 from app.engine import lifecycle as lc
 from app.engine import map_gen
+from app.engine import nodes
 from app.engine import units as un
 from app.engine.rng import JournaledRng
 
@@ -270,7 +272,7 @@ def handle_modal_submit(ctx: HandlerContext, event: ev.ModalSubmitEvent) -> dict
 
 def _on_node_choose(ctx: HandlerContext, event: ev.InteractionEvent,
                     parsed: cid.CustomId) -> dict:
-    """맵 화면 → node buttons (branch width 2-3)."""
+    """맵 화면 → node buttons (branch width 2-3), then §3 node resolution."""
     gate = check_gates(ctx.db, user_id=event.user_id, custom_id=parsed,
                        allowed_states={lc.MAP_NAVIGATION})
     node_index = int(parsed.payload)
@@ -291,7 +293,194 @@ def _on_node_choose(ctx: HandlerContext, event: ev.InteractionEvent,
             "deepest_depth_reached = MAX(deepest_depth_reached, ?) WHERE run_id = ?",
             (node_index, lc.NODE_RESOLUTION, node["depth"], parsed.run_id),
         )
-    return _reply(f"{node['node_type']} 노드에 진입합니다.")
+        try:
+            result = nodes.resolve_node(ctx.db, ctx.balance, _rng(ctx, gate.run),
+                                        run_id=parsed.run_id, node_index=node_index)
+        except nodes.NodeError as error:
+            # Surfaced as an ephemeral notice rather than a 500: an unhandled
+            # exception would leave the event unrecorded and Central would
+            # redeliver it indefinitely (§16.7).
+            raise GateError(errors.ILLEGAL_STATE, reason=str(error)) from error
+
+        # A 전투 node starts with whichever unit is fastest, which is often an
+        # enemy (§2.8.6), so the battle has to be driven to the first player
+        # decision before the screen is rendered.
+        conclusion = None
+        if result["screen"] == "battle":
+            conclusion = _drive_battle(ctx, gate.run, result["battle_id"])
+
+    content = _screen_summary(node, result)
+    if conclusion is not None:
+        content = f"{content}\n{_conclusion_summary(conclusion)}"
+    return {"action": "edit", "content": content}
+
+
+def _screen_summary(node, result: dict) -> str:
+    if result["screen"] == "battle":
+        return f"{node['node_type']} — 전투 시작"
+    if result["screen"] == "reward":
+        return f"보상: {len(result.get('options', []))}장 중 선택 · {errors.LABEL_SKIP}"
+    if result["screen"] == "shop":
+        return f"상점: {len(result.get('items', []))}개 상품 · {errors.LABEL_EXIT}"
+    if result["screen"] == "event":
+        return f"이벤트: {result['options']['name']}"
+    return f"{node['node_type']} 노드를 해결했습니다."
+
+
+def _drive_battle(ctx: HandlerContext, run, battle_id: int) -> dict | None:
+    """Advance a fresh battle to its first player decision.
+
+    A battle can end before the player ever acts — a fast enemy can wipe a
+    weakened party during the opening turns — so the conclusion has to be
+    routed here too. Leaving `runs.state = 'battle'` with no active battle row
+    would soft-lock every later interaction.
+    """
+    engine = bt.build_engine(
+        ctx.db, ctx.balance, battle_id=battle_id, run_id=run["run_id"],
+        content_version_id=run["content_version_id"], rng=_rng(ctx, run))
+    results = engine.advance()
+    if results and results[-1].battle_ended:
+        return nodes.conclude_battle(
+            ctx.db, ctx.balance, _rng(ctx, run), run_id=run["run_id"],
+            battle_id=battle_id)
+    return None
+
+
+def _on_reward_pick(ctx: HandlerContext, event: ev.InteractionEvent,
+                    parsed: cid.CustomId) -> dict:
+    """보상 화면 → card Select + recipient Select.
+
+    The payload carries `<card_id>|<party_slot>`; the recipient step is
+    required because decks are per-character (§3.2).
+    """
+    gate = check_gates(ctx.db, user_id=event.user_id, custom_id=parsed,
+                       allowed_states={lc.REWARD_SELECTION})
+    choice = ctx.db.one(
+        "SELECT choice_id FROM pending_choices WHERE run_id = ? AND status = 'open'",
+        (parsed.run_id,))
+    if choice is None:
+        raise GateError(errors.ILLEGAL_STATE, reason="no open reward choice")
+
+    raw = event.values[0] if event.values else parsed.payload
+    card_id, _, slot = raw.partition("|")
+    with ctx.db.tx():
+        lc.claim_mutation(ctx.db, parsed.run_id, parsed.revision)
+        try:
+            nodes.choose_reward(ctx.db, parsed.run_id,
+                                choice_id=choice["choice_id"], card_id=card_id,
+                                party_slot=int(slot) if slot else None)
+        except nodes.NodeError as error:
+            raise GateError(errors.ILLEGAL_STATE, reason=str(error)) from error
+    return {"action": "edit", "content": f"{card_id} 카드를 받았습니다."}
+
+
+def _on_shop_buy(ctx: HandlerContext, event: ev.InteractionEvent,
+                 parsed: cid.CustomId) -> dict:
+    """상점 화면 → item buttons. A purchase is a SELF-LOOP (§16.2)."""
+    gate = check_gates(ctx.db, user_id=event.user_id, custom_id=parsed,
+                       allowed_states={lc.SHOP})
+    item_index = int(parsed.payload)
+    with ctx.db.tx():
+        lc.claim_mutation(ctx.db, parsed.run_id, parsed.revision)
+        try:
+            result = nodes.buy_shop_item(
+                ctx.db, _rng(ctx, gate.run), parsed.run_id,
+                node_index=gate.run["current_node_index"], item_index=item_index)
+        except nodes.NodeError as error:
+            message = (errors.INSUFFICIENT_CURRENCY if "재화" in str(error)
+                       else errors.ILLEGAL_STATE)
+            raise GateError(message, reason=str(error)) from error
+    return {"action": "edit",
+            "content": f"구매 완료 · 탐험 자금 {result['run_currency']}"}
+
+
+def _on_event_branch(ctx: HandlerContext, event: ev.InteractionEvent,
+                     parsed: cid.CustomId) -> dict:
+    """이벤트 화면 → branch buttons. A branch may transition into battle."""
+    gate = check_gates(ctx.db, user_id=event.user_id, custom_id=parsed,
+                       allowed_states={lc.EVENT_CHOICE})
+    choice = ctx.db.one(
+        "SELECT choice_id FROM pending_choices WHERE run_id = ? AND status = 'open'",
+        (parsed.run_id,))
+    if choice is None:
+        raise GateError(errors.ILLEGAL_STATE, reason="no open event choice")
+
+    with ctx.db.tx():
+        lc.claim_mutation(ctx.db, parsed.run_id, parsed.revision)
+        try:
+            result = nodes.choose_event_branch(
+                ctx.db, ctx.balance, _rng(ctx, gate.run), parsed.run_id,
+                choice_id=choice["choice_id"], branch_index=int(parsed.payload))
+        except nodes.NodeError as error:
+            raise GateError(errors.ILLEGAL_STATE, reason=str(error)) from error
+        conclusion = None
+        if result["screen"] == "battle":
+            conclusion = _drive_battle(ctx, gate.run, result["battle_id"])
+
+    if result.get("suspended"):
+        # §10.4.2 — the branch stopped on a PENDING_CHOICE operator. Render the
+        # nested prompt instead of claiming the event resolved.
+        return _render_nested_choice(ctx, gate.run, parsed, result)
+    if result["screen"] == "battle":
+        content = "전투가 시작되었습니다."
+        if conclusion is not None:
+            content = f"{content}\n{_conclusion_summary(conclusion)}"
+        return {"action": "edit", "content": content}
+    return {"action": "edit", "content": "이벤트를 해결했습니다."}
+
+
+def _render_nested_choice(ctx: HandlerContext, run, parsed: cid.CustomId,
+                          result: dict) -> dict:
+    """Prompt for a suspended operator's decision (§16.5).
+
+    Only `remove_cursed_card` needs a real picker in the seed content — with
+    more than one cursed card present the player picks, with exactly one it
+    auto-resolves, and with none the operator is a no-op (§2.7.4).
+    """
+    revision = ctx.db.one("SELECT presentation_revision FROM runs WHERE run_id = ?",
+                          (parsed.run_id,))["presentation_revision"]
+    cursed = deck.cursed_cards_in_deck(ctx.db, parsed.run_id)
+    if not cursed:
+        nodes.resume_pending_choice(ctx.db, parsed.run_id, selection=None)
+        return {"action": "edit", "content": "제거할 저주받은 카드가 없습니다."}
+    if len(cursed) == 1:
+        nodes.resume_pending_choice(ctx.db, parsed.run_id,
+                                    selection=cursed[0]["card_instance_id"])
+        return {"action": "edit", "content": "저주받은 카드를 제거했습니다."}
+
+    return {
+        "action": "edit",
+        "content": "제거할 저주받은 카드를 선택하세요.",
+        "components": [{
+            "type": "string_select",
+            "custom_id": cid.build(cid.ACTION_CLEANSE_PICK, parsed.run_id,
+                                   parsed.generation, revision),
+            "options": [
+                {"label": card["card_id"], "value": str(card["card_instance_id"])}
+                for card in cursed[:25]
+            ],
+        }],
+    }
+
+
+def _on_cleanse_pick(ctx: HandlerContext, event: ev.InteractionEvent,
+                     parsed: cid.CustomId) -> dict:
+    """§2.7.4 — the player picks which 저주받은 카드 is removed."""
+    check_gates(ctx.db, user_id=event.user_id, custom_id=parsed,
+                allowed_states={lc.EVENT_CHOICE, lc.SHOP, lc.REWARD_SELECTION})
+    raw = event.values[0] if event.values else parsed.payload
+    with ctx.db.tx():
+        lc.claim_mutation(ctx.db, parsed.run_id, parsed.revision)
+        try:
+            nodes.resume_pending_choice(ctx.db, parsed.run_id,
+                                        selection=int(raw))
+        except nodes.NodeError as error:
+            raise GateError(errors.ILLEGAL_STATE, reason=str(error)) from error
+    return {"action": "edit", "content": "저주받은 카드를 제거했습니다."}
+
+
+def _rng(ctx: HandlerContext, run) -> JournaledRng:
+    return JournaledRng(ctx.db, run["run_id"], run["rng_seed"])
 
 
 def _on_card_select(ctx: HandlerContext, event: ev.InteractionEvent,
@@ -366,13 +555,38 @@ def _resolve_card(ctx, run, engine, unit, card_instance_id, target_ids,
         # interaction, so the engine has to be driven through them here.
         followups = [] if result.battle_ended else engine.advance()
 
-    damage = len(result.damage_events) + sum(len(f.damage_events) for f in followups)
-    lines = [f"{damage}건의 피해가 발생했습니다."]
-    final = followups[-1] if followups else result
-    if final.battle_ended or result.battle_ended:
-        state = final.battle_state if final.battle_ended else result.battle_state
-        lines.append("전투 종료: " + state)
+        damage = len(result.damage_events) + sum(len(f.damage_events)
+                                                 for f in followups)
+        lines = [f"{damage}건의 피해가 발생했습니다."]
+
+        final = followups[-1] if followups else result
+        ended = final.battle_ended or result.battle_ended
+        if ended:
+            # §16.2 — route the finished battle: post_battle rewards, a
+            # tutorial retry, or settlement.
+            conclusion = nodes.conclude_battle(
+                ctx.db, ctx.balance, _rng(ctx, run), run_id=parsed.run_id,
+                battle_id=engine.battle_id)
+            lines.append(_conclusion_summary(conclusion))
     return {"action": "edit", "content": "\n".join(lines)}
+
+
+def _conclusion_summary(conclusion: dict) -> str:
+    screen = conclusion["screen"]
+    if screen == "settlement":
+        report = conclusion["report"]
+        kept = len(report.get("inventory", {}).get("kept", []))
+        if conclusion.get("cleared"):
+            rewards = report.get("rewards", {})
+            return (f"월드 클리어! 코인 {rewards.get('coin', 0)} · "
+                    f"카르타 {rewards.get('carta', 0)} · 보관 {kept}개")
+        return f"런 종료 — 보관 {kept}개"
+    if screen == "node_resolution" and conclusion.get("tutorial_retry"):
+        # §3.4.1 — defeat does not end the tutorial run.
+        return "패배했지만 튜토리얼은 계속됩니다. 다시 도전하세요."
+    rewards = conclusion.get("rewards", {})
+    drops = len(rewards.get("drops", []))
+    return f"승리! 탐험 자금 +{rewards.get('run_currency', 0)} · 획득 {drops}개"
 
 
 def _on_skip(ctx: HandlerContext, event: ev.InteractionEvent,
@@ -408,8 +622,12 @@ _INTERACTION_HANDLERS = {
     cid.ACTION_NODE_CHOOSE: _on_node_choose,
     cid.ACTION_CARD_SELECT: _on_card_select,
     cid.ACTION_TARGET_SELECT: _on_target_select,
+    cid.ACTION_REWARD_PICK: _on_reward_pick,
     cid.ACTION_SKIP: _on_skip,
+    cid.ACTION_SHOP_BUY: _on_shop_buy,
     cid.ACTION_SHOP_EXIT: _on_shop_exit,
+    cid.ACTION_EVENT_BRANCH: _on_event_branch,
+    cid.ACTION_CLEANSE_PICK: _on_cleanse_pick,
 }
 
 
