@@ -13,7 +13,7 @@ pip install -e ".[dev]"
 python -m app.cli.bootstrap --db deckout.db      # migrate + seed + publish content
 python -m app.cli.check_content --db deckout.db  # §10.5 validation pass
 uvicorn app.api.server:app --port 8080
-pytest                                           # 274 tests
+pytest                                           # 375 tests
 ```
 
 Registration (§1.3.0) — `route_threads: true` is **mandatory** and defaults to
@@ -62,6 +62,7 @@ double-crediting is forbidden. A registered bot name **cannot be re-registered**
 | `app/engine/gacha.py` | §5 pity curve, redistribution, first-pull guarantee |
 | `app/engine/settlement.py` | §8.6.3 settlement, §15.10 retention, §16.2.1 step machine |
 | `app/engine/lifecycle.py` | §16 states, `preparing` flow, build snapshot, CAS |
+| `app/engine/progression.py` | §3.4.3 tutorial completion, §4.4 star-up, §8.4 enhancement, §9.2 research, §7.2 hub shop |
 | `app/engine/rng.py` | §16.4 RNG operation journal |
 | `app/central/client.py` | §1.3 capabilities, threads, edits, applied-delta economy |
 | `app/central/transactions.py` | §17 direction-aware transaction machine, receipts |
@@ -83,7 +84,7 @@ were not invented**.
 |---|---|
 | **Card upgrade system (P-1)** | 🔴 PENDING — the owner is authoring it. §5.8's interface is honoured: `card_fragments` is per `(user_id, card_id)`, `unlocked_cards.upgrade_tier` is account-level and enters the run through the build snapshot, and §17.1 pre-registers the transaction shape. Tier count, per-tier costs and per-tier effects are absent by design. |
 | **Admin/content dashboard (§10.1–10.3)** | The web CMS front-end is a separate deliverable. Its **validation layer is built** (`app/content/validation.py`) and is the same pass the loader runs, so the dashboard can be added without touching the engine. |
-| **Hub screens** (`덱`/`뽑기`/`캐릭터`/`장비`/`연구`/`상점`) | The engines behind them exist (gacha, research nodes, equipment defs, transactions); the per-screen Discord component layouts are content work (§13.2), and §13.3 explicitly does not claim the UI copy as closed. The **in-run** loop is complete: every node type resolves, battles conclude into rewards or settlement, and a run plays from depth 1 to `run_completed`. |
+| **`덱` and `뽑기` screens** | The gacha engine (§5) and deck data exist; their per-screen Discord component layouts are content work (§13.2), and §13.3 explicitly does not claim the UI copy as closed. `캐릭터`, `장비`, `연구` and `상점` now render from real state. |
 | **The `preparing` party/passive pickers** | §16.2.2 steps [2]-[4] are stubbed for the main campaign; the tutorial path (party size 1) materializes directly. `validate_build` already enforces every rule those screens would gate on. |
 | **Art assets** | §11's fallback path is implemented — missing art renders a rarity-tier silhouette plus the entity name, so the game never fails to render. |
 | **Content beyond the launch set** | §13.2's authoring list: full character/card/enemy rosters, passive effects, equipment sets, events beyond the 8 seed, achievements beyond the 3 research-gating ones. |

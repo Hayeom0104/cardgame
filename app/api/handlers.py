@@ -28,6 +28,7 @@ from app.engine import deck
 from app.engine import lifecycle as lc
 from app.engine import map_gen
 from app.engine import nodes
+from app.engine import progression as pg
 from app.engine import units as un
 from app.engine.rng import JournaledRng
 
@@ -85,10 +86,126 @@ def handle_message(ctx: HandlerContext, event: ev.MessageEvent) -> dict:
         return abandon_run(ctx, event.user_id)
     if subcommand == CMD_ACHIEVEMENTS:
         return achievements_screen(ctx, event.user_id)
-    if subcommand in (CMD_DECK, CMD_GACHA, CMD_CHARACTERS, CMD_EQUIPMENT,
-                      CMD_RESEARCH, CMD_SHOP):
+    if subcommand == CMD_CHARACTERS:
+        return characters_screen(ctx, event.user_id)
+    if subcommand == CMD_EQUIPMENT:
+        return equipment_screen(ctx, event.user_id)
+    if subcommand == CMD_RESEARCH:
+        return research_screen(ctx, event.user_id)
+    if subcommand == CMD_SHOP:
+        return hub_shop_screen(ctx, event.user_id)
+    if subcommand in (CMD_DECK, CMD_GACHA):
+        # 뽑기 엔진(§5)과 덱 데이터는 있으나, 화면별 컴포넌트 구성은 콘텐츠
+        # 작업이다 (§13.2). §13.3은 UI 카피를 확정된 것으로 주장하지 않는다.
         return _reply(f"[{subcommand}] 화면은 아직 콘텐츠 작업 중입니다. (§13.2)")
     return _ephemeral(errors.ILLEGAL_STATE)
+
+
+def characters_screen(ctx: HandlerContext, user_id: int) -> dict:
+    """`!덱아웃 캐릭터` — 보유 캐릭터와 성급 상승 비용 (§4.4)."""
+    rows = ctx.db.query(
+        "SELECT oc.character_id, oc.star_rank, c.name, c.element, c.job_role, "
+        "c.special_cap FROM owned_characters oc JOIN characters c "
+        "ON c.character_id = oc.character_id AND c.content_version_id = ? "
+        "WHERE oc.user_id = ? ORDER BY oc.acquired_at",
+        (ctx.content_version_id, user_id))
+    if not rows:
+        return _reply("보유한 캐릭터가 없습니다.")
+
+    lines = ["**캐릭터**"]
+    for row in rows:
+        cap = pg.star_cap(ctx.balance, bool(row["special_cap"]))
+        stars = "★" * int(row["star_rank"])
+        line = (f"{row['name']} {stars} ({row['star_rank']}/{cap}) · "
+                f"{row['element']} · {row['job_role']}")
+        try:
+            plan = pg.check_star_up(ctx.db, ctx.balance, user_id=user_id,
+                                    character_id=row["character_id"],
+                                    content_version_id=ctx.content_version_id)
+            cost = plan["cost"]
+            line += (f"\n　다음 성급: 조각 {plan['have_fragments']}/{cost['fragments']} "
+                     f"· 와일드카드 {plan['have_wildcards']}/{cost['wildcards']} "
+                     f"· 코인 {cost['coin']}")
+        except pg.ProgressionError as reason:
+            line += f"\n　{reason}"
+        lines.append(line)
+    return _reply("\n".join(lines))
+
+
+def equipment_screen(ctx: HandlerContext, user_id: int) -> dict:
+    """`!덱아웃 장비` — 보유 장비, 티어, 다음 강화 비용 (§8.4)."""
+    rows = ctx.db.query(
+        "SELECT oe.equipment_instance_id, oe.tier, oe.equipped_character_id, "
+        "ed.name, ed.slot, ed.set_name FROM owned_equipment oe "
+        "JOIN equipment_defs ed ON ed.equipment_def_id = oe.equipment_def_id "
+        "AND ed.content_version_id = ? WHERE oe.user_id = ? "
+        "ORDER BY oe.equipment_instance_id", (ctx.content_version_id, user_id))
+    stones = ctx.db.query(
+        "SELECT tier, amount FROM enhancement_stones WHERE user_id = ? "
+        "AND amount > 0 ORDER BY tier", (user_id,))
+
+    lines = ["**장비**"]
+    if stones:
+        lines.append("강화석 " + " · ".join(
+            f"T{row['tier']}×{row['amount']}" for row in stones))
+    if not rows:
+        lines.append("보유한 장비가 없습니다.")
+        return _reply("\n".join(lines))
+
+    max_tier = int(ctx.balance.get("equipment_max_tier"))
+    for row in rows:
+        equipped = f" [{row['equipped_character_id']}]" if row["equipped_character_id"] else ""
+        line = f"{row['name']} T{row['tier']} · {row['slot']}{equipped}"
+        if int(row["tier"]) < max_tier:
+            cost = pg.enhancement_cost(ctx.balance, int(row["tier"]) + 1)
+            need = f"T{int(row['tier']) + 1}×{cost['current_tier_stones']}"
+            if cost["previous_tier_stones"]:
+                need += f" + T{row['tier']}×{cost['previous_tier_stones']}"
+            line += f"\n　다음 강화: {need}"
+        lines.append(line)
+    return _reply("\n".join(lines))
+
+
+def research_screen(ctx: HandlerContext, user_id: int) -> dict:
+    """`!덱아웃 연구` — §20.5대로 필요 업적과 진행도를 인라인으로 보여준다."""
+    listing = pg.research_status(ctx.db, user_id=user_id,
+                                 content_version_id=ctx.content_version_id)
+    account = ctx.db.one("SELECT wildcards FROM accounts WHERE user_id = ?",
+                         (user_id,))
+    lines = [f"**연구** (와일드카드 {account['wildcards']})"]
+    for entry in listing:
+        completed = entry["steps_taken"] >= entry["max_steps"]
+        step = (f" [{entry['steps_taken']}/{entry['max_steps']}]"
+                if entry["max_steps"] > 1 else "")
+        if completed:
+            # 다 끝난 노드에 다음 단계 가격이나 선행 조건을 붙이지 않는다.
+            lines.append(f"✅ {entry['name']}{step}")
+            continue
+
+        mark = "　" if entry["available"] else "🔒"
+        line = (f"{mark} {entry['name']}{step} — 코인 {entry['coin_cost']} "
+                f"+ 와일드카드 {entry['wildcard_cost']}")
+        progress = entry["achievement_progress"]
+        if progress and not entry["available"]:
+            # 잠긴 노드는 단순히 거부하는 대신 스스로를 설명한다 (§20.5).
+            line += (f"\n　선행: 「{progress['name']}」 "
+                     f"{progress['current']}/{progress['target']}")
+        lines.append(line)
+    return _reply("\n".join(lines))
+
+
+def hub_shop_screen(ctx: HandlerContext, user_id: int) -> dict:
+    """`!덱아웃 상점` — 허브 상점은 전투 루프 밖이므로 코인 결제가 허용된다
+    (§7.2)."""
+    listing = pg.hub_shop_listing(ctx.db, ctx.balance,
+                                  content_version_id=ctx.content_version_id)
+    lines = ["**허브 상점**", "장비"]
+    for entry in listing["equipment"]:
+        lines.append(f"　{entry['name']} ({entry['slot']}) — 코인 {entry['price_coin']}")
+    lines.append("장비 강화석")
+    lines.append("　" + " · ".join(
+        f"T{entry['tier']} {entry['price_coin']}" for entry in listing["stones"]))
+    return _reply("\n".join(lines))
 
 
 def hub_screen(ctx: HandlerContext, user_id: int) -> dict:

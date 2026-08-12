@@ -58,6 +58,12 @@ async def lifespan(app: FastAPI):
     # §16.8 startup scan; §17.4 transaction resume.
     if state["balance"] is not None:
         state["recovery_plan"] = lifecycle.recover_runs(db, state["balance"])
+    if state["central"] is not None:
+        from app.central.transactions import resume_pending
+        from app.engine.progression import local_handlers
+
+        # 시작 시에도 비종료 트랜잭션을 기록된 상태에서 재개한다 (§17.4).
+        resume_pending(db, state["central"], local_handlers())
     state["accepting"] = True
 
     yield
@@ -153,8 +159,11 @@ async def shutdown(request: Request) -> dict:
     central = state.get("central")
     if central is not None:
         from app.central.transactions import resume_pending
+        from app.engine.progression import local_handlers
 
-        results = resume_pending(db, central)
+        # 핸들러 맵 없이 재개하면 코인 차감 뒤 크래시한 트랜잭션이
+        # `apply_local=None`으로 완료 처리되어 로컬 효과가 영구 유실된다.
+        results = resume_pending(db, central, local_handlers())
         refunded = sum(1 for result in results
                        if result.status in ("compensated", "coin_refunded"))
 

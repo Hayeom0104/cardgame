@@ -287,6 +287,17 @@ def _grant_rewards(db: Database, balance: Balance, run, content_version_id: int,
     world_id = run["world_id"]
     depth = int(run["deepest_depth_reached"])
 
+    # §3.4.3 — 튜토리얼 클리어는 자체 보상표를 쓴다: 파티 슬롯 2와 카르타 300을
+    # 받고, 튜토리얼은 영구 잠금되며 본편이 열린다. 런 클리어 코인은 지급하지
+    # 않는다 — 튜토리얼은 §15.4의 경제 모델 밖이다.
+    if run["is_tutorial"]:
+        from app.engine.progression import complete_tutorial
+
+        result = complete_tutorial(db, balance, user_id=user_id,
+                                   content_version_id=content_version_id)
+        return {"coin": 0, "carta": result.get("carta", 0), "tutorial": result,
+                "next_world_unlocked": result.get("unlocked_world")}
+
     unlock = db.one(
         "SELECT first_cleared_at FROM world_unlocks WHERE user_id = ? AND world_id = ?",
         (user_id, world_id),
