@@ -101,6 +101,12 @@ def _settle_expired(db: Database, balance, plan: list[dict]) -> int:
 
 app = FastAPI(title="Deckout", lifespan=lifespan)
 
+# §10.1 관리자 대시보드. 중앙봇 계약(§1.3)과 완전히 분리된 경로이며,
+# `DECKOUT_ADMIN_PASSWORD` 가 없으면 스스로 꺼진 상태로 응답한다.
+from app.admin.routes import router as admin_router      # noqa: E402
+
+app.include_router(admin_router)
+
 
 @app.get("/healthz")
 async def healthz() -> dict:

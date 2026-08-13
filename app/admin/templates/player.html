@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>{{ detail.account.user_id }}</h1>
+<p class="sub"><a href="/admin/players">← 플레이어</a></p>
+
+<div class="grid">
+  <div class="stat"><div class="n">{{ detail.account.carta }}</div><div class="k">카르타</div></div>
+  <div class="stat"><div class="n">{{ detail.account.wildcards }}</div><div class="k">와일드카드</div></div>
+  <div class="stat"><div class="n">{{ detail.characters|length }}</div><div class="k">캐릭터 카드</div></div>
+  <div class="stat"><div class="n">{{ detail.cards|length }}</div><div class="k">행동 카드</div></div>
+</div>
+
+<h2>런</h2>
+<div class="panel scroll">
+  <table>
+    <tr><th>run_id</th><th>월드</th><th>상태</th><th class="num">최대 깊이</th>
+        <th>마지막 조작</th><th></th></tr>
+    {% for run in detail.runs %}
+    <tr>
+      <td>{{ run.run_id }}</td>
+      <td class="muted">{{ run.world_id }}</td>
+      <td><code>{{ run.state }}</code></td>
+      <td class="num">{{ run.deepest_depth_reached }}</td>
+      <td class="muted">{{ run.last_activity_at }}</td>
+      <td>
+        {% if run.state not in terminal %}
+        <button class="ghost danger" onclick="terminate({{ run.run_id }})">강제 종료</button>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<h2>트랜잭션</h2>
+<div class="panel scroll">
+  {% if detail.transactions %}
+  <table>
+    <tr><th>tx_id</th><th>조작</th><th>방향</th><th>상태</th><th class="num">코인</th><th>시각</th></tr>
+    {% for entry in detail.transactions %}
+    <tr>
+      <td><code>{{ entry.tx_id|truncate(28) }}</code></td>
+      <td class="muted">{{ entry.operation }}</td>
+      <td class="muted">{{ entry.direction }}</td>
+      <td class="{{ 'good' if entry.status == 'completed' else 'warn' }}">{{ entry.status }}</td>
+      <td class="num">{{ entry.expected_coin_delta }}</td>
+      <td class="muted">{{ entry.created_at }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="muted">없습니다.</p>{% endif %}
+</div>
+
+<script>
+  async function terminate(runId) {
+    const reason = prompt('종료 사유를 남기세요. 보상도 보존도 적용되지 않습니다.');
+    if (!reason) return;
+    await post('/admin/players/runs/' + runId + '/terminate', {reason: reason});
+    setTimeout(() => location.reload(), 700);
+  }
+</script>
+{% endblock %}

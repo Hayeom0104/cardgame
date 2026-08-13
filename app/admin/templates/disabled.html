@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}대시보드 꺼짐 · 덱아웃{% endblock %}
+{% block body %}
+<div class="panel" style="max-width:620px;margin:60px auto">
+  <h1>관리 대시보드가 꺼져 있습니다</h1>
+  <p class="sub">
+    기본 비밀번호는 두지 않습니다. 설정을 잊은 배포가 열린 관리자 화면으로
+    뜨는 것보다, 아예 뜨지 않는 편이 안전하기 때문입니다.
+  </p>
+  <p>켜려면 환경 변수를 설정하고 서비스를 다시 띄우세요.</p>
+  <pre class="panel">DECKOUT_ADMIN_PASSWORD=&lt;충분히 긴 비밀번호&gt;
+DECKOUT_ADMIN_SECRET=&lt;세션 서명 키&gt;   # 비워 두면 재시작할 때마다 로그인이 풀립니다</pre>
+</div>
+{% endblock %}

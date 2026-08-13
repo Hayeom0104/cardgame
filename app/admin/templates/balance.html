@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>밸런싱</h1>
+<p class="sub">
+  §15의 모든 수치. 설명은 <code>config/*.toml</code> 의 주석을 그대로 읽어온 것이라
+  파일과 이 화면이 갈라지지 않습니다.
+</p>
+
+<div class="banner">
+  편집은 <b>초안 v{{ version_id }}</b> 에 저장됩니다. 발행된 버전은 고칠 수 없습니다 —
+  진행 중인 런이 그 버전을 붙들고 있어서, 값을 바꾸면 런 도중에 내용이 달라집니다 (§10.6).
+  다 고쳤으면 <a href="/admin/versions">버전</a>에서 발행하세요.
+</div>
+
+<div class="row" style="margin-bottom:14px">
+  <input type="text" id="filter" placeholder="설정 이름 또는 설명으로 거르기"
+         oninput="applyFilter()" style="max-width:340px">
+  <span class="muted" id="count">{{ rows|length }}개</span>
+</div>
+
+{% for file, group in grouped.items() %}
+<h2>{{ file or '(파일 없음)' }}</h2>
+<div class="panel">
+  {% for row in group %}
+  <div class="setting" data-search="{{ (row.key ~ ' ' ~ row.description)|lower }}">
+    <div class="name">{{ row.key }}</div>
+    <div class="doc">{{ row.description or '(설명 없음)' }}</div>
+    <textarea id="v-{{ loop.index0 }}-{{ file }}" data-key="{{ row.key }}">{{ row.pretty }}</textarea>
+    <div class="row" style="margin-top:8px">
+      <button onclick="save(this)">저장</button>
+      <span class="muted">JSON</span>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endfor %}
+
+<script>
+  async function save(button) {
+    const box = button.closest('.setting').querySelector('textarea');
+    await post('/admin/balance/save', {key: box.dataset.key, value: box.value});
+  }
+  function applyFilter() {
+    const needle = document.getElementById('filter').value.toLowerCase();
+    let shown = 0;
+    document.querySelectorAll('.setting').forEach(node => {
+      const hit = !needle || node.dataset.search.includes(needle);
+      node.style.display = hit ? '' : 'none';
+      if (hit) shown++;
+    });
+    document.getElementById('count').textContent = shown + '개';
+  }
+</script>
+{% endblock %}

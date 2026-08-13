@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>콘텐츠</h1>
+<p class="sub">초안 v{{ version_id }} 의 콘텐츠 테이블 {{ tables|length }}종.</p>
+<div class="panel scroll">
+  <table>
+    <tr><th>테이블</th><th>논리 키</th><th class="num">행</th></tr>
+    {% for entry in tables %}
+    <tr>
+      <td><a href="/admin/content/{{ entry.table }}">{{ entry.table }}</a></td>
+      <td class="muted"><code>{{ entry.key_columns|join(', ') }}</code></td>
+      <td class="num">{{ entry.count }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

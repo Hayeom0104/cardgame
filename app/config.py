@@ -47,6 +47,19 @@ class Settings:
     #: service otherwise refuses to start against an unverified Central Bot.
     skip_capability_check: bool = os.environ.get("DECKOUT_SKIP_CAPABILITY_CHECK") == "1"
 
+    # -- §10.1 관리자 대시보드 -----------------------------------------
+    #: 비어 있으면 대시보드는 **꺼진다**. 기본 비밀번호는 두지 않는다 —
+    #: 설정을 잊은 배포가 열린 대시보드로 뜨는 것보다 안 뜨는 편이 낫다.
+    admin_password: str = os.environ.get("DECKOUT_ADMIN_PASSWORD", "")
+    #: 세션 쿠키 서명 키. 비워 두면 프로세스마다 새로 만든다 — 재시작하면
+    #: 로그인이 풀릴 뿐이고, 약한 고정 키를 쓰는 것보다 안전하다.
+    admin_secret: str = os.environ.get("DECKOUT_ADMIN_SECRET", "")
+    admin_session_hours: int = int(os.environ.get("DECKOUT_ADMIN_SESSION_HOURS", "12"))
+
+    @property
+    def admin_enabled(self) -> bool:
+        return bool(self.admin_password)
+
     def registration_yaml(self) -> str:
         return (
             "minigames:\n"

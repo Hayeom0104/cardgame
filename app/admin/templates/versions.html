@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>버전</h1>
+<p class="sub">§10.6 — 발행된 버전은 완전한 불변 스냅샷입니다. 편집은 초안에서만 합니다.</p>
+
+<div class="panel">
+  <div class="row">
+    <button onclick="post('/admin/versions/draft').then(() => location.reload())">
+      초안 열기
+    </button>
+    <button class="ghost" onclick="validateDraft()" {% if not draft_version %}disabled{% endif %}>
+      §10.5 검증
+    </button>
+    <button {% if not draft_version %}disabled{% endif %}
+            onclick="if (confirm('초안을 발행합니다. 새 런부터 이 내용이 적용됩니다.')) post('/admin/versions/publish').then(() => location.reload())">
+      발행
+    </button>
+    <button class="ghost danger" {% if not draft_version %}disabled{% endif %}
+            onclick="if (confirm('초안의 편집 내용이 사라집니다.')) post('/admin/versions/discard').then(() => location.reload())">
+      초안 버리기
+    </button>
+  </div>
+  <p class="muted" style="margin-bottom:0">
+    발행은 검증을 통과해야만 이루어집니다. 실패하면 아무것도 바뀌지 않습니다.
+    진행 중인 런은 자기 버전을 그대로 유지합니다.
+  </p>
+</div>
+
+<div class="panel scroll">
+  <table>
+    <tr><th>버전</th><th>상태</th><th>발행 시각</th><th>지문</th></tr>
+    {% for entry in versions %}
+    <tr>
+      <td>v{{ entry.version_id }}</td>
+      <td>
+        {% if entry.is_current %}<span class="pill current">현재</span>{% endif %}
+        {% if entry.is_draft %}<span class="pill draft">초안</span>{% endif %}
+      </td>
+      <td class="muted">{{ entry.published_at or '—' }}</td>
+      <td class="muted"><code>{{ (entry.fingerprint or '—')[:16] }}</code></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<script>
+  async function validateDraft() {
+    const data = await post('/admin/versions/validate');
+    if (data && data.ok) { toast('검증을 통과했습니다.', true); }
+  }
+</script>
+{% endblock %}

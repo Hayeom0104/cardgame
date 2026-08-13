@@ -13,7 +13,7 @@ pip install -e ".[dev]"
 python -m app.cli.bootstrap --db deckout.db      # migrate + seed + publish content
 python -m app.cli.check_content --db deckout.db  # §10.5 validation pass
 uvicorn app.api.server:app --port 8080
-pytest                                           # 423 tests
+pytest                                           # 567 tests
 ```
 
 Registration (§1.3.0) — `route_threads: true` is **mandatory** and defaults to
@@ -33,6 +33,27 @@ API-key registration is run on the **Central Bot** side, not here (§1.3.9):
 ```bash
 python -m app.cli.register_bot --name deckout --scopes read,currency:grant,currency:deduct
 ```
+
+## Admin dashboard (§10.1–10.3)
+
+Served by the same process at `/admin`. It is **off unless a password is set** —
+there is no default, because a deployment that forgot to configure one would
+otherwise come up with an open admin screen.
+
+```bash
+DECKOUT_ADMIN_PASSWORD=<a long password>   # required; without it /admin returns 503
+DECKOUT_ADMIN_SECRET=<session signing key> # optional; omit and logins drop on restart
+```
+
+Editing always targets a **draft**. A published version is an immutable snapshot
+that runs in progress are pinned to (§10.6), so changing one would alter content
+mid-run; the dashboard copies the current version into a draft instead and
+publishes only after the §10.5 validation pass succeeds. That pass now covers the
+§15 constants too, so a rate table that does not sum to 1 cannot be published.
+
+It carries the `config/*.toml` explanations verbatim, so the balancing screen is
+usable without reading the code. Art can be uploaded straight into
+`assets/<kind>/<id>.png` and is used on the next screen.
 
 `achievement:grant` and `xp:add` are deliberately excluded: achievements are
 local (§20.1) and Central runs its own activity XP module, where
@@ -83,7 +104,6 @@ were not invented**.
 
 | Item | Why |
 |---|---|
-| **Admin/content dashboard (§10.1–10.3)** | The web CMS front-end is a separate deliverable. Its **validation layer is built** (`app/content/validation.py`) and is the same pass the loader runs, so the dashboard can be added without touching the engine. |
 | **Art assets** | The *pipeline* is built: drop a PNG into `assets/<kind>/<id>.png` and it is used on the next screen (`python -m app.cli.assets` lists what is wanted). The launch art itself is unauthored, and §11's fallback renders the name on a rarity-coloured field so the game never fails to render. |
 | **Content beyond the launch set** | §13.2's authoring list: full character/card/enemy rosters, passive effects, equipment sets, events beyond the 8 seed, achievements beyond the 3 research-gating ones. |
 | **Daily/attendance claim rules** | §13.2 — the `daily_claims` table exists; the KST boundary and missed-day rules are unspecified. |

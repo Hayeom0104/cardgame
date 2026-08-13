@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>현황</h1>
+<p class="sub">서비스가 지금 어떤 상태인지.</p>
+
+{% if not current_version %}
+<div class="banner">발행된 콘텐츠 버전이 없습니다. <code>python -m app.cli.bootstrap</code> 을 실행하거나 <a href="/admin/versions">버전</a>에서 발행하세요.</div>
+{% endif %}
+{% if overview.recovery_required %}
+<div class="banner"><b class="bad">복구 필요 런 {{ overview.recovery_required }}개.</b> 자동으로 처리되지 않습니다 — 지워지지도 않으니 <a href="/admin/players">플레이어</a>에서 확인하세요.</div>
+{% endif %}
+
+<div class="grid">
+  <div class="stat"><div class="n">{{ overview.accounts }}</div><div class="k">계정</div></div>
+  <div class="stat"><div class="n">{{ overview.active_runs }}</div><div class="k">진행 중인 런</div></div>
+  <div class="stat"><div class="n {% if overview.stale_runs %}warn{% endif %}">{{ overview.stale_runs }}</div><div class="k">만료 대상 (§16.3)</div></div>
+  <div class="stat"><div class="n {% if overview.pending_transactions %}warn{% endif %}">{{ overview.pending_transactions }}</div><div class="k">미종료 트랜잭션</div></div>
+  <div class="stat"><div class="n {% if missing_assets %}warn{% endif %}">{{ missing_assets }}</div><div class="k">빠진 그림</div></div>
+</div>
+
+<h2>런 상태별</h2>
+<div class="panel scroll">
+  {% if overview.runs_by_state %}
+  <table>
+    <tr><th>상태</th><th class="num">개수</th></tr>
+    {% for state, count in overview.runs_by_state.items() %}
+    <tr><td><code>{{ state }}</code></td><td class="num">{{ count }}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="muted">아직 런이 없습니다.</p>{% endif %}
+</div>
+
+<h2>정리</h2>
+<div class="panel">
+  <p class="muted">§16.3 — 방치된 런은 계정당 하나 규칙 때문에 그 계정의 새 런을 막습니다.
+  평소에는 플레이어가 허브를 열거나 새 런을 시작할 때 자동으로 정리되지만, 여기서 한 번에 처리할 수도 있습니다.</p>
+  <button {% if not overview.stale_runs %}disabled{% endif %}
+          onclick="post('/admin/actions/reap').then(() => location.reload())">
+    만료된 런 {{ overview.stale_runs }}개 정산
+  </button>
+</div>
+{% endblock %}

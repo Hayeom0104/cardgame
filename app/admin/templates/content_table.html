@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>{{ table }}</h1>
+<p class="sub">
+  <a href="/admin/content">← 콘텐츠</a> · 초안 v{{ version_id }} · {{ rows|length }}행 ·
+  논리 키 <code>{{ keys|join(', ') }}</code>
+</p>
+<div class="banner">
+  논리 키는 바꿀 수 없습니다. 플레이어가 가진 데이터가 그 id를 참조하므로,
+  이름을 바꾸면 그 참조가 통째로 끊깁니다 (§10.6).
+</div>
+<div class="panel scroll">
+  <table>
+    <tr>{% for column in columns %}<th>{{ column }}</th>{% endfor %}<th></th></tr>
+    {% for row in rows %}
+    <tr>
+      {% for column in columns %}
+      <td>{{ (row[column] if row[column] is not none else '')|string|truncate(70) }}</td>
+      {% endfor %}
+      <td><a href="/admin/content/{{ table }}/{{ row|keyparts(keys) }}">편집</a></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

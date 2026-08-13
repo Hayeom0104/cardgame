@@ -38,6 +38,90 @@ def validate_version(db: Database, version_id: int) -> None:
     _validate_encounters(db, version_id)
     _validate_research(db, version_id)
     _validate_card_upgrades(db, version_id)
+    _validate_constants(db, version_id)
+
+
+def _validate_constants(db: Database, version_id: int) -> None:
+    """§15 상수들이 서로 어긋나지 않는지 (§10.5).
+
+    이 검사가 없으면 관리 대시보드에서 확률의 합이 1이 아닌 표를 발행할 수
+    있고, 그 값은 아무 소리 없이 게임을 망가뜨린다. 파일을 고치는 사람은
+    `tests/test_config.py` 가 잡아 주지만, 대시보드로 고치는 사람에게는
+    발행 시점의 이 검사가 유일한 안전망이다.
+    """
+    balance = _balance(db, version_id)
+
+    def get(key):
+        try:
+            return balance.get(key)
+        except KeyError as error:
+            raise ValidationError(f"§15 상수 {key!r} 이(가) 없습니다") from error
+
+    for key in ("gacha_base_rates", "reward_rarity_weights"):
+        total = sum(float(value) for value in get(key).values())
+        if abs(total - 1.0) > 1e-6:
+            raise ValidationError(
+                f"{key}: 확률의 합이 {total}입니다. 1이어야 합니다 (§15.4)")
+
+    deck_size = int(get("base_deck_size"))
+    composition = sum(int(value) for value in get("starter_deck_composition").values())
+    if composition != deck_size:
+        raise ValidationError(
+            f"starter_deck_composition의 합 {composition}이(가) "
+            f"base_deck_size {deck_size}와(과)다릅니다 — 덱이 정확히 채워지지 "
+            "않습니다 (§4.6.2)")
+
+    node_count = int(get("map_node_count"))
+    quota = sum(int(value) for value in get("map_node_quota").values())
+    structure = sum(int(value) for value in get("map_depth_structure"))
+    if quota != node_count or structure != node_count:
+        raise ValidationError(
+            f"지도 칸 수가 어긋납니다: map_node_count {node_count}, "
+            f"map_node_quota 합 {quota}, map_depth_structure 합 {structure} "
+            "(§15.7)")
+
+    threshold = int(get("card_upgrade_wildcard_from_tier"))
+    for tier, cost in get("card_upgrade_costs").items():
+        wildcards = int(cost["wildcards"])
+        if int(tier) < threshold and wildcards:
+            raise ValidationError(
+                f"card_upgrade_costs T{tier}: 와일드카드는 "
+                f"{threshold}단계부터 듭니다 (§5.8.2)")
+        if int(tier) >= threshold and wildcards <= 0:
+            raise ValidationError(
+                f"card_upgrade_costs T{tier}: 와일드카드가 들어야 합니다 (§5.8.2)")
+
+    pool = get("resource_pool_by_party_size")
+    max_cost = int(get("card_cost_max"))
+    if max_cost > max(int(value) for value in pool.values()):
+        raise ValidationError(
+            f"card_cost_max {max_cost}이(가) 한 턴 자원보다 큽니다 — 그 비용의 "
+            "카드는 영영 낼 수 없습니다 (§2.3)")
+
+    # 튜토리얼 보상이 부족하면 처음 하는 사람이 본편에 들어갈 수 없다 (§4.1).
+    if int(get("tutorial_reward_carta")) < int(get("gacha_cost_single")):
+        raise ValidationError(
+            "tutorial_reward_carta가 뽑기 1회 비용보다 적습니다 — 튜토리얼을 "
+            "마친 계정이 두 번째 캐릭터를 얻을 수 없어 본편 진입이 막힙니다")
+    if int(get("tutorial_reward_party_slot")) < 2:
+        raise ValidationError(
+            "tutorial_reward_party_slot이 2 미만입니다 — 본편은 파티 2명부터 "
+            "들어갈 수 있습니다")
+
+    covered = {tier for band in get("gacha_band_rarity_tiers").values()
+               for tier in band}
+    missing = {1, 2, 3, 4, 5, 6} - covered
+    if missing:
+        raise ValidationError(
+            f"gacha_band_rarity_tiers에 희귀도 {sorted(missing)}이(가) 어느 "
+            "등급에도 없습니다 — 그 희귀도의 카드는 영영 뽑히지 않습니다")
+
+    table = get("equipment_drop_tier_by_depth")
+    deepest = len(get("map_depth_structure")) + 1
+    if not table or int(table[-1]["max_depth"]) < deepest:
+        raise ValidationError(
+            "equipment_drop_tier_by_depth의 마지막 줄이 최대 깊이를 덮지 "
+            "못합니다 — 그 깊이에서 장비 등급이 정해지지 않습니다")
 
 
 def _effects(raw: str) -> list[dict]:

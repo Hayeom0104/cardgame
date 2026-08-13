@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>{{ table }}</h1>
+<p class="sub"><a href="/admin/content/{{ table }}">← {{ table }}</a> · 초안 v{{ version_id }}</p>
+<div class="panel">
+  {% for column, value in row.items() %}
+  <div class="setting">
+    <div class="name">{{ column }}
+      {% if column in keys or column == 'content_version_id' %}
+      <span class="pill">고정</span>{% endif %}
+    </div>
+    {% if column in keys or column == 'content_version_id' %}
+      <div class="doc">논리 키는 영구합니다 — 플레이어 데이터가 참조합니다 (§10.6).</div>
+      <code>{{ value }}</code>
+    {% else %}
+      <textarea data-column="{{ column }}"
+                {% if column.endswith('_json') %}style="min-height:160px"{% endif %}
+      >{{ pretty[column] }}</textarea>
+    {% endif %}
+  </div>
+  {% endfor %}
+  <div class="row" style="margin-top:14px">
+    <button onclick="saveRow()">저장</button>
+    <span class="muted">`_json` 열은 JSON으로 저장됩니다.</span>
+  </div>
+</div>
+<script>
+  async function saveRow() {
+    const payload = {};
+    document.querySelectorAll('textarea[data-column]').forEach(box => {
+      payload[box.dataset.column] = box.value;
+    });
+    await post('/admin/content/{{ table }}/{{ key_path }}/save', {values: payload});
+  }
+</script>
+{% endblock %}

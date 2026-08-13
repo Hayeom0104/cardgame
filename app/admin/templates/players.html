@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>플레이어</h1>
+<p class="sub">지원 문의를 확인할 때 쓰는 조회 화면입니다.</p>
+<form class="row" style="margin-bottom:14px" method="get">
+  <input type="text" name="q" value="{{ needle }}" placeholder="user_id" style="max-width:260px">
+  <button>찾기</button>
+</form>
+<div class="panel scroll">
+  <table>
+    <tr><th>user_id</th><th class="num">카르타</th><th class="num">와일드카드</th>
+        <th class="num">파티 슬롯</th><th>튜토리얼</th><th class="num">런</th></tr>
+    {% for entry in players %}
+    <tr>
+      <td><a href="/admin/players/{{ entry.user_id }}">{{ entry.user_id }}</a></td>
+      <td class="num">{{ entry.carta }}</td>
+      <td class="num">{{ entry.wildcards }}</td>
+      <td class="num">{{ entry.party_slots }}</td>
+      <td class="muted">{{ '완료' if entry.tutorial_completed_at else '진행 중' }}</td>
+      <td class="num">{{ entry.runs }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

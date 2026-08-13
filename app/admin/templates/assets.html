@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>그림</h1>
+<p class="sub">
+  넣지 않은 그림은 이름과 희귀도 색으로 대신 그려집니다. 하나도 없어도 게임은 돌아가니
+  있는 것부터 채우면 됩니다. 올린 파일은 다음 화면부터 바로 쓰입니다.
+</p>
+
+<div class="grid" style="margin-bottom:16px">
+  <div class="stat"><div class="n">{{ present }}</div><div class="k">넣은 것</div></div>
+  <div class="stat"><div class="n {% if missing %}warn{% endif %}">{{ missing }}</div><div class="k">아직 없는 것</div></div>
+  <div class="stat"><div class="n {% if broken %}bad{% endif %}">{{ broken }}</div><div class="k">못 쓰는 파일</div></div>
+</div>
+
+<div class="row" style="margin-bottom:14px">
+  <input type="text" id="filter" placeholder="id 또는 이름으로 거르기" oninput="applyFilter()" style="max-width:320px">
+  <label class="muted"><input type="checkbox" id="only-missing" onchange="applyFilter()"> 아직 없는 것만</label>
+</div>
+
+<div class="panel scroll">
+  <table>
+    <tr><th>종류</th><th>id</th><th>이름</th><th>상태</th><th>올리기</th></tr>
+    {% for entry in report %}
+    <tr data-search="{{ (entry.id ~ ' ' ~ (entry.name or ''))|lower }}"
+        data-missing="{{ 0 if entry.present else 1 }}">
+      <td class="muted">{{ entry.kind }}</td>
+      <td><code>{{ entry.id }}</code></td>
+      <td>{{ entry.name }}</td>
+      <td>
+        {% if entry.problem %}<span class="bad">{{ entry.problem }}</span>
+        {% elif entry.present %}<span class="good">있음</span>
+        {% else %}<span class="muted">없음</span>{% endif %}
+      </td>
+      <td>
+        <input type="file" accept="image/*" style="font-size:12px"
+               onchange="upload(this, '{{ entry.kind }}', '{{ entry.id }}')">
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<script>
+  async function upload(input, kind, entityId) {
+    const file = input.files[0];
+    if (!file) return;
+    // 원본 바이트를 그대로 보낸다 — 멀티파트를 쓰지 않아 추가 의존성이 없다.
+    const response = await fetch(
+      `/admin/assets/${encodeURIComponent(kind)}/${encodeURIComponent(entityId)}`,
+      {method: 'POST', headers: {'Content-Type': 'application/octet-stream'}, body: file});
+    let data = {};
+    try { data = await response.json(); } catch (e) {}
+    toast(data.message || (response.ok ? '올렸습니다.' : '실패'), response.ok);
+    if (response.ok) setTimeout(() => location.reload(), 700);
+  }
+  function applyFilter() {
+    const needle = document.getElementById('filter').value.toLowerCase();
+    const onlyMissing = document.getElementById('only-missing').checked;
+    document.querySelectorAll('tr[data-search]').forEach(row => {
+      const hit = (!needle || row.dataset.search.includes(needle))
+                  && (!onlyMissing || row.dataset.missing === '1');
+      row.style.display = hit ? '' : 'none';
+    });
+  }
+</script>
+{% endblock %}
