@@ -95,3 +95,9 @@ async def root() -> dict:
         "admin": "/admin/",
         "event_endpoint": "POST /event",
     }
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("cardgamebot.main:app", host=settings.service_host, port=settings.service_port)

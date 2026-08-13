@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     # 중앙봇이 아직 없는 개발 환경에서 코인/XP 호출을 로컬 스텁으로 처리한다.
     central_api_enabled: bool = False
 
+    # --- 이 서비스의 HTTP 수신 주소 ---
+    # 중앙봇이 service_url 로 호출하는 FastAPI 서버의 bind 설정이다.
+    service_host: str = "0.0.0.0"
+    service_port: int = 8090
+
     # --- 명령 처리 ---
     command_prefix: str = "!"
     # 비어 있으면 모든 채널 허용. 운영 시 지정 채널만 넣는다.

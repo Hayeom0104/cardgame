@@ -14,15 +14,15 @@ Discord에 전달합니다.
 
 ```bash
 pip install -r requirements.txt
-uvicorn cardgamebot.main:app --reload --port 8080
+python -m cardgamebot.main
 ```
 
 기동 시 SQLite DB(`data/cardgame.db`)가 자동 생성되고, 게임이 처음부터 끝까지
 동작하는지 확인할 수 있는 예시 콘텐츠가 시드됩니다.
 
 * 게임 API: `POST /event`, `POST /shutdown`, `GET /healthz` — 중앙봇이 호출
-* 관리자 대시보드: <http://localhost:8080/admin/>
-* API 문서: <http://localhost:8080/docs>
+* 관리자 대시보드: <http://localhost:8090/admin/>
+* API 문서: <http://localhost:8090/docs>
 
 ```bash
 pytest          # 63개 테스트
@@ -78,6 +78,7 @@ pytest          # 63개 테스트
 | `CARDGAME_CENTRAL_API_BASE` | `http://localhost:8000` | 중앙봇 API 주소 |
 | `CARDGAME_CENTRAL_API_KEY` | — | 중앙봇이 발급한 최소 권한 API key (`X-API-Key`) |
 | `CARDGAME_CENTRAL_API_ENABLED` | `false` | `false` 면 코인/XP 를 로컬 스텁 처리 |
+| `CARDGAME_SERVICE_HOST` / `_PORT` | `0.0.0.0` / `8090` | 이 서비스의 수신 주소 |
 | `CARDGAME_ALLOWED_CHANNEL_IDS` | `[]` | 비우면 전체 채널 허용 |
 | `CARDGAME_DISCORD_CLIENT_ID` / `_SECRET` | — | 대시보드 OAuth (§10.2) |
 | `CARDGAME_SESSION_SECRET` | `dev-insecure-change-me` | **운영에서 반드시 변경** |
