@@ -132,6 +132,7 @@ def test_the_fallback_template_is_valid(balance):
         balance.get("map_depth_structure"),
         dict(balance.get("map_node_quota")),
         int(balance.get("map_node_shuffle_attempts")),
+        map_gen.MapRules.from_balance(balance),
     )
     assert generated.used_fallback
     playable = [n for n in generated.nodes if n["node_type"] != map_gen.BOSS]

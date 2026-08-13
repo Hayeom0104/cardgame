@@ -791,15 +791,18 @@ class BattleEngine:
             host_context=host,
         )
 
-    def advance(self, max_turns: int = 64) -> list[TurnResult]:
+    def advance(self, max_turns: int | None = None) -> list[TurnResult]:
         """Run turns until the battle needs player input, or it ends.
 
         Enemy turns, stunned turns, cursed turns and auto-defends all resolve
         without a component interaction, so something has to drive them: the
         player only ever submits at PHASE D-P step P7. `max_turns` is a
         runaway guard, not a game rule — a well-formed battle always reaches
-        either `awaiting_input` or a terminal state well inside it.
+        either `awaiting_input` or a terminal state well inside it. The
+        limit itself is `battle_max_turns_per_advance` in `config/01_전투.toml`.
         """
+        if max_turns is None:
+            max_turns = int(self.balance.get("battle_max_turns_per_advance"))
         results: list[TurnResult] = []
         for _ in range(max_turns):
             if self.battle_row()["state"] != BATTLE_ACTIVE:

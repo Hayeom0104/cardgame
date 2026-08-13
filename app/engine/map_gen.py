@@ -31,6 +31,33 @@ BOSS = "보스"
 CONSTRAINED_TYPES = (SHOP, REST)
 
 
+@dataclass(frozen=True)
+class MapRules:
+    """지도 모양에 대한 규칙 한 벌 — 전부 `config/07_맵과_이벤트.toml` 에서 읽는다."""
+
+    out_degree_min: int
+    out_degree_max: int
+    wide_branch_max_depth: int
+    wide_branch_min: int
+    #: 갈림길을 억지로 넓히지 않는 깊이들. 후반은 보스 앞 한 칸으로 좁아진다.
+    converging_depths: frozenset[int]
+    shop_min_depth: int
+    rest_min_depth_gap: int
+
+    @classmethod
+    def from_balance(cls, balance: Balance) -> "MapRules":
+        return cls(
+            out_degree_min=int(balance.get("map_out_degree_min")),
+            out_degree_max=int(balance.get("map_out_degree_max")),
+            wide_branch_max_depth=int(balance.get("map_wide_branch_max_depth")),
+            wide_branch_min=int(balance.get("map_wide_branch_min")),
+            converging_depths=frozenset(
+                int(depth) for depth in balance.get("map_converging_depths")),
+            shop_min_depth=int(balance.get("map_shop_min_depth")),
+            rest_min_depth_gap=int(balance.get("map_rest_min_depth_gap")),
+        )
+
+
 @dataclass
 class GeneratedMap:
     nodes: list[dict] = field(default_factory=list)   # {node_index, depth, node_type}
@@ -53,6 +80,7 @@ def generate_map(rng: JournaledRng, balance: Balance) -> GeneratedMap:
     max_attempts = int(balance.get("map_generation_attempts"))
     shuffle_attempts = int(balance.get("map_node_shuffle_attempts"))
     quota = dict(balance.get("map_node_quota"))
+    rules = MapRules.from_balance(balance)
 
     # One journaled draw seeds the whole generation; replays reuse it verbatim.
     seed = rng.draw(key_map_gen(), lambda r: r.getrandbits(63))
@@ -60,25 +88,25 @@ def generate_map(rng: JournaledRng, balance: Balance) -> GeneratedMap:
 
     for attempt in range(1, max_attempts + 1):
         local = random.Random(seed + attempt)
-        result = _attempt(local, depth_structure)
+        result = _attempt(local, depth_structure, rules)
         if result is None:
             continue
         nodes, edges = result
         assigned = _assign_node_types(local, nodes, depth_structure, quota,
-                                      shuffle_attempts)
+                                      shuffle_attempts, rules)
         generated = GeneratedMap(nodes=assigned, edges=edges, attempts=attempt)
         generated.boss_index = len(assigned) - 1
         return generated
 
     logger.warning("map generation exhausted %d attempts; using FALLBACK_TEMPLATE",
                    max_attempts)
-    return _fallback_template(depth_structure, quota, shuffle_attempts)
+    return _fallback_template(depth_structure, quota, shuffle_attempts, rules)
 
 
 # =====================================================================
 # Steps 1-3
 # =====================================================================
-def _attempt(rng, depth_structure: list[int]):
+def _attempt(rng, depth_structure: list[int], rules: MapRules):
     # --- 1. Nodes: indexed left-to-right within each depth ---
     nodes: list[dict] = []
     by_depth: list[list[int]] = []
@@ -112,7 +140,7 @@ def _attempt(rng, depth_structure: list[int]):
         # preserves monotonicity. Skipped at d in {5,6} where the graph
         # converges toward the single pre-boss node.
         depth_number = d + 1
-        if depth_number not in (5, 6):
+        if depth_number not in rules.converging_depths:
             ranges = _widen(rng, ranges, b)
 
         intervals.append(ranges)
@@ -120,7 +148,7 @@ def _attempt(rng, depth_structure: list[int]):
             for j in range(lo, hi + 1):
                 edges.append((source_row[i], target_row[j]))
 
-    if not _validate(nodes, edges, by_depth, depth_structure):
+    if not _validate(nodes, edges, by_depth, depth_structure, rules):
         return None
     return nodes, edges
 
@@ -141,7 +169,8 @@ def _widen(rng, ranges: list[tuple[int, int]], b: int) -> list[tuple[int, int]]:
 
 
 def _validate(nodes: list[dict], edges: list[tuple[int, int]],
-              by_depth: list[list[int]], depth_structure: list[int]) -> bool:
+              by_depth: list[list[int]], depth_structure: list[int],
+              rules: MapRules) -> bool:
     """Step 3.
 
     Convergence note: branch width 2-3 is guaranteed at depths 1-4. Depths
@@ -161,9 +190,10 @@ def _validate(nodes: list[dict], edges: list[tuple[int, int]],
         index, depth = node["node_index"], node["depth"]
         degree = len(outgoing[index])
         if index not in terminal:
-            if degree < 1 or degree > 3:
+            if not rules.out_degree_min <= degree <= rules.out_degree_max:
                 return False
-            if depth <= 4 and not (2 <= degree <= 3):
+            if (depth <= rules.wide_branch_max_depth
+                    and not rules.wide_branch_min <= degree <= rules.out_degree_max):
                 return False
 
     # every node reachable from depth 1
@@ -194,7 +224,8 @@ def _validate(nodes: list[dict], edges: list[tuple[int, int]],
 # Step 5 — node types
 # =====================================================================
 def _assign_node_types(rng, nodes: list[dict], depth_structure: list[int],
-                       quota: dict[str, int], shuffle_attempts: int) -> list[dict]:
+                       quota: dict[str, int], shuffle_attempts: int,
+                       rules: MapRules) -> list[dict]:
     """
         depth 1 node  <- 전투     (a shop first would leave nothing to buy with)
         depth 7 node  <- 휴식     (guaranteed rest before the boss)
@@ -229,7 +260,7 @@ def _assign_node_types(rng, nodes: list[dict], depth_structure: list[int],
         rng.shuffle(candidate)
         for node, node_type in zip(open_nodes, candidate):
             node["node_type"] = node_type
-        if _placement_ok(nodes, last_depth):
+        if _placement_ok(nodes, last_depth, rules):
             return _append_boss(nodes, last_depth)
 
     # On exhaustion, assign greedily. The doc says "in quota order"; that alone
@@ -243,7 +274,8 @@ def _assign_node_types(rng, nodes: list[dict], depth_structure: list[int],
     for node_type in CONSTRAINED_TYPES:
         while node_type in pending:
             pending.remove(node_type)
-            slot = _first_legal_slot(nodes, open_nodes, node_type, last_depth)
+            slot = _first_legal_slot(nodes, open_nodes, node_type,
+                                     last_depth, rules)
             slot["node_type"] = node_type
     for node in open_nodes:
         if node["node_type"] is None:
@@ -252,12 +284,12 @@ def _assign_node_types(rng, nodes: list[dict], depth_structure: list[int],
 
 
 def _first_legal_slot(nodes: list[dict], open_nodes: list[dict], node_type: str,
-                      last_depth: int) -> dict:
+                      last_depth: int, rules: MapRules) -> dict:
     for node in open_nodes:
         if node["node_type"] is not None:
             continue
         node["node_type"] = node_type
-        legal = _placement_ok(nodes, last_depth, partial=True)
+        legal = _placement_ok(nodes, last_depth, rules, partial=True)
         node["node_type"] = None
         if legal:
             return node
@@ -267,7 +299,8 @@ def _first_legal_slot(nodes: list[dict], open_nodes: list[dict], node_type: str,
     raise ValueError("no slot available for greedy assignment")
 
 
-def _placement_ok(nodes: list[dict], last_depth: int, partial: bool = False) -> bool:
+def _placement_ok(nodes: list[dict], last_depth: int, rules: MapRules,
+                  partial: bool = False) -> bool:
     rest_depths = set()
     for node in nodes:
         node_type = node["node_type"]
@@ -275,11 +308,13 @@ def _placement_ok(nodes: list[dict], last_depth: int, partial: bool = False) -> 
             if partial:
                 continue
             return False
-        if node_type == SHOP and node["depth"] < 3:
+        if node_type == SHOP and node["depth"] < rules.shop_min_depth:
             return False
         if node_type == REST:
             rest_depths.add(node["depth"])
-    return not any(depth + 1 in rest_depths for depth in rest_depths)
+    # 휴식 칸끼리는 최소 간격만큼 떨어져 있어야 한다.
+    return not any(0 < other - depth < rules.rest_min_depth_gap
+                   for depth in rest_depths for other in rest_depths)
 
 
 def _append_boss(nodes: list[dict], last_depth: int) -> list[dict]:
@@ -293,7 +328,7 @@ def _append_boss(nodes: list[dict], last_depth: int) -> list[dict]:
 # Step 4 — FALLBACK_TEMPLATE
 # =====================================================================
 def _fallback_template(depth_structure: list[int], quota: dict[str, int],
-                       shuffle_attempts: int) -> GeneratedMap:
+                       shuffle_attempts: int, rules: MapRules) -> GeneratedMap:
     """A hardcoded, pre-validated graph. Deterministic, no rng involved."""
     import random
 
@@ -318,14 +353,14 @@ def _fallback_template(depth_structure: list[int], quota: dict[str, int],
             else:
                 lo = (i * (b - 1)) // (a - 1)
                 hi = max(lo, min(((i + 1) * (b - 1)) // (a - 1), b - 1))
-                if lo == hi and d + 1 not in (5, 6):
+                if lo == hi and d + 1 not in rules.converging_depths:
                     lo = max(0, lo - 1)
                 span = range(lo, hi + 1)
             for j in span:
                 edges.append((source, target_row[j]))
 
     assigned = _assign_node_types(random.Random(0), nodes, depth_structure, quota,
-                                 shuffle_attempts)
+                                 shuffle_attempts, rules)
     generated = GeneratedMap(nodes=assigned, edges=edges, used_fallback=True)
     generated.boss_index = len(assigned) - 1
     return generated

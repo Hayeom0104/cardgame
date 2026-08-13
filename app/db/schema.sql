@@ -778,3 +778,12 @@ CREATE TABLE IF NOT EXISTS balancing_constants (
   value_json         TEXT    NOT NULL,
   PRIMARY KEY (content_version_id, key)
 );
+
+-- 설정마다 "무엇을 바꾸는 값인지"에 대한 설명. `config/*.toml` 의 주석에서
+-- 그대로 읽어오므로 파일과 대시보드의 설명이 갈라지지 않는다.
+-- 값이 아니라 키를 설명하는 것이므로 콘텐츠 버전에 묶이지 않는다.
+CREATE TABLE IF NOT EXISTS balancing_metadata (
+  key         TEXT PRIMARY KEY,
+  source_file TEXT NOT NULL,   -- 이 설정이 정의된 config 파일 이름
+  description TEXT NOT NULL
+);

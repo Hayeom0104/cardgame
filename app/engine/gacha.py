@@ -291,10 +291,10 @@ def _resolve_entity(conn, rng: random.Random, balance: Balance, *, user_id: int,
             return _grant(conn, balance, user_id, kind, entity_id, band,
                           content_version_id, won_5050=won_5050)
 
-    pool = _pool_for(conn, content_version_id, kind, band,
+    pool = _pool_for(conn, balance, content_version_id, kind, band,
                      exclude_id=banner["pickup_target_id"] if won_5050 is False else None)
     if not pool:
-        pool = _pool_for(conn, content_version_id, kind, band)
+        pool = _pool_for(conn, balance, content_version_id, kind, band)
     if not pool:
         raise GachaError(f"no {kind} content available for band {band!r}")
     entity_id = pool[rng.randrange(len(pool))]
@@ -302,10 +302,10 @@ def _resolve_entity(conn, rng: random.Random, balance: Balance, *, user_id: int,
                   content_version_id, won_5050=won_5050)
 
 
-def _pool_for(conn, content_version_id: int, kind: str, band: str,
-              exclude_id: str | None = None) -> list[str]:
+def _pool_for(conn, balance: Balance, content_version_id: int, kind: str,
+              band: str, exclude_id: str | None = None) -> list[str]:
     if kind == "character":
-        star = {BAND_TOP: 3, BAND_MID: 2, BAND_BASE: 1}[band]
+        star = int(balance.get("gacha_band_star_rank")[band])
         rows = conn.execute(
             "SELECT character_id FROM characters WHERE content_version_id = ? "
             "AND in_gacha_pool = 1 AND is_retired = 0 AND base_rarity = ? "
@@ -315,7 +315,7 @@ def _pool_for(conn, content_version_id: int, kind: str, band: str,
         return [row["character_id"] for row in rows
                 if row["character_id"] != exclude_id]
 
-    tiers = {BAND_TOP: (6,), BAND_MID: (4, 5), BAND_BASE: (1, 2, 3)}[band]
+    tiers = [int(tier) for tier in balance.get("gacha_band_rarity_tiers")[band]]
     placeholders = ",".join("?" * len(tiers))
     rows = conn.execute(
         f"SELECT card_id FROM cards WHERE content_version_id = ? AND is_retired = 0 "

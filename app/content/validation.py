@@ -382,6 +382,7 @@ def _validate_card_upgrades(db: Database, version_id: int) -> None:
     """
     from app.engine import card_upgrades as cu
 
+    limits = cu.rules_for(db, version_id)
     scopes = _status_scopes(db, version_id)
     cards = {row["card_id"] for row in db.query(
         "SELECT card_id FROM cards WHERE content_version_id = ?", (version_id,))}
@@ -396,17 +397,17 @@ def _validate_card_upgrades(db: Database, version_id: int) -> None:
             raise ValidationError(f"{label}: card does not resolve")
 
         tier = int(row["target_tier"])
-        if not cu.MIN_TIER < tier <= cu.MAX_TIER:
+        if not cu.MIN_TIER < tier <= limits.max_tier:
             raise ValidationError(
-                f"{label}: target_tier must be 1..{cu.MAX_TIER} (§5.8.1)")
+                f"{label}: target_tier must be 1..{limits.max_tier} (§5.8.1)")
 
         # §5.8.2 — 와일드카드는 2→3 전이부터 든다.
         wildcards = int(row["wildcard_cost"])
-        if tier < cu.WILDCARD_FROM_TIER and wildcards:
+        if tier < limits.wildcard_from_tier and wildcards:
             raise ValidationError(
                 f"{label}: 와일드카드 is only spent from the 2→3 transition "
                 "onward (§5.8.2)")
-        if tier >= cu.WILDCARD_FROM_TIER and wildcards <= 0:
+        if tier >= limits.wildcard_from_tier and wildcards <= 0:
             raise ValidationError(
                 f"{label}: transitions from 2→3 onward must cost 와일드카드 "
                 "(§5.8.2)")
@@ -433,7 +434,7 @@ def _validate_card_upgrades(db: Database, version_id: int) -> None:
                     "(§5.8.3)")
 
         # §5.8.3 — 능력 추가는 전이와 상태 scope로 게이트된다.
-        allowed = cu.ALLOWED_SCOPES_BY_TIER[tier]
+        allowed = limits.allowed_scopes(tier)
         for added in cu.added_status_operators(effects):
             status_id = (added.get("params") or {}).get("status_id")
             scope = scopes.get(status_id)
@@ -452,10 +453,10 @@ def _validate_card_upgrades(db: Database, version_id: int) -> None:
             # §5.8.3 — 지속시간은 4턴까지이며 상태 자신의 base_duration에도 묶인다.
             override = (added.get("params") or {}).get("duration_override")
             if override is not None:
-                if override > cu.MAX_APPLIED_DURATION:
+                if override > limits.max_applied_duration:
                     raise ValidationError(
                         f"{label}: applied duration {override} exceeds the "
-                        f"{cu.MAX_APPLIED_DURATION}-turn cap (§5.8.3)")
+                        f"{limits.max_applied_duration}-turn cap (§5.8.3)")
                 base = db.one(
                     "SELECT base_duration FROM statuses WHERE content_version_id = ? "
                     "AND status_id = ?", (version_id, status_id))

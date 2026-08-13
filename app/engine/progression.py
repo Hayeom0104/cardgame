@@ -253,8 +253,9 @@ def check_card_upgrade(db: Database, *, user_id: int, card_id: str,
         raise ProgressionError("해금하지 않은 카드입니다.")
 
     current = int(owned["upgrade_tier"])
-    if current >= cu.MAX_TIER:
-        raise ProgressionError(f"이미 최대 강화 단계(T{cu.MAX_TIER})입니다.")
+    ceiling = cu.rules_for(db, content_version_id).max_tier
+    if current >= ceiling:
+        raise ProgressionError(f"이미 최대 강화 단계(T{ceiling})입니다.")
 
     cost = cu.next_cost(db, content_version_id, card_id, current)
     if cost is None:

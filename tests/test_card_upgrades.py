@@ -135,9 +135,10 @@ def test_an_unknown_scope_is_rejected(db, version):
 # =====================================================================
 def test_there_are_five_tiers_above_the_pulled_state(balance):
     """§5.8.1 — `upgrade_tier ∈ {0..5}`, 0은 뽑은 그대로."""
+    limits = cu.rules(balance)
     assert cu.MIN_TIER == 0
-    assert cu.MAX_TIER == int(balance.get("card_upgrade_max_tier")) == 5
-    assert sorted(cu.ALLOWED_SCOPES_BY_TIER) == [1, 2, 3, 4, 5]
+    assert limits.max_tier == int(balance.get("card_upgrade_max_tier")) == 5
+    assert sorted(limits.scopes_by_tier) == [1, 2, 3, 4, 5]
 
 
 def test_wildcards_are_spent_only_from_the_2_to_3_transition(balance):

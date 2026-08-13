@@ -55,7 +55,11 @@ def drop_tier_for(db: Database, content_version_id: int, world_id: str,
 
     World 1 is uniformly T0 *because its band has one value*, and from world 2
     onward diving deeper genuinely raises quality — both owner statements hold.
+
+    깊이가 등급의 어디쯤에 대응하는지는 `config/06_경제.toml` 의
+    `equipment_drop_tier_by_depth` 가 정한다.
     """
+    balance = Balance(db, content_version_id)
     row = db.one(
         "SELECT drop_tier_min, drop_tier_max FROM worlds "
         "WHERE content_version_id = ? AND world_id = ?",
@@ -68,12 +72,12 @@ def drop_tier_for(db: Database, content_version_id: int, world_id: str,
         return low
 
     span = high - low
-    if depth <= 3:
-        position = 0.0
-    elif depth <= 5:
-        position = 0.5
-    else:
-        position = 1.0
+    # 깊이가 깊을수록 그 월드의 최고 등급에 가까워진다.
+    position = 1.0
+    for entry in balance.get("equipment_drop_tier_by_depth"):
+        if depth <= int(entry["max_depth"]):
+            position = float(entry["position"])
+            break
     return low + int(round(span * position))
 
 
@@ -307,7 +311,8 @@ def _grant_rewards(db: Database, balance: Balance, run, content_version_id: int,
     coin = run_clear_coin(balance, deepest_depth=depth, first_clear=first_clear)
     carta_band = balance.get("carta_income")
     span = int(carta_band["run_clear_max"]) - int(carta_band["run_clear_min"])
-    carta = int(carta_band["run_clear_min"]) + int(span * min(1.0, depth / 7.0))
+    full_depth = float(balance.get("run_clear_carta_full_depth"))
+    carta = int(carta_band["run_clear_min"]) + int(span * min(1.0, depth / full_depth))
 
     with db.tx() as conn:
         # 카르타 is local and immediate.

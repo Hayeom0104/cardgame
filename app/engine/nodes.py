@@ -200,10 +200,12 @@ def _offer_reward(db: Database, balance: Balance, rng: JournaledRng, run,
         _set_state(db, run["run_id"], lc.MAP_NAVIGATION)
         return {"screen": "map", "reason": "no playable card to offer"}
 
+    cuts = balance.get("reward_rarity_band_max_tier")
+
     def band_of(tier: int) -> str:
-        if tier <= 3:
+        if tier <= int(cuts["low"]):
             return "low"
-        return "mid" if tier <= 5 else "high"
+        return "mid" if tier <= int(cuts["mid"]) else "high"
 
     op_key = f"node:{node['node_index']}:reward"
     # §15.4 — a 보상 node also pays 탐험 자금 and rolls its own (higher) drop
@@ -370,7 +372,8 @@ def _open_shop(db: Database, balance: Balance, rng: JournaledRng, run,
                  "recipients": _legal_recipients(db, run, picked["element"])},
                 ensure_ascii=False)
         else:
-            effect = rng.choice(f"{op_key}:{index}:effect", _IMMEDIATE_EFFECTS)
+            effect = rng.choice(f"{op_key}:{index}:effect",
+                                _immediate_effects(balance))
             price = rng.randint(f"{op_key}:{index}:price",
                                 int(effect_price[0]), int(effect_price[1]))
             item_ref = json.dumps(effect, ensure_ascii=False)
@@ -386,14 +389,21 @@ def _open_shop(db: Database, balance: Balance, rng: JournaledRng, run,
     return {"screen": "shop", "items": items}
 
 
-#: §7.1 — immediate effects resolve at purchase and store nothing.
-_IMMEDIATE_EFFECTS = [
-    {"kind": "effect", "op": "heal", "value": 0.3, "name": "HP 회복"},
-    {"kind": "effect", "op": "remove_curse", "value": 1, "name": "저주받은 카드 1장 제거"},
-    {"kind": "effect", "op": "remove_card", "value": 1, "name": "덱에서 카드 1장 제거"},
-    {"kind": "effect", "op": "next_battle_resource", "value": 1,
-     "name": "다음 전투 자원 +1"},
-]
+def _immediate_effects(balance: Balance) -> list[dict]:
+    """§7.1 — 구매 즉시 해소되고 아무것도 남기지 않는 효과들.
+
+    회복량은 `config/06_경제.toml` 의 `run_shop_heal_pct` 에서 읽는다.
+    """
+    return [
+        {"kind": "effect", "op": "heal",
+         "value": float(balance.get("run_shop_heal_pct")), "name": "HP 회복"},
+        {"kind": "effect", "op": "remove_curse", "value": 1,
+         "name": "저주받은 카드 1장 제거"},
+        {"kind": "effect", "op": "remove_card", "value": 1,
+         "name": "덱에서 카드 1장 제거"},
+        {"kind": "effect", "op": "next_battle_resource", "value": 1,
+         "name": "다음 전투 자원 +1"},
+    ]
 
 
 def buy_shop_item(db: Database, rng: JournaledRng, run_id: int, *,

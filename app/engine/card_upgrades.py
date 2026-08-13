@@ -22,45 +22,55 @@ from __future__ import annotations
 
 import copy
 import json
+from dataclasses import dataclass
 
 from app.db.connection import Database
 
-#: §5.8.1 — 0은 뽑은 그대로의 상태. 상한은 §15 상수에서 읽는다
-#: (`max_tier()`); 이 값은 상수가 없을 때의 폴백일 뿐이다.
+#: §5.8.1 — 0은 "뽑은 그대로"라는 뜻이며 조정 대상이 아니다. 나머지 규칙
+#: (상한, 와일드카드 발생 지점, 전이별 게이트)은 모두 `config/05_성장.toml`
+#: 에서 읽는다.
 MIN_TIER = 0
-MAX_TIER = 5
-
-#: §5.8.2 — 와일드카드는 2→3 전이부터 든다.
-WILDCARD_FROM_TIER = 3
-
-#: §5.8.3 — 능력 추가(카드에 새 `apply_status` 연산자를 붙이는 것)가 허용되는
-#: 전이와, 그 전이에서 참조 가능한 상태 scope.
-#:   0→1        능력 추가 없음, 숫자 변경만
-#:   1→2, 2→3   `player_only` scope 상태만, 약한 강도
-#:   3→4, 4→5   모든 scope, 강한 강도
-ABILITY_ADDITION_NONE = ()
-ABILITY_ADDITION_WEAK = ("player_only",)
-ABILITY_ADDITION_FULL = ("player_only", "enemy_only", "universal")
-
-ALLOWED_SCOPES_BY_TIER: dict[int, tuple[str, ...]] = {
-    1: ABILITY_ADDITION_NONE,
-    2: ABILITY_ADDITION_WEAK,
-    3: ABILITY_ADDITION_WEAK,
-    4: ABILITY_ADDITION_FULL,
-    5: ABILITY_ADDITION_FULL,
-}
-
-#: §5.8.3 — 적용되는 상태의 지속시간 상한 (상태 자신의 base_duration에도 묶인다).
-MAX_APPLIED_DURATION = 4
 
 #: §5.8.3 — 숫자 변경으로 허용되는 연산자 (데미지/방어/회복 배율, 또는 비용 감소).
 NUMERIC_OPERATORS = frozenset({"deal_damage", "deal_flat_damage", "grant_block",
                                "heal", "modify_cost"})
 
 
+@dataclass(frozen=True)
+class UpgradeRules:
+    """§5.8 업그레이드 규칙 — `config/05_성장.toml` 에서 읽은 한 벌."""
+
+    max_tier: int
+    wildcard_from_tier: int
+    max_applied_duration: int
+    #: 전이별로 능력 추가에 쓸 수 있는 상태 scope. 빈 튜플이면 그 전이는
+    #: 숫자 변경만 담을 수 있다.
+    scopes_by_tier: dict[int, tuple[str, ...]]
+
+    def allowed_scopes(self, tier: int) -> tuple[str, ...]:
+        return self.scopes_by_tier.get(tier, ())
+
+
+def rules(balance) -> UpgradeRules:
+    """§15 — 어떤 값도 하드코딩하지 않는다. 대시보드에서 전부 바꿀 수 있다."""
+    scopes = balance.get("card_upgrade_scopes_by_tier")
+    return UpgradeRules(
+        max_tier=int(balance.get("card_upgrade_max_tier")),
+        wildcard_from_tier=int(balance.get("card_upgrade_wildcard_from_tier")),
+        max_applied_duration=int(balance.get("card_upgrade_max_applied_duration")),
+        scopes_by_tier={int(tier): tuple(value) for tier, value in scopes.items()},
+    )
+
+
+def rules_for(db, content_version_id: int) -> UpgradeRules:
+    """`Balance` 를 아직 들고 있지 않은 호출부를 위한 지름길."""
+    from app.content.balance import Balance
+
+    return rules(Balance(db, content_version_id))
+
+
 def max_tier(balance) -> int:
-    """§15 — 어떤 값도 하드코딩하지 않는다. 대시보드에서 상한을 바꿀 수 있다."""
-    return int(balance.get("card_upgrade_max_tier", MAX_TIER))
+    return int(balance.get("card_upgrade_max_tier"))
 
 
 def upgrade_row(db: Database, content_version_id: int, card_id: str,
@@ -81,7 +91,7 @@ def upgrade_path(db: Database, content_version_id: int,
 def next_cost(db: Database, content_version_id: int, card_id: str,
               current_tier: int) -> dict | None:
     """다음 티어의 비용. 최대 티어이거나 전이가 저작되지 않았으면 None."""
-    if current_tier >= MAX_TIER:
+    if current_tier >= rules_for(db, content_version_id).max_tier:
         return None
     row = upgrade_row(db, content_version_id, card_id, current_tier + 1)
     if row is None:
@@ -110,7 +120,8 @@ def effective_card(db: Database, content_version_id: int, card_row,
     if upgrade_tier <= MIN_TIER:
         return {**card, "effects": effects, "cost": cost, "upgrade_tier": 0}
 
-    for tier in range(1, min(upgrade_tier, MAX_TIER) + 1):
+    ceiling = rules_for(db, content_version_id).max_tier
+    for tier in range(1, min(upgrade_tier, ceiling) + 1):
         row = upgrade_row(db, content_version_id, card["card_id"], tier)
         if row is None:
             # 저작되지 않은 전이는 조용히 건너뛴다: 소유 데이터가 콘텐츠보다
@@ -119,7 +130,7 @@ def effective_card(db: Database, content_version_id: int, card_row,
         effects, cost = _apply_overlay(effects, cost, json.loads(row["effects_json"]))
 
     return {**card, "effects": effects, "cost": cost,
-            "upgrade_tier": min(upgrade_tier, MAX_TIER)}
+            "upgrade_tier": min(upgrade_tier, ceiling)}
 
 
 def _apply_overlay(effects: list[dict], cost: int,
