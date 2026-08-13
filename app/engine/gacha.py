@@ -154,6 +154,8 @@ def pull(db: Database, balance: Balance, *, user_id: int, banner_id: str,
     if account is None:
         raise GachaError(f"account {user_id} does not exist")
     if account["carta"] < cost:
+        # 이 검사는 UX용이다. 권위 있는 검사는 아래 트랜잭션 안에서 다시 한다 —
+        # 두 번의 클릭이 여기를 나란히 통과할 수 있기 때문이다.
         raise GachaError("insufficient 카르타")
 
     # 1. Create the transaction row FIRST, with a cryptographically random
@@ -176,6 +178,13 @@ def pull(db: Database, balance: Balance, *, user_id: int, banner_id: str,
 
     outcome = GachaOutcome(gacha_id=gacha_id, carta_spent=cost)
     with db.tx() as conn:
+        # 동시 클릭 방지: 잔액을 트랜잭션 안에서 다시 읽는다. 밖에서만 검사하면
+        # 두 요청이 모두 통과해 카르타가 음수가 되고 §5.10 카운터가 뒤엉킨다.
+        account = conn.execute("SELECT * FROM accounts WHERE user_id = ?",
+                               (user_id,)).fetchone()
+        if account["carta"] < cost:
+            raise GachaError("insufficient 카르타")
+
         rng = random.Random(int(commit_seed[:16], 16))
         scope = banner["pity_scope_id"]
         pity = _pity_row(conn, user_id, scope)

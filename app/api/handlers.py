@@ -18,6 +18,7 @@ from app.api import custom_id as cid
 from app.api import errors
 from app.api import events as ev
 from app.api.gates import GateError, check_gates
+from app.api import screens
 from app.central import delivery
 from app.content.balance import Balance
 from app.content.seed import TUTORIAL_WORLD_ID, create_account
@@ -94,9 +95,12 @@ def handle_message(ctx: HandlerContext, event: ev.MessageEvent) -> dict:
         return research_screen(ctx, event.user_id)
     if subcommand == CMD_SHOP:
         return hub_shop_screen(ctx, event.user_id)
-    if subcommand in (CMD_DECK, CMD_GACHA):
-        # 뽑기 엔진(§5)과 덱 데이터는 있으나, 화면별 컴포넌트 구성은 콘텐츠
-        # 작업이다 (§13.2). §13.3은 UI 카피를 확정된 것으로 주장하지 않는다.
+    if subcommand == CMD_GACHA:
+        return screens.gacha_screen(ctx.db, ctx.balance, event.user_id,
+                                    ctx.content_version_id)
+    if subcommand == CMD_DECK:
+        # 덱 조회는 런 스코프 덱과 계정 해금 목록 양쪽을 보여줘야 하는데,
+        # 화면별 컴포넌트 구성은 콘텐츠 작업이다 (§13.2).
         return _reply(f"[{subcommand}] 화면은 아직 콘텐츠 작업 중입니다. (§13.2)")
     return _ephemeral(errors.ILLEGAL_STATE)
 
@@ -265,23 +269,23 @@ def start_run(ctx: HandlerContext, user_id: int) -> dict:
         "SELECT character_id FROM owned_characters WHERE user_id = ? "
         "ORDER BY acquired_at", (user_id,))
     if len(owned) < 2:
-        return _ephemeral(errors.PARTY_TOO_SMALL)
+        # 두 번째 캐릭터는 §5.10 첫 뽑기 보장으로 들어온다 — 어디로 가야 하는지
+        # 알려주지 않으면 플레이어는 여기서 막힌다.
+        return _ephemeral(f"{errors.PARTY_TOO_SMALL}\n`!덱아웃 뽑기`로 동료를 모아보세요.")
 
-    return {
-        "action": "reply_ephemeral",
-        "content": "준비 화면 — [1] 월드 선택 → [2] 파티 선택 → [3] 패시브 선택 → [4] 확정",
-        "components": [
-            {"type": "string_select", "custom_id": "dko:prep:world",
-             "options": [{"label": row["name"], "value": row["world_id"]}
-                         for row in worlds]},
-        ],
-    }
+    # 이전 준비를 끝내지 않고 다시 들어온 경우가 있으므로 초안을 비우고 시작한다.
+    screens.clear_draft(ctx.db, user_id)
+    return screens.world_select_screen(ctx.db, user_id, ctx.content_version_id)
 
 
 def _prepare_and_materialize(ctx: HandlerContext, user_id: int, world_id: str, *,
                              is_tutorial: bool,
                              party: list[str] | None = None) -> dict:
-    """Step [5] MATERIALIZE, then [6] SURFACE."""
+    """튜토리얼 경로 — 월드도 파티도 정해져 있으므로 [1]-[4]를 건너뛴다.
+
+    [5] MATERIALIZE와 [6] SURFACE는 준비 화면과 같은 코드를 쓴다: 스레드 생성을
+    빠뜨린 런은 화면 없이 계정만 점유한다 (§16.3).
+    """
     from app.content.seed import STARTER_CHARACTER_ID
 
     request = lc.RunBuildRequest(
@@ -295,28 +299,8 @@ def _prepare_and_materialize(ctx: HandlerContext, user_id: int, world_id: str, *
     except lc.LifecycleError as error:
         return _ephemeral(str(error))
 
-    run = ctx.db.one("SELECT * FROM runs WHERE run_id = ?", (run_id,))
-    request_id = delivery.mint_request_id("thread")
-    delivery.record_intent(
-        ctx.db, request_id=request_id, run_id=run_id, purpose="canonical",
-        surface_generation=run["surface_generation"],
-        presentation_revision=run["presentation_revision"],
-    )
-    # The private thread is created through the service-initiated API (§1.3.5),
-    # not the response-path `create_thread` action, which would make a public
-    # thread anyone with View Channel could watch.
-    return {
-        "action": "reply_ephemeral",
-        "content": "런을 시작합니다.",
-        "metadata": {"request_id": request_id},
-        "thread_request": {
-            "logical_session_id": run["logical_session_id"],
-            "surface_generation": run["surface_generation"],
-            "owner_user_id": user_id,
-            "thread_name": f"덱아웃 - {user_id}",
-        },
-        "run_id": run_id,
-    }
+    return {**screens.surface_request(ctx.db, run_id, user_id),
+            "action": "reply_ephemeral"}
 
 
 def abandon_run(ctx: HandlerContext, user_id: int) -> dict:
@@ -361,8 +345,16 @@ def achievements_screen(ctx: HandlerContext, user_id: int) -> dict:
 # Component interactions
 # =====================================================================
 def handle_interaction(ctx: HandlerContext, event: ev.InteractionEvent) -> dict:
-    if event.custom_id.startswith("dko:prep:"):
-        return _ephemeral("준비 화면 진행 중입니다.")
+    # 준비·뽑기 화면은 런 밖에서 동작하므로 §19.2의 custom_id 형식(run_id를
+    # 요구한다)을 쓸 수 없다. 각자의 접두사로 먼저 갈라낸다.
+    if event.custom_id.startswith(screens.PREP_PREFIX):
+        return screens.handle_prep(ctx.db, ctx.balance, event.user_id,
+                                   event.custom_id, event.values,
+                                   ctx.content_version_id)
+    if event.custom_id.startswith(screens.GACHA_PREFIX):
+        return screens.handle_gacha(ctx.db, ctx.balance, event.user_id,
+                                    event.custom_id, ctx.content_version_id,
+                                    event_id=event.event_id)
 
     try:
         parsed = cid.parse(event.custom_id)

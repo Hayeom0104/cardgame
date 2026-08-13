@@ -168,6 +168,23 @@ class RunBuildRequest:
     is_tutorial: bool = False
 
 
+def selectable_passives(db: Database, user_id: int,
+                        content_version_id: int) -> list[dict]:
+    """§6 — the passives this account may bring into a run.
+
+    This is the SINGLE source of truth: the preparing screen offers exactly
+    this list and `validate_build` accepts exactly this list, so a forged
+    `custom_id` submission can never smuggle in an id the screen never showed.
+
+    §6 passive content is not authored in the launch content set (see README),
+    and the `cards` table carries no passive marker — `cards.category` is one
+    of 공격 | 방어 | 버프디버프 | 회복. There is therefore nothing to select yet,
+    and this returns empty rather than filtering on a value that cannot exist.
+    When passives are authored, this function is the only place that changes.
+    """
+    return []
+
+
 def validate_build(db: Database, balance: Balance, request: RunBuildRequest,
                    content_version_id: int) -> None:
     """Gate the confirm step (§19.3 [4])."""
@@ -202,8 +219,20 @@ def validate_build(db: Database, balance: Balance, request: RunBuildRequest,
         if owned is None:
             raise LifecycleError(f"character {character_id!r} is not owned")
 
-    if len(request.passive_card_ids) > int(account["passive_slots"]):
+    passives = request.passive_card_ids
+    if len(passives) != len(set(passives)):
+        raise LifecycleError("the same passive cannot occupy two slots")
+    if len(passives) > int(account["passive_slots"]):
         raise LifecycleError("too many passives for the account's slots")
+
+    # Ownership, not just count: `run_passives` must never hold an id the
+    # account cannot actually bring.
+    if passives:
+        legal = {row["card_id"] for row in
+                 selectable_passives(db, request.user_id, content_version_id)}
+        for passive_id in passives:
+            if passive_id not in legal:
+                raise LifecycleError(f"passive {passive_id!r} is not available")
 
 
 def create_run(db: Database, balance: Balance, request: RunBuildRequest,

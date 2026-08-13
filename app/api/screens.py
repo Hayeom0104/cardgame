@@ -145,13 +145,10 @@ def passive_select_screen(db: Database, user_id: int, content_version_id: int,
                      (user_id,))
     slots = int(account["passive_slots"])
 
-    # 패시브는 가챠로 해금된 뒤 런 보상으로 획득한다 (§6). 아직 해금한 것이
-    # 없으면 이 단계는 건너뛴다 — 고를 것이 없는 화면을 띄울 이유가 없다.
-    passives = db.query(
-        "SELECT uc.card_id, c.name FROM unlocked_cards uc JOIN cards c "
-        "ON c.card_id = uc.card_id AND c.content_version_id = ? "
-        "WHERE uc.user_id = ? AND c.category = '패시브' ORDER BY uc.card_id",
-        (content_version_id, user_id))
+    # 고를 것이 없으면 이 단계는 건너뛴다 — 빈 화면을 띄울 이유가 없다.
+    # 목록의 정의는 `lifecycle.selectable_passives` 한 곳에만 있고,
+    # `validate_build`도 같은 목록으로 검사한다.
+    passives = lc.selectable_passives(db, user_id, content_version_id)
     if not passives:
         return confirm_screen(db, user_id, content_version_id, draft)
 
@@ -277,8 +274,15 @@ def handle_prep(db: Database, balance: Balance, user_id: int, custom_id: str,
         return passive_select_screen(db, user_id, content_version_id, draft)
 
     if step in ("passive", "skip_passive"):
-        draft = {**draft, "passives": list(dict.fromkeys(values))
-                 if step == "passive" else []}
+        if not draft["party"]:
+            return world_select_screen(db, user_id, content_version_id)
+        chosen = list(dict.fromkeys(values)) if step == "passive" else []
+        # `custom_id`는 위조될 수 있으니, 화면이 실제로 보여준 목록과 대조한다.
+        legal = {row["card_id"] for row in
+                 lc.selectable_passives(db, user_id, content_version_id)}
+        if not set(chosen) <= legal:
+            return {"action": "edit", "content": errors.ILLEGAL_STATE}
+        draft = {**draft, "passives": chosen}
         save_draft(db, user_id, draft)
         return confirm_screen(db, user_id, content_version_id, draft)
 
@@ -290,7 +294,13 @@ def handle_prep(db: Database, balance: Balance, user_id: int, custom_id: str,
 
 def materialize(db: Database, balance: Balance, user_id: int, draft: dict,
                 content_version_id: int) -> dict:
-    """[5] MATERIALIZE — 런은 여기서 비로소 존재하게 된다."""
+    """[5] MATERIALIZE — 런은 여기서 비로소 존재하게 된다. 이어서 [6] SURFACE.
+
+    두 단계를 갈라놓으면 안 된다. `runs.thread_id`를 쓰는 유일한 경로가
+    `message_delivery_result` 콜백(§1.3.3)이므로, 스레드 생성을 요청하지 않은
+    런은 스레드도 화면도 없이 계정만 점유한다 — §16.3의 계정당 하나 규칙 탓에
+    새 런을 시작할 수도 없다.
+    """
     world = db.one(
         "SELECT is_tutorial FROM worlds WHERE content_version_id = ? AND world_id = ?",
         (content_version_id, draft["world_id"]))
@@ -307,8 +317,39 @@ def materialize(db: Database, balance: Balance, user_id: int, draft: dict,
         return {"action": "edit", "content": str(error)}
 
     clear_draft(db, user_id)
-    return {"action": "edit", "content": "런을 시작합니다.", "components": [],
-            "run_id": run_id}
+    return {**surface_request(db, run_id, user_id), "action": "edit",
+            "components": []}
+
+
+def surface_request(db: Database, run_id: int, user_id: int) -> dict:
+    """[6] SURFACE — 비공개 스레드 생성을 요청한다 (§1.3.5).
+
+    전송 전에 delivery intent를 기록한다 (§1.3.3, B-13): 콜백은
+    `surface_generation`도 `presentation_revision`도 싣고 오지 않으므로,
+    그 둘은 우리가 미리 적어 두어야만 알 수 있다.
+    """
+    from app.central import delivery
+
+    run = db.one("SELECT * FROM runs WHERE run_id = ?", (run_id,))
+    request_id = delivery.mint_request_id("thread")
+    delivery.record_intent(
+        db, request_id=request_id, run_id=run_id, purpose="canonical",
+        surface_generation=run["surface_generation"],
+        presentation_revision=run["presentation_revision"],
+    )
+    return {
+        "content": "런을 시작합니다.",
+        "metadata": {"request_id": request_id},
+        # 응답 경로의 `create_thread`가 아니라 서비스 주도 API를 쓴다 —
+        # 전자는 공개 스레드를 만든다 (§1.3.5).
+        "thread_request": {
+            "logical_session_id": run["logical_session_id"],
+            "surface_generation": run["surface_generation"],
+            "owner_user_id": user_id,
+            "thread_name": f"덱아웃 - {user_id}",
+        },
+        "run_id": run_id,
+    }
 
 
 # =====================================================================
@@ -363,17 +404,25 @@ def gacha_screen(db: Database, balance: Balance, user_id: int,
 
 
 def handle_gacha(db: Database, balance: Balance, user_id: int, custom_id: str,
-                 content_version_id: int) -> dict:
-    """뽑기 버튼. §17.5가 한 로컬 트랜잭션을 보장하므로 여기서는 결과만 정리한다."""
+                 content_version_id: int, event_id: str | None = None) -> dict:
+    """뽑기 버튼. §17.5가 한 로컬 트랜잭션을 보장하므로 여기서는 결과만 정리한다.
+
+    `event_id`가 있으면 그것으로 `gacha_id`를 유도한다. 중앙봇이 같은 이벤트를
+    재전송하면 §5.9의 재생 경로가 `results_json`을 그대로 돌려주므로, 다시
+    뽑히지도 다시 과금되지도 않는다 — id를 매번 새로 만들면 그 보호가 통째로
+    작동하지 않는다.
+    """
     payload = custom_id[len(GACHA_PREFIX):]
     banner_id, _, pull_kind = payload.rpartition(":")
     if pull_kind not in ("single", "ten"):
         return {"action": "edit", "content": errors.ILLEGAL_STATE}
 
+    gacha_id = f"evt:{event_id}" if event_id else None
     try:
         outcome = gacha.pull(db, balance, user_id=user_id, banner_id=banner_id,
                              pull_kind=pull_kind,
-                             content_version_id=content_version_id)
+                             content_version_id=content_version_id,
+                             gacha_id=gacha_id)
     except gacha.GachaError as error:
         message = (errors.INSUFFICIENT_CURRENCY if "insufficient" in str(error)
                    else errors.ILLEGAL_STATE)
