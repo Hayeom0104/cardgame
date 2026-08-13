@@ -28,6 +28,8 @@ class Settings(BaseSettings):
 
     # --- 중앙봇 연동 (§1, §1.1) ---
     central_api_base: str = "http://localhost:8000"
+    central_api_key: str = ""
+    # Deprecated compatibility alias; use CARDGAME_CENTRAL_API_KEY.
     central_api_token: str = ""
     central_api_timeout: float = 5.0
     # 중앙봇이 아직 없는 개발 환경에서 코인/XP 호출을 로컬 스텁으로 처리한다.

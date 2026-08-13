@@ -34,7 +34,8 @@ from .protocol import BotResponse, EventRequest
 
 log = logging.getLogger(__name__)
 
-ROOT = "카드"
+ROOT = "덱아웃"
+ROOT_ALIASES = {ROOT, "카드"}  # 기존 설치의 텍스트 명령은 마이그레이션 동안 유지한다.
 
 Handler = Callable[["CommandContext"], Awaitable[BotResponse]]
 _HANDLERS: dict[str, Handler] = {}
@@ -93,12 +94,16 @@ def get_or_create_user(session: Session, discord_id: str, username: str = "") ->
 
 
 async def dispatch(session: Session, event: EventRequest, prefix: str = "!") -> BotResponse:
-    content = (event.content or "").strip()
+    content = (event.raw_content or event.content or "").strip()
+    # Central message payload normally contains raw_content.  Accept the
+    # command/args form too, so a command router need not reconstruct it.
+    if not content and event.command:
+        content = " ".join([prefix + event.command, *event.args])
     if not content.startswith(prefix):
         return BotResponse.ignored()
 
     parts = content[len(prefix):].split()
-    if not parts or parts[0] != ROOT:
+    if not parts or parts[0] not in ROOT_ALIASES:
         return BotResponse.ignored()
 
     if not event.user_id:
@@ -223,7 +228,8 @@ async def _daily(ctx: CommandContext) -> BotResponse:
     coin_line = ""
     try:
         await get_central_client().add_currency(
-            user.discord_id, balance.DAILY_COIN, reason="daily"
+            user.discord_id, balance.DAILY_COIN,
+            idempotency_key=f"deckout:daily:{user.discord_id}:{now.date().isoformat()}", reason="daily"
         )
         coin_line = f" · 🪙 코인 +{balance.DAILY_COIN:,}"
     except CentralAPIError:
@@ -540,7 +546,10 @@ async def _grant_battle_rewards(ctx: CommandContext, run, outcome: run_service.N
     if amount <= 0:
         return
     try:
-        await get_central_client().add_currency(ctx.user.discord_id, amount, reason="battle_clear")
+        await get_central_client().add_currency(
+            ctx.user.discord_id, amount,
+            idempotency_key=f"deckout:battle:{run.id}:{run.current_node_id}", reason="battle_clear"
+        )
     except CentralAPIError:
         log.warning("전투 보상 코인 지급 실패: user=%s", ctx.user.discord_id)
 

@@ -146,7 +146,9 @@ async def unlock(session: Session, user: User, code: str) -> dict:
     if cost["coin"] > 0:
         try:
             await get_central_client().spend_currency(
-                user.discord_id, cost["coin"], reason=f"research:{code}"
+                user.discord_id, cost["coin"],
+                idempotency_key=f"deckout:research:{user.id}:{code}:{current + 1}",
+                reason=f"research:{code}"
             )
         except CentralAPIError as exc:
             raise ResearchError(str(exc)) from exc

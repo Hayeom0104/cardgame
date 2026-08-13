@@ -34,7 +34,10 @@ def send(client: TestClient, content: str) -> dict:
         "/event",
         json={
             "type": "message",
-            "content": content,
+            "event_id": 1234567890,
+            "message_id": "1234567890",
+            "guild_id": 1,
+            "raw_content": content,
             "user_id": USER_ID,
             "channel_id": "chan-1",
             "username": "테스터",
@@ -45,11 +48,11 @@ def send(client: TestClient, content: str) -> dict:
 
 
 def text_of(payload: dict) -> str:
-    return payload["response"]["content"]
+    return payload.get("content", "")
 
 
 def images_of(payload: dict) -> list[bytes]:
-    return [base64.b64decode(f["data"]) for f in payload["response"]["files"]]
+    return [base64.b64decode(f["data_b64"]) for f in payload.get("attachments", [])]
 
 
 def grant(code: str, cards: list[str] | None = None) -> None:
@@ -68,29 +71,29 @@ def grant(code: str, cards: list[str] | None = None) -> None:
 
 def test_non_command_messages_are_ignored(client):
     payload = send(client, "안녕하세요 그냥 잡담입니다")
-    assert payload["handled"] is False
+    assert payload == {"action": "ignore"}
 
 
 def test_unknown_subcommand_is_reported(client):
-    assert "알 수 없는 명령" in text_of(send(client, "!카드 없는명령"))
+    assert "알 수 없는 명령" in text_of(send(client, "!덱아웃 없는명령"))
 
 
 def test_help_lists_commands(client):
-    assert "명령어 목록" in text_of(send(client, "!카드 도움말"))
+    assert "명령어 목록" in text_of(send(client, "!덱아웃 도움말"))
 
 
 def test_profile_shows_currencies(client):
-    body = text_of(send(client, "!카드 정보"))
+    body = text_of(send(client, "!덱아웃 정보"))
     assert "카르타" in body and "카드 조각" in body and "와일드카드" in body
 
 
 def test_daily_grants_carta_and_blocks_repeat(client):
-    assert "출석 완료" in text_of(send(client, "!카드 출석"))
-    assert "남았습니다" in text_of(send(client, "!카드 출석"))
+    assert "출석 완료" in text_of(send(client, "!덱아웃 출석"))
+    assert "남았습니다" in text_of(send(client, "!덱아웃 출석"))
 
 
 def test_gacha_pull_returns_result_image(client):
-    send(client, "!카드 출석")
+    send(client, "!덱아웃 출석")
     with SessionLocal() as s:
         from cardgamebot.core.commands import get_or_create_user
 
@@ -98,7 +101,7 @@ def test_gacha_pull_returns_result_image(client):
         user.carta = 100_000
         s.commit()
 
-    payload = send(client, "!카드 뽑기 standard 10")
+    payload = send(client, "!덱아웃 뽑기 standard 10")
     assert "가챠 결과" in text_of(payload)
     imgs = images_of(payload)
     assert len(imgs) == 1 and imgs[0].startswith(b"\x89PNG")
@@ -106,7 +109,7 @@ def test_gacha_pull_returns_result_image(client):
 
 def test_start_run_renders_map_and_offers_nodes(client):
     grant("aria")
-    payload = send(client, "!카드 시작 aria")
+    payload = send(client, "!덱아웃 시작 aria")
     body = text_of(payload)
 
     assert "새로운 런" in body
@@ -116,15 +119,15 @@ def test_start_run_renders_map_and_offers_nodes(client):
 
 
 def test_run_requires_owned_character(client):
-    assert "보유하지 않은 캐릭터" in text_of(send(client, "!카드 시작 aria"))
+    assert "보유하지 않은 캐릭터" in text_of(send(client, "!덱아웃 시작 aria"))
 
 
 def test_full_combat_flow_produces_battle_image(client):
     grant("aria", cards=["aria_pierce", "uni_sweep"])
-    send(client, "!카드 시작 aria")
+    send(client, "!덱아웃 시작 aria")
 
     # 1층은 항상 전투 노드다 (balance.FIRST_FLOOR_ALL_COMBAT).
-    payload = send(client, "!카드 이동 1")
+    payload = send(client, "!덱아웃 이동 1")
     body = text_of(payload)
     assert "전투" in body
     assert images_of(payload)[0].startswith(b"\x89PNG")
@@ -133,10 +136,10 @@ def test_full_combat_flow_produces_battle_image(client):
     # 자원 부족이나 드로우 더미 고갈(§2.2)이면 턴을 넘긴다.
     last = ""
     for _ in range(200):
-        payload = send(client, "!카드 사용 1")
+        payload = send(client, "!덱아웃 사용 1")
         body = text_of(payload)
         if body.startswith("❌"):
-            payload = send(client, "!카드 넘기기")
+            payload = send(client, "!덱아웃 넘기기")
             body = text_of(payload)
         last = body
         if "승리" in body or "패배" in body:
@@ -145,28 +148,49 @@ def test_full_combat_flow_produces_battle_image(client):
 
 
 def test_map_command_requires_active_run(client):
-    assert "진행 중인 런이 없습니다" in text_of(send(client, "!카드 맵"))
+    assert "진행 중인 런이 없습니다" in text_of(send(client, "!덱아웃 맵"))
 
 
 def test_abandon_run(client):
     grant("noel")
-    send(client, "!카드 시작 noel")
-    assert "포기했습니다" in text_of(send(client, "!카드 포기"))
-    assert "진행 중인 런이 없습니다" in text_of(send(client, "!카드 맵"))
+    send(client, "!덱아웃 시작 noel")
+    assert "포기했습니다" in text_of(send(client, "!덱아웃 포기"))
+    assert "진행 중인 런이 없습니다" in text_of(send(client, "!덱아웃 맵"))
 
 
 def test_research_list_and_unlock_flow(client):
-    body = text_of(send(client, "!카드 연구"))
+    body = text_of(send(client, "!덱아웃 연구"))
     assert "연구 시스템" in body and "party_2" in body
 
     # 재화가 없으면 해금이 거부된다.
-    assert "부족" in text_of(send(client, "!카드 연구해금 party_2"))
+    assert "부족" in text_of(send(client, "!덱아웃 연구해금 party_2"))
 
 
 def test_hub_shop_lists_equipment(client):
-    body = text_of(send(client, "!카드 상점"))
+    body = text_of(send(client, "!덱아웃 상점"))
     assert "허브 상점" in body
 
 
 def test_health_endpoint(client):
-    assert client.get("/health").json()["status"] == "ok"
+    assert client.get("/healthz").json()["status"] == "ok"
+
+
+def test_central_interaction_and_callback_are_acknowledged(client):
+    interaction = client.post("/event", json={
+        "type": "interaction", "event_id": 2, "guild_id": 1, "channel_id": 2,
+        "user_id": 3, "custom_id": "dko:nd:1:1:1:1", "component_type": "button",
+        "message_id": 4, "interaction_token": "not-logged",
+    }).json()
+    assert interaction["action"] == "reply_ephemeral"
+
+    callback = client.post("/event", json={
+        "type": "message_delivery_result", "request_id": "unknown", "action": "reply",
+        "success": True, "partial": False, "guild_id": 1, "channel_id": 2,
+        "message_id": 3, "thread_id": None,
+    }).json()
+    assert callback == {"action": "ignore"}
+
+
+def test_shutdown_returns_required_ack(client):
+    result = client.post("/shutdown", json={"timeout": 30}).json()
+    assert result == {"status": "ready", "saved_games": 0, "refunded_users": 0}

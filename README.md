@@ -1,8 +1,8 @@
 # CardGameBot (가칭)
 
-ARI 미니게임용 **로그라이크 카드 배틀 봇**. `docs/CardGame_Design_Doc_v1.md` 의
-설계를 구현한 것으로, 문서에서 확정된 규칙만 코드로 옮기고 `TBD` 항목은
-임의로 만들어 넣지 않았습니다.
+ARI 미니게임용 **로그라이크 카드 배틀 봇**. 중앙봇은 표준 HTTP 미니게임
+계약으로 이 서비스의 `POST /event`를 호출하고, 이 서비스가 반환한 action을
+Discord에 전달합니다.
 
 > **봇 이름**은 설계 문서 §0 에서 미확정이라 코드/설정 전반에 `CardGameBot`
 > 을 플레이스홀더로 씁니다. 확정되면 `CARDGAME_BOT_NAME` 환경 변수만 바꾸면
@@ -20,7 +20,7 @@ uvicorn cardgamebot.main:app --reload --port 8080
 기동 시 SQLite DB(`data/cardgame.db`)가 자동 생성되고, 게임이 처음부터 끝까지
 동작하는지 확인할 수 있는 예시 콘텐츠가 시드됩니다.
 
-* 게임 API: `POST /event` — 중앙봇이 호출
+* 게임 API: `POST /event`, `POST /shutdown`, `GET /healthz` — 중앙봇이 호출
 * 관리자 대시보드: <http://localhost:8080/admin/>
 * API 문서: <http://localhost:8080/docs>
 
@@ -76,7 +76,7 @@ pytest          # 63개 테스트
 | `CARDGAME_BOT_NAME` | `CardGameBot` | 봇 표시 이름 (§0 TBD) |
 | `CARDGAME_DB_PATH` | `data/cardgame.db` | 자체 SQLite 경로 |
 | `CARDGAME_CENTRAL_API_BASE` | `http://localhost:8000` | 중앙봇 API 주소 |
-| `CARDGAME_CENTRAL_API_TOKEN` | — | 중앙봇 인증 토큰 |
+| `CARDGAME_CENTRAL_API_KEY` | — | 중앙봇이 발급한 최소 권한 API key (`X-API-Key`) |
 | `CARDGAME_CENTRAL_API_ENABLED` | `false` | `false` 면 코인/XP 를 로컬 스텁 처리 |
 | `CARDGAME_ALLOWED_CHANNEL_IDS` | `[]` | 비우면 전체 채널 허용 |
 | `CARDGAME_DISCORD_CLIENT_ID` / `_SECRET` | — | 대시보드 OAuth (§10.2) |
@@ -88,21 +88,21 @@ pytest          # 63개 테스트
 ## 명령어
 
 ```
-!카드 도움말                       명령 목록
-!카드 정보 / 출석                  계정 상태 / 일일 보상
-!카드 배너 / 뽑기 [배너] [10]      가챠
-!카드 캐릭터 / 성급 <코드>         보유 캐릭터 / 성급 상승
-!카드 시작 <캐릭터코드...>         런 시작
-!카드 맵 / 이동 <번호>             맵 확인 / 노드 선택
-!카드 상태                         전투 화면 다시 보기
-!카드 사용 <번호> [대상번호]       카드 사용
-!카드 넘기기                       턴 넘기기
-!카드 선택 <번호>                  보상 카드 선택
-!카드 구매 <번호>                  노드 상점 구매
-!카드 포기                         런 포기
-!카드 상점 / 상점구매 <번호>       허브 상점 (장비)
-!카드 장비 / 장착 / 강화           장비 관리
-!카드 연구 / 연구해금 <코드>       연구 시스템
+!덱아웃 도움말                       명령 목록
+!덱아웃 정보 / 출석                  계정 상태 / 일일 보상
+!덱아웃 배너 / 뽑기 [배너] [10]      가챠
+!덱아웃 캐릭터 / 성급 <코드>         보유 캐릭터 / 성급 상승
+!덱아웃 시작 <캐릭터코드...>         런 시작
+!덱아웃 맵 / 이동 <번호>             맵 확인 / 노드 선택
+!덱아웃 상태                         전투 화면 다시 보기
+!덱아웃 사용 <번호> [대상번호]       카드 사용
+!덱아웃 넘기기                       턴 넘기기
+!덱아웃 선택 <번호>                  보상 카드 선택
+!덱아웃 구매 <번호>                  노드 상점 구매
+!덱아웃 포기                         런 포기
+!덱아웃 상점 / 상점구매 <번호>       허브 상점 (장비)
+!덱아웃 장비 / 장착 / 강화           장비 관리
+!덱아웃 연구 / 연구해금 <코드>       연구 시스템
 ```
 
 ---
