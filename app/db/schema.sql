@@ -168,6 +168,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS one_active_run ON runs (user_id)
                       'run_expired', 'admin_terminated');
 CREATE INDEX IF NOT EXISTS runs_by_thread ON runs (thread_id);
 
+-- §16.2.2 준비 화면 [1]-[4]. 이 단계들은 **순수 UI**라 run row를 만들지
+-- 않으므로, 중간 선택은 여기 모인다. 계정당 한 줄이고 `one_active_run`과
+-- 무관하다 — 도중에 그만두면 그냥 지워지고 아무 비용도 남지 않는다.
+CREATE TABLE IF NOT EXISTS run_drafts (
+  user_id      INTEGER PRIMARY KEY,
+  world_id     TEXT,
+  party_json   TEXT NOT NULL DEFAULT '[]',
+  passive_json TEXT NOT NULL DEFAULT '[]',
+  updated_at   TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS run_nodes (
   run_id     INTEGER NOT NULL,
   node_index INTEGER NOT NULL,
