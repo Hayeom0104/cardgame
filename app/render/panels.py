@@ -201,16 +201,18 @@ def render_card(card: dict, canvas: Canvas, *, size: tuple[int, int] | None = No
         draw.text((20 - draw.textlength(text, font=body) / 2, 11), text,
                   font=body, fill=theme.color("color_accent"))
 
-    upgrade = int(card.get("upgrade_tier") or 0)
-    if upgrade:
-        # 비용 원 바로 아래. 오른쪽 위는 덱 화면의 장수 뱃지 자리라 비워 둔다.
-        draw.text((10, 38), f"+{upgrade}", font=small,
-                  fill=theme.color("color_accent"))
-
     line = footer or str(card.get("category", ""))
     if line:
         draw.text((8, height - 22), line[:16], font=small,
                   fill=theme.color("color_muted"))
+
+    upgrade = int(card.get("upgrade_tier") or 0)
+    if upgrade:
+        # 아래 오른쪽. 그림 위(왼쪽 위)에 쓰면 카드를 작게 그렸을 때 이름과
+        # 겹치고, 오른쪽 위는 덱 화면의 장수 뱃지 자리다.
+        text = f"+{upgrade}"
+        draw.text((width - draw.textlength(text, font=small) - 8, height - 22),
+                  text, font=small, fill=theme.color("color_accent"))
 
     if dimmed:
         # 살 수 없는 카드는 어둡게 덮는다 — 목록에서 빼면 무엇이 있었는지
@@ -657,6 +659,50 @@ def render_deck(cards: list[dict], *, character: dict, title: str,
             canvas.draw.text((badge_left, top + 6), text, font=font,
                              fill=canvas.accent)
     return canvas.finish("deckout_deck.png")
+
+
+def render_collection(cards: list[dict], *, title: str) -> Attachment:
+    """소장 목록 — 캐릭터 카드를 앞에 두고 행동 카드를 뒤에 잇는다.
+
+    캐릭터도 카드이므로 같은 화면에 같은 모양으로 놓는다. 다만 파티 자리를
+    차지하는 쪽이라 먼저 보여준다.
+    """
+    canvas = Canvas(theme_module.load().size("prep_size"))
+    canvas.title(title)
+
+    card_size = canvas.theme.size("card_size")
+    scale = 0.55
+    size = (int(card_size[0] * scale), int(card_size[1] * scale))
+    columns = max(1, (canvas.width - canvas.pad * 2 + canvas.gap)
+                  // (size[0] + canvas.gap))
+    rows = max(1, (canvas.height - 56 - canvas.pad + canvas.gap)
+               // (size[1] + canvas.gap))
+    capacity = columns * rows
+
+    ordered = sorted(cards, key=lambda entry: (entry.get("kind") != "character",
+                                               str(entry.get("name", ""))))
+    for index, card in enumerate(ordered[:capacity]):
+        column, row = index % columns, index // columns
+        left = canvas.pad + column * (size[0] + canvas.gap)
+        top = 56 + row * (size[1] + canvas.gap)
+        kind = "character" if card.get("kind") == "character" else "card"
+        if kind == "character":
+            # 캐릭터 카드는 그림을 characters/ 에서 찾는다.
+            art = canvas.assets.art("character", str(card.get("card_id", "")),
+                                    label=str(card.get("name", "")),
+                                    rarity=card.get("rarity_tier"), size=size)
+            canvas.paste(art, (left, top))
+            canvas.draw.rectangle(
+                [left, top, left + size[0] - 1, top + size[1] - 1],
+                outline=canvas.accent, width=2)
+        else:
+            canvas.paste(render_card(card, canvas, size=size), (left, top))
+
+    hidden = len(ordered) - capacity
+    if hidden > 0:
+        canvas.label((canvas.pad, canvas.height - 24), f"그 외 {hidden}장",
+                     role="small", color=canvas.muted)
+    return canvas.finish("deckout_collection.png")
 
 
 # =====================================================================

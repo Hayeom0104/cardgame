@@ -287,6 +287,23 @@ def deck(db: Database, balance, *, user_id: int, content_version_id: int,
     return safely(build)
 
 
+def collection(db: Database, *, user_id: int,
+               content_version_id: int) -> list[dict]:
+    """소장 카드 한 장 — 캐릭터 카드와 행동 카드를 한 화면에 (§5)."""
+
+    def build() -> list[dict]:
+        from app.content import catalog
+
+        cards = catalog.owned(db, user_id, content_version_id)
+        if not cards:
+            return []
+        return attach(panels.render_collection(
+            [card.as_art() | {"kind": card.kind} for card in cards],
+            title=f"소장 {len(cards)}장"))
+
+    return safely(build)
+
+
 # =====================================================================
 # 정산
 # =====================================================================
