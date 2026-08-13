@@ -18,7 +18,18 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 # Bumped whenever schema.sql changes shape. §18.9: startup fails closed when the
 # file on disk is older than what the code expects.
-EXPECTED_SCHEMA_VERSION = 1
+EXPECTED_SCHEMA_VERSION = 2
+
+#: §18.9 forward-only migrations, applied in one transaction each and recorded.
+#: `schema.sql` uses CREATE TABLE IF NOT EXISTS, so it never alters an existing
+#: table — anything that changes a table already on disk belongs here.
+MIGRATIONS: dict[int, tuple[str, ...]] = {
+    # v6.4, §2.5.1a — statuses gain `scope`, gating which content pools may
+    # reference them. The base 10 are all `universal`.
+    2: (
+        "ALTER TABLE statuses ADD COLUMN scope TEXT NOT NULL DEFAULT 'universal'",
+    ),
+}
 
 
 def utcnow() -> str:
@@ -91,17 +102,56 @@ class Database:
 
     # -- migrations ----------------------------------------------------
     def migrate(self) -> int:
-        """Apply the schema and record its version. Forward-only."""
+        """Apply the schema and any pending migrations. Forward-only.
+
+        A service whose code expects a newer schema than the file provides fails
+        closed (§18.9); the reverse — a file newer than the code — is the case
+        that must refuse to start, since this build cannot know what changed.
+        """
         conn = self.conn
+        is_fresh = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'statuses'"
+        ).fetchone() is None
+
         conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         row = conn.execute("SELECT version FROM schema_version WHERE id = 1").fetchone()
-        current = row["version"] if row else 0
+        current = int(row["version"]) if row else (EXPECTED_SCHEMA_VERSION if is_fresh else 1)
+
         if current > EXPECTED_SCHEMA_VERSION:
             raise SchemaVersionError(
                 f"database schema v{current} is newer than this service "
                 f"(v{EXPECTED_SCHEMA_VERSION}); refusing to start"
             )
-        if current < EXPECTED_SCHEMA_VERSION:
+
+        # A fresh database is created at the current shape by schema.sql, so it
+        # skips straight to the head version; only an existing file replays.
+        # Each MIGRATION is applied in ONE transaction together with its version
+        # bump: a multi-statement migration must not be able to half-apply and
+        # then replay its non-idempotent half.
+        for version in range(current + 1, EXPECTED_SCHEMA_VERSION + 1):
+            statements = MIGRATIONS.get(version, ())
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                for statement in statements:
+                    try:
+                        conn.execute(statement)
+                    except sqlite3.OperationalError as error:
+                        # Re-running an ALTER that already landed is not a
+                        # failure; anything else is.
+                        if "duplicate column name" not in str(error):
+                            raise
+                conn.execute(
+                    "INSERT INTO schema_version (id, version, applied_at) "
+                    "VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                    "version = excluded.version, applied_at = excluded.applied_at",
+                    (version, utcnow()),
+                )
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
+
+        if row is None and current == EXPECTED_SCHEMA_VERSION:
             conn.execute(
                 "INSERT INTO schema_version (id, version, applied_at) VALUES (1, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET version = excluded.version, "

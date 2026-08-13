@@ -39,6 +39,7 @@ def local_handlers() -> dict:
     """
     return {
         "star_up": _apply_star_up,
+        "card_upgrade": _apply_card_upgrade,
         "research": _apply_research,
         "hub_equipment": _apply_hub_equipment,
         "hub_stone": _apply_hub_stone,
@@ -235,6 +236,114 @@ def _apply_star_up(db: Database, payload: dict) -> None:
     db.execute(
         "UPDATE owned_characters SET star_rank = star_rank + 1 WHERE user_id = ? "
         "AND character_id = ?", (uid, character_id))
+
+
+# =====================================================================
+# §5.8 카드 업그레이드 — §17.1이 성급 상승과 동일한 형태로 미리 등록해 둔 것
+# =====================================================================
+def check_card_upgrade(db: Database, *, user_id: int, card_id: str,
+                       content_version_id: int) -> dict:
+    """다음 티어의 비용과 가능 여부. 코인 잔액은 확인하지 않는다 (§17.3)."""
+    from app.engine import card_upgrades as cu
+
+    owned = db.one(
+        "SELECT upgrade_tier FROM unlocked_cards WHERE user_id = ? AND card_id = ?",
+        (user_id, card_id))
+    if owned is None:
+        raise ProgressionError("해금하지 않은 카드입니다.")
+
+    current = int(owned["upgrade_tier"])
+    if current >= cu.MAX_TIER:
+        raise ProgressionError(f"이미 최대 강화 단계(T{cu.MAX_TIER})입니다.")
+
+    cost = cu.next_cost(db, content_version_id, card_id, current)
+    if cost is None:
+        raise ProgressionError("이 카드에는 다음 강화 단계가 저작되어 있지 않습니다.")
+
+    fragments = db.one(
+        "SELECT amount FROM card_fragments WHERE user_id = ? AND card_id = ?",
+        (user_id, card_id))
+    account = db.one("SELECT wildcards FROM accounts WHERE user_id = ?", (user_id,))
+    have_fragments = int(fragments["amount"]) if fragments else 0
+    have_wildcards = int(account["wildcards"])
+
+    return {
+        "current_tier": current,
+        "next_tier": cost["target_tier"],
+        "cost": cost,
+        "have_fragments": have_fragments,
+        "have_wildcards": have_wildcards,
+        "affordable_locally": (have_fragments >= cost["fragments"]
+                               and have_wildcards >= cost["wildcards"]),
+    }
+
+
+def upgrade_card(db: Database, central, *, user_id: int, card_id: str,
+                 content_version_id: int,
+                 tx_id: str | None = None) -> tx.TransactionResult:
+    """§5.8 — 성급 상승과 동일한 형태의 `deduct` 트랜잭션 (§17.1).
+
+    로컬 페이로드가 세 효과(카드 조각 차감, 와일드카드 차감, 티어 증가)를
+    전부 담고 하나의 fulfillment receipt 아래 적용된다. 카드 A의 조각은 카드
+    A에만 쓸 수 있으므로 차감 대상은 항상 그 카드다.
+    """
+    plan = check_card_upgrade(db, user_id=user_id, card_id=card_id,
+                              content_version_id=content_version_id)
+    if not plan["affordable_locally"]:
+        raise ProgressionError("재화가 부족합니다.")
+
+    tx_id = tx_id or _attempt_tx_id(
+        db, f"cardup:{user_id}:{card_id}:{plan['current_tier']}")
+    tx.create_transaction(
+        db, tx_id=tx_id, user_id=user_id, operation="card_upgrade",
+        direction=tx.DEDUCT, expected_coin_delta=-int(plan["cost"]["coin"]),
+        local_payload={
+            "kind": "card_upgrade",
+            "user_id": user_id,
+            "card_id": card_id,
+            "from_tier": plan["current_tier"],
+            "fragments": plan["cost"]["fragments"],
+            "wildcards": plan["cost"]["wildcards"],
+        },
+    )
+    return tx.run_transaction(db, central, tx_id=tx_id,
+                              apply_local=_apply_card_upgrade,
+                              kind="card_upgrade")
+
+
+def _apply_card_upgrade(db: Database, payload: dict) -> None:
+    uid = int(payload["user_id"])
+    card_id = payload["card_id"]
+    fragments = int(payload["fragments"])
+    wildcards = int(payload["wildcards"])
+
+    # 로컬 트랜잭션 안에서 다시 검증한다 — 사전 검사 이후 다른 조작이 같은
+    # 재화를 소모했을 수 있다.
+    held = db.one(
+        "SELECT amount FROM card_fragments WHERE user_id = ? AND card_id = ?",
+        (uid, card_id))
+    if held is None or int(held["amount"]) < fragments:
+        raise ProgressionError("카드 조각이 부족합니다.")
+    account = db.one("SELECT wildcards FROM accounts WHERE user_id = ?", (uid,))
+    if account is None or int(account["wildcards"]) < wildcards:
+        raise ProgressionError("와일드카드가 부족합니다.")
+
+    owned = db.one(
+        "SELECT upgrade_tier FROM unlocked_cards WHERE user_id = ? AND card_id = ?",
+        (uid, card_id))
+    if owned is None or int(owned["upgrade_tier"]) != int(payload["from_tier"]):
+        raise ProgressionError("카드 강화 단계가 변경되었습니다.")
+
+    db.execute(
+        "UPDATE card_fragments SET amount = amount - ? WHERE user_id = ? "
+        "AND card_id = ?", (fragments, uid, card_id))
+    if wildcards:
+        db.execute(
+            "UPDATE accounts SET wildcards = wildcards - ?, updated_at = ? "
+            "WHERE user_id = ?", (wildcards, utcnow(), uid))
+    db.execute(
+        "UPDATE unlocked_cards SET upgrade_tier = upgrade_tier + 1 "
+        "WHERE user_id = ? AND card_id = ?", (uid, card_id))
 
 
 # =====================================================================

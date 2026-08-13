@@ -203,7 +203,7 @@ def _op_heal(params: dict, ctx: EffectContext, outcome: EffectOutcome) -> None:
 
 
 def _op_apply_status(params: dict, ctx: EffectContext, outcome: EffectOutcome) -> None:
-    for target in ctx.targets:
+    for target in _status_targets(params, ctx):
         if not target.is_alive:
             continue
         st.apply_status(
@@ -211,6 +211,35 @@ def _op_apply_status(params: dict, ctx: EffectContext, outcome: EffectOutcome) -
             params["status_id"], int(params.get("stacks", 1)),
             params.get("duration_override"),
         )
+
+
+def _status_targets(params: dict, ctx: EffectContext) -> list[Unit]:
+    """§5.8.3 — `apply_status`는 카드의 target_side와 독립적인 대상을 가질 수
+    있다. 지정이 없으면 종래대로 카드가 이미 해결한 대상을 따른다."""
+    target = params.get("target")
+    if target is None:
+        return ctx.targets
+    if ctx.actor is None or ctx.battle_id is None:
+        return ctx.targets
+
+    if target == "self":
+        return [ctx.actor]
+    if target == "all_allies":
+        return un.load_units(ctx.db, ctx.battle_id, side=ctx.actor.side,
+                             living_only=True)
+    if target == "all_enemies":
+        return un.load_units(ctx.db, ctx.battle_id,
+                             side=un.opposite(ctx.actor.side), living_only=True)
+    if target == "designated_ally":
+        slot = params.get("party_slot")
+        allies = un.load_units(ctx.db, ctx.battle_id, side=ctx.actor.side,
+                               living_only=True)
+        if slot is None:
+            return [ctx.actor]
+        chosen = [unit for unit in allies if unit.party_slot == int(slot)]
+        return chosen or [ctx.actor]
+    # single_enemy — 카드가 이미 해결한 단일 대상.
+    return ctx.targets[:1] if ctx.targets else []
 
 
 def _op_remove_status(params: dict, ctx: EffectContext, outcome: EffectOutcome) -> None:

@@ -17,6 +17,15 @@ from app.db.connection import Database
 TURN_START_TRIGGER = "turn_start_trigger"      # fires at the owner's turn, pre-gating
 OWNER_TURN_COUNTDOWN = "owner_turn_countdown"  # checked while active, decremented at turn end
 
+# -- scope (§2.5.1a, v6.4) ----------------------------------------------
+# Card upgrades (§5.8) can author brand-new statuses. Without a governance
+# rule, every new status silently becomes something enemy AI can also be
+# authored to inflict, which was never separately reviewed.
+PLAYER_ONLY = "player_only"
+ENEMY_ONLY = "enemy_only"
+UNIVERSAL = "universal"
+SCOPES = frozenset({PLAYER_ONLY, ENEMY_ONLY, UNIVERSAL})
+
 # -- persistence models --------------------------------------------------
 COUNTDOWN = "countdown"            # no intensity; duration in turns; refresh to max
 STACK_DURATION = "stack_duration"  # stacks + one shared duration; add AND refresh
@@ -50,6 +59,7 @@ class StatusDef:
     magnitude: float
     cleansable: bool = True
     persists_through_boss_phase: bool = False
+    scope: str = UNIVERSAL
 
 
 class StatusRegistry:
@@ -82,6 +92,7 @@ class StatusRegistry:
                 magnitude=row["magnitude"],
                 cleansable=bool(row["cleansable"]),
                 persists_through_boss_phase=bool(row["persists_through_boss_phase"]),
+                scope=row["scope"],
             )
         return self._cache[status_id]
 

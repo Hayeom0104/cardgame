@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 
 from app.content.balance import Balance
 from app.db.connection import Database
+from app.engine import card_upgrades as cu
 from app.engine import deck
 from app.engine import effects as fx
 from app.engine import enemy_ai as ai
@@ -72,6 +73,9 @@ class BattleEngine:
     status_registry: st.StatusRegistry
     strategy_registry: tg.StrategyRegistry
     action_registry: ai.ActionRegistry
+    #: party_slot → {card_id: upgrade_tier}, read once per battle from the
+    #: §16.2.3 build snapshot.
+    _upgrade_cache: dict = field(default_factory=dict)
 
     # -- accessors -----------------------------------------------------
     def battle_row(self):
@@ -322,7 +326,7 @@ class BattleEngine:
         ):
             if row["is_cursed"]:
                 continue
-            card = self.card_def(row["card_id"])
+            card = self.card_def(row["card_id"], unit.party_slot)
             if card is None or card["cost"] > resource:
                 continue
             if silenced and card["category"] in ("버프디버프", "회복"):
@@ -341,11 +345,33 @@ class BattleEngine:
             return "자원 부족 — 사용할 수 있는 카드가 없습니다"
         return "사용할 수 있는 카드가 없습니다"
 
-    def card_def(self, card_id: str):
-        return self.db.one(
+    def card_def(self, card_id: str, party_slot: int | None = None):
+        """§5.8 — the card as this run sees it, upgrade overlays applied.
+
+        The tier comes from `run_build_snapshot.card_upgrade_json` (§16.2.3), not
+        from the live account row: upgrading mid-run must not change the numbers
+        of a battle already in progress.
+        """
+        row = self.db.one(
             "SELECT * FROM cards WHERE content_version_id = ? AND card_id = ?",
             (self.content_version_id, card_id),
         )
+        if row is None:
+            return None
+        return cu.effective_card(self.db, self.content_version_id, row,
+                                 self._upgrade_tier(card_id, party_slot))
+
+    def _upgrade_tier(self, card_id: str, party_slot: int | None) -> int:
+        if party_slot is None:
+            return 0
+        cached = self._upgrade_cache.get(party_slot)
+        if cached is None:
+            row = self.db.one(
+                "SELECT card_upgrade_json FROM run_build_snapshot WHERE run_id = ? "
+                "AND party_slot = ?", (self.run_id, party_slot))
+            cached = json.loads(row["card_upgrade_json"]) if row else {}
+            self._upgrade_cache[party_slot] = cached
+        return int(cached.get(card_id, 0))
 
     def _auto_defend(self, unit: Unit) -> None:
         block = stats.auto_defend_block(self.balance, un.effective_def(self.db, unit))
@@ -415,7 +441,9 @@ class BattleEngine:
         )
 
         ctx = self._context(unit, targets, fx.ops.CTX_BATTLE_CARD)
-        outcome = fx.execute_effects(json.loads(card["effects_json"]), ctx)
+        # `effects` is the upgrade-resolved list (§5.8); `effects_json` on the
+        # row is the un-upgraded original and must not be executed directly.
+        outcome = fx.execute_effects(card["effects"], ctx)
         result.damage_events.extend(outcome.damage_events)
         result.log.extend(outcome.log)
         result.acted = True

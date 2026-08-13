@@ -37,6 +37,7 @@ def validate_version(db: Database, version_id: int) -> None:
     _validate_events(db, version_id)
     _validate_encounters(db, version_id)
     _validate_research(db, version_id)
+    _validate_card_upgrades(db, version_id)
 
 
 def _effects(raw: str) -> list[dict]:
@@ -74,6 +75,31 @@ def _validate_statuses(db: Database, version_id: int) -> None:
         # countdown has no intensity.
         if row["model"] == st.COUNTDOWN and row["stack_cap"] is not None:
             raise ValidationError(f"{label}: countdown statuses have no stack_cap")
+
+        # §2.5.1a [v6.4] — scope is declared once, at authoring time.
+        if row["scope"] not in st.SCOPES:
+            raise ValidationError(
+                f"{label}: scope {row['scope']!r} is not one of {sorted(st.SCOPES)}")
+
+
+def _status_scopes(db: Database, version_id: int) -> dict[str, str]:
+    return {row["status_id"]: row["scope"] for row in db.query(
+        "SELECT status_id, scope FROM statuses WHERE content_version_id = ?",
+        (version_id,))}
+
+
+def _reject_scoped_statuses(effects: list[dict], scopes: dict[str, str],
+                            forbidden: str, label: str) -> None:
+    """§2.5.1a — a status may only appear in the pools its scope allows."""
+    for index, entry in enumerate(effects):
+        if entry.get("operator") != "apply_status":
+            continue
+        status_id = (entry.get("params") or {}).get("status_id")
+        if scopes.get(status_id) == forbidden:
+            raise ValidationError(
+                f"{label}: effect[{index}] applies {status_id!r}, which is "
+                f"scoped {forbidden!r} and is excluded from this content pool "
+                "(§2.5.1a)")
 
 
 def _validate_strategies(db: Database, version_id: int) -> None:
@@ -137,6 +163,14 @@ def _validate_cards(db: Database, version_id: int) -> None:
     for row in db.query("SELECT * FROM cards WHERE content_version_id = ?",
                         (version_id,)):
         label = f"card {row['card_id']!r}"
+        # `modify_cost` only means something to the §5.8 overlay, which folds it
+        # into the card's `cost` field. Left on a card's own effect list it would
+        # reach the executor, which has no handler for it, and blow up mid-turn.
+        for index, entry in enumerate(_effects(row["effects_json"])):
+            if entry.get("operator") == "modify_cost":
+                raise ValidationError(
+                    f"{label}: effect[{index}] uses 'modify_cost', which is only "
+                    "legal inside a card upgrade overlay (§5.8.3)")
         if row["element"] not in ALL_ELEMENTS:
             raise ValidationError(f"{label}: element {row['element']!r} is not one of "
                                   f"{list(ALL_ELEMENTS)}")
@@ -152,27 +186,33 @@ def _validate_cards(db: Database, version_id: int) -> None:
 
 
 def _validate_cursed_cards(db: Database, version_id: int) -> None:
+    scopes = _status_scopes(db, version_id)
     for row in db.query("SELECT * FROM cursed_cards WHERE content_version_id = ?",
                         (version_id,)):
+        label = f"cursed card {row['cursed_card_id']!r}"
+        effects = _effects(row["penalty_json"])
         try:
-            ops.validate_effect_list(_effects(row["penalty_json"]),
-                                     ops.CTX_CURSED_CARD)
+            ops.validate_effect_list(effects, ops.CTX_CURSED_CARD)
         except ValidationError as error:
-            raise ValidationError(
-                f"cursed card {row['cursed_card_id']!r}: {error}") from error
+            raise ValidationError(f"{label}: {error}") from error
+        # 저주받은 카드는 플레이어에게 가해지는 콘텐츠이므로 §2.5.1a의 적 풀에
+        # 속한다: player_only 상태는 여기 나타날 수 없다.
+        _reject_scoped_statuses(effects, scopes, st.PLAYER_ONLY, label)
 
 
 def _validate_enemy_actions(db: Database, version_id: int) -> None:
+    scopes = _status_scopes(db, version_id)
     for row in db.query("SELECT * FROM enemy_actions WHERE content_version_id = ?",
                         (version_id,)):
         label = f"enemy action {row['action_id']!r}"
         if row["target_side"] not in VALID_TARGET_SIDES:
             raise ValidationError(f"{label}: target_side {row['target_side']!r} is invalid")
+        effects = _effects(row["effects_json"])
         try:
-            ops.validate_effect_list(_effects(row["effects_json"]),
-                                     ops.CTX_ENEMY_ACTION)
+            ops.validate_effect_list(effects, ops.CTX_ENEMY_ACTION)
         except ValidationError as error:
             raise ValidationError(f"{label}: {error}") from error
+        _reject_scoped_statuses(effects, scopes, st.PLAYER_ONLY, label)
 
 
 def _validate_enemies(db: Database, version_id: int) -> None:
@@ -331,6 +371,115 @@ def _validate_research(db: Database, version_id: int) -> None:
             raise ValidationError(
                 f"research node {row['node_id']!r}: required achievement "
                 f"{required!r} does not resolve")
+
+
+def _validate_card_upgrades(db: Database, version_id: int) -> None:
+    """§5.8 [v6.4] — 카드 업그레이드 전이가 따라야 할 규칙.
+
+    §5.8.5는 티어별 비용과 효과 *선택*을 콘텐츠 작업으로 남겨 두지만, 규칙
+    자체는 여기서 강제된다: 티어 범위, 와일드카드 발생 지점, 가파른 곡선,
+    그리고 전이별 능력 추가 게이트.
+    """
+    from app.engine import card_upgrades as cu
+
+    scopes = _status_scopes(db, version_id)
+    cards = {row["card_id"] for row in db.query(
+        "SELECT card_id FROM cards WHERE content_version_id = ?", (version_id,))}
+
+    by_card: dict[str, list] = {}
+    for row in db.query(
+        "SELECT * FROM card_upgrades WHERE content_version_id = ? "
+        "ORDER BY card_id, target_tier", (version_id,),
+    ):
+        label = f"card upgrade {row['card_id']!r} → T{row['target_tier']}"
+        if row["card_id"] not in cards:
+            raise ValidationError(f"{label}: card does not resolve")
+
+        tier = int(row["target_tier"])
+        if not cu.MIN_TIER < tier <= cu.MAX_TIER:
+            raise ValidationError(
+                f"{label}: target_tier must be 1..{cu.MAX_TIER} (§5.8.1)")
+
+        # §5.8.2 — 와일드카드는 2→3 전이부터 든다.
+        wildcards = int(row["wildcard_cost"])
+        if tier < cu.WILDCARD_FROM_TIER and wildcards:
+            raise ValidationError(
+                f"{label}: 와일드카드 is only spent from the 2→3 transition "
+                "onward (§5.8.2)")
+        if tier >= cu.WILDCARD_FROM_TIER and wildcards <= 0:
+            raise ValidationError(
+                f"{label}: transitions from 2→3 onward must cost 와일드카드 "
+                "(§5.8.2)")
+        if int(row["fragment_cost"]) <= 0 or int(row["coin_cost"]) <= 0:
+            raise ValidationError(
+                f"{label}: every transition costs that card's 조각 and 코인")
+
+        effects = _effects(row["effects_json"])
+        try:
+            ops.validate_effect_list(effects, ops.CTX_CARD_UPGRADE)
+        except ValidationError as error:
+            raise ValidationError(f"{label}: {error}") from error
+
+        # §5.8.3 — 전이가 담을 수 있는 것은 숫자 변경과 능력 추가뿐이다.
+        # 그 밖의 연산자(draw_cards, summon_enemy …)를 오버레이에 넣으면
+        # 전이별 게이트를 통째로 우회하게 된다.
+        for index, entry in enumerate(effects):
+            operator = entry["operator"]
+            if (operator not in cu.NUMERIC_OPERATORS
+                    and operator != "apply_status"):
+                raise ValidationError(
+                    f"{label}: effect[{index}] uses {operator!r}; a transition "
+                    "carries a numeric change or an ability addition only "
+                    "(§5.8.3)")
+
+        # §5.8.3 — 능력 추가는 전이와 상태 scope로 게이트된다.
+        allowed = cu.ALLOWED_SCOPES_BY_TIER[tier]
+        for added in cu.added_status_operators(effects):
+            status_id = (added.get("params") or {}).get("status_id")
+            scope = scopes.get(status_id)
+            if scope is None:
+                raise ValidationError(
+                    f"{label}: applies {status_id!r}, which is not defined")
+            if not allowed:
+                raise ValidationError(
+                    f"{label}: the 0→1 transition takes numeric changes only — "
+                    "no ability addition (§5.8.3)")
+            if scope not in allowed:
+                raise ValidationError(
+                    f"{label}: {status_id!r} is scoped {scope!r}, but this "
+                    f"transition admits only {list(allowed)} (§5.8.3)")
+
+            # §5.8.3 — 지속시간은 4턴까지이며 상태 자신의 base_duration에도 묶인다.
+            override = (added.get("params") or {}).get("duration_override")
+            if override is not None:
+                if override > cu.MAX_APPLIED_DURATION:
+                    raise ValidationError(
+                        f"{label}: applied duration {override} exceeds the "
+                        f"{cu.MAX_APPLIED_DURATION}-turn cap (§5.8.3)")
+                base = db.one(
+                    "SELECT base_duration FROM statuses WHERE content_version_id = ? "
+                    "AND status_id = ?", (version_id, status_id))
+                if (base and base["base_duration"] is not None
+                        and override > int(base["base_duration"])):
+                    raise ValidationError(
+                        f"{label}: applied duration {override} exceeds "
+                        f"{status_id!r}'s own base_duration (§5.8.3)")
+
+        by_card.setdefault(row["card_id"], []).append(row)
+
+    for card_id, rows in by_card.items():
+        tiers = [int(row["target_tier"]) for row in rows]
+        if tiers != list(range(1, len(tiers) + 1)):
+            raise ValidationError(
+                f"card upgrade {card_id!r}: transitions must be contiguous from "
+                f"T1, got {tiers} (§5.8.1)")
+        # §5.8.2 — 곡선은 가파르다: 각 전이가 이전보다 확실히 비싸다.
+        for previous, current in zip(rows, rows[1:]):
+            if int(current["coin_cost"]) <= int(previous["coin_cost"]):
+                raise ValidationError(
+                    f"card upgrade {card_id!r} → T{current['target_tier']}: the "
+                    "cost curve is steep, so each transition must cost more "
+                    "than the last (§5.8.2)")
 
 
 def _balance(db: Database, version_id: int):

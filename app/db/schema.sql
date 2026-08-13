@@ -624,6 +624,10 @@ CREATE TABLE IF NOT EXISTS statuses (
   cleansable                  INTEGER NOT NULL DEFAULT 1,
   persists_through_boss_phase INTEGER NOT NULL DEFAULT 0,
   icon_asset                  TEXT,
+  -- §2.5.1a [v6.4] gates which content pools may reference this status.
+  -- player_only | enemy_only | universal. Declared once at authoring time,
+  -- never re-decided per use. The base 10 are all `universal`.
+  scope                       TEXT NOT NULL DEFAULT 'universal',
   PRIMARY KEY (content_version_id, status_id)
 );
 
@@ -738,6 +742,22 @@ CREATE TABLE IF NOT EXISTS research_nodes (
   effect_json          TEXT    NOT NULL,
   max_steps            INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (content_version_id, node_id)
+);
+
+-- §5.8 [v6.4, P-1] card upgrade definitions, one row per transition.
+-- Five tiers per card: upgrade_tier ∈ {0..5}, where 0 is the un-upgraded pulled
+-- state, so five transitions 0→1 … 4→5. Per-card costs and per-tier effect
+-- selection are content authoring (§5.8.5); the rules they must follow are
+-- enforced by §10.5.
+CREATE TABLE IF NOT EXISTS card_upgrades (
+  content_version_id INTEGER NOT NULL,
+  card_id            TEXT    NOT NULL,
+  target_tier        INTEGER NOT NULL,   -- 1..5, the tier being reached
+  fragment_cost      INTEGER NOT NULL,
+  wildcard_cost      INTEGER NOT NULL DEFAULT 0,   -- 0 below 2→3 (§5.8.2)
+  coin_cost          INTEGER NOT NULL,
+  effects_json       TEXT    NOT NULL,   -- ordered [{operator, params}] overlay
+  PRIMARY KEY (content_version_id, card_id, target_tier)
 );
 
 -- §15 — every balancing value lives here. NONE may be hardcoded.

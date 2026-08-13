@@ -1,6 +1,6 @@
 # Deckout
 
-An implementation of **Deckout — Design Document v6.3**: a roguelike card-battler
+An implementation of **Deckout — Design Document v6.4**: a roguelike card-battler
 that runs as its own FastAPI service and proxies every Discord interaction
 through the ARI Central Bot.
 
@@ -13,7 +13,7 @@ pip install -e ".[dev]"
 python -m app.cli.bootstrap --db deckout.db      # migrate + seed + publish content
 python -m app.cli.check_content --db deckout.db  # §10.5 validation pass
 uvicorn app.api.server:app --port 8080
-pytest                                           # 375 tests
+pytest                                           # 423 tests
 ```
 
 Registration (§1.3.0) — `route_threads: true` is **mandatory** and defaults to
@@ -60,6 +60,7 @@ double-crediting is forbidden. A registered bot name **cannot be re-registered**
 | `app/engine/map_gen.py` | §3.5.3 canonical generation, retry bound, fallback |
 | `app/engine/nodes.py` | §3 node resolution and the §16.2 run loop |
 | `app/engine/gacha.py` | §5 pity curve, redistribution, first-pull guarantee |
+| `app/engine/card_upgrades.py` | §5.8 five-tier upgrades, overlay resolution, §2.5.1a scope |
 | `app/engine/settlement.py` | §8.6.3 settlement, §15.10 retention, §16.2.1 step machine |
 | `app/engine/lifecycle.py` | §16 states, `preparing` flow, build snapshot, CAS |
 | `app/engine/progression.py` | §3.4.3 tutorial completion, §4.4 star-up, §8.4 enhancement, §9.2 research, §7.2 hub shop |
@@ -82,7 +83,6 @@ were not invented**.
 
 | Item | Why |
 |---|---|
-| **Card upgrade system (P-1)** | 🔴 PENDING — the owner is authoring it. §5.8's interface is honoured: `card_fragments` is per `(user_id, card_id)`, `unlocked_cards.upgrade_tier` is account-level and enters the run through the build snapshot, and §17.1 pre-registers the transaction shape. Tier count, per-tier costs and per-tier effects are absent by design. |
 | **Admin/content dashboard (§10.1–10.3)** | The web CMS front-end is a separate deliverable. Its **validation layer is built** (`app/content/validation.py`) and is the same pass the loader runs, so the dashboard can be added without touching the engine. |
 | **`덱` and `뽑기` screens** | The gacha engine (§5) and deck data exist; their per-screen Discord component layouts are content work (§13.2), and §13.3 explicitly does not claim the UI copy as closed. `캐릭터`, `장비`, `연구` and `상점` now render from real state. |
 | **The `preparing` party/passive pickers** | §16.2.2 steps [2]-[4] are stubbed for the main campaign; the tutorial path (party size 1) materializes directly. `validate_build` already enforces every rule those screens would gate on. |
@@ -90,11 +90,12 @@ were not invented**.
 | **Content beyond the launch set** | §13.2's authoring list: full character/card/enemy rosters, passive effects, equipment sets, events beyond the 8 seed, achievements beyond the 3 research-gating ones. |
 | **Daily/attendance claim rules** | §13.2 — the `daily_claims` table exists; the KST boundary and missed-day rules are unspecified. |
 
-Two naming-only 🔴 items (P-2 starter display name, P-3 run-currency label) do
-not block anything: `starter_001` and `run_currency` are the stable internal
-identifiers, and the display strings are placeholders.
+**No 🔴 blocking items remain.** P-1 (card upgrade) was closed by v6.4 and is
+implemented; the two naming-only 🔴 items (P-2 starter display name, P-3
+run-currency label) block nothing — `starter_001` and `run_currency` are the
+stable internal identifiers and the display strings are placeholders.
 
-## Two places the doc needed a judgement call
+## Three places the doc needed a judgement call
 
 §3.5.3 step 5 says that on shuffle exhaustion the fallback assigns node types
 "greedily in quota order, which always satisfies the constraints for this fixed
@@ -108,3 +109,11 @@ preserving the intent — a deterministic fallback that always validates.
 exactly that. Party size 1 exists only in the tutorial world (§4.1), whose
 encounters are authored directly against the solo starter (§15.9's 1–2 enemies
 per node), so thinning them further would contradict that tuning.
+
+§2.5.1a's table says an `enemy_only` status is "excluded from card upgrade pools
+at validation", while §5.8.3 lists `enemy_only` among the scopes the `3→4` and
+`4→5` transitions admit. Read either one absolutely and the other becomes dead
+text. This implementation treats §5.8.3 as the specific rule over §2.5.1a's
+general one: `enemy_only` is rejected at `1→2` and `2→3` — where §2.5.1a's
+exclusion does real work — and admitted at `3→4` and `4→5`, where §5.8.3
+enumerates it deliberately. Worth an owner ruling.

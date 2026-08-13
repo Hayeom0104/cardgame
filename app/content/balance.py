@@ -142,6 +142,20 @@ DEFAULT_CONSTANTS: dict[str, Any] = {
     "star_cap_normal": 3,
     "star_cap_special": 6,
 
+    # §5.8.2 [v6.4] 카드 업그레이드 곡선. 오너가 고정한 것은 곡선의 *모양*
+    # — 가파르고 후반에 몰린다 — 이고, 정확한 수치는 §15 밸런싱 작업이므로
+    # 여기 값은 다른 §15 값들과 마찬가지로 튜닝 기본값이다. 🟡
+    # 와일드카드는 2→3 전이부터 든다 (§5.8.2).
+    "card_upgrade_max_tier": 5,
+    "card_upgrade_costs": {
+        "1": {"fragments": 20,  "wildcards": 0, "coin": 2000},
+        "2": {"fragments": 45,  "wildcards": 0, "coin": 6000},
+        # 2→3부터 증가폭이 확연히 커진다 (back-loaded).
+        "3": {"fragments": 110, "wildcards": 2, "coin": 20000},
+        "4": {"fragments": 240, "wildcards": 5, "coin": 55000},
+        "5": {"fragments": 500, "wildcards": 12, "coin": 140000},
+    },
+
     # shop pricing
     "run_shop_card_price": [40, 110],
     "run_shop_effect_price": [25, 65],

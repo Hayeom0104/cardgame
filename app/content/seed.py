@@ -62,11 +62,20 @@ def _seed_statuses(db: Database, version: int) -> None:
         db.execute(
             "INSERT OR REPLACE INTO statuses (content_version_id, status_id, name, "
             "kind, model, clock, stack_cap, base_duration, magnitude, cleansable, "
-            "persists_through_boss_phase, icon_asset) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, NULL)",
+            "persists_through_boss_phase, icon_asset, scope) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, NULL, ?)",
             (version, status_id, name, kind, model, clock, cap, duration,
-             magnitudes[status_id]),
+             magnitudes[status_id], st.UNIVERSAL),
         )
+    # §2.5.1a — 카드 업그레이드 전용 상태의 예시. `player_only`이므로 §10.5가
+    # 적 액션과 저주받은 카드 풀에서 배제한다.
+    db.execute(
+        "INSERT OR REPLACE INTO statuses (content_version_id, status_id, name, "
+        "kind, model, clock, stack_cap, base_duration, magnitude, cleansable, "
+        "persists_through_boss_phase, icon_asset, scope) "
+        "VALUES (?, '집중', '집중', 'buff', ?, ?, 3, 2, 0.05, 1, 0, NULL, ?)",
+        (version, st.STACK_DURATION, st.OWNER_TURN_COUNTDOWN, st.PLAYER_ONLY),
+    )
 
 
 # =====================================================================
@@ -162,6 +171,56 @@ def _seed_cards(db: Database, version: int) -> None:
             "is_retired) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0)",
             (version, card_id, name, element, cost, category, target_side, tier,
              _json(effects)),
+        )
+
+
+def _seed_card_upgrades(db: Database, version: int) -> None:
+    """§5.8 [v6.4] — 스타터 스킬의 5단계 업그레이드 경로.
+
+    전이별 효과 선택은 §5.8.5대로 콘텐츠 작업이다. 여기 있는 것은 §5.8.3의
+    규칙을 실제로 밟는 하나의 완전한 경로다:
+
+        0→1  숫자 변경만
+        1→2  숫자 변경 + `player_only` 상태, 약한 강도
+        2→3  숫자 변경 + `player_only` 상태
+        3→4  숫자 변경 + 모든 scope, 강한 강도
+        4→5  숫자 변경 + 모든 scope
+    """
+    from app.content.balance import Balance
+
+    balance = Balance(db, version)
+    costs = balance.get("card_upgrade_costs")
+
+    # 배율은 §15.1 밴드 안에 머문다: 표준 스킬(코스트 2)은 1.6–2.0.
+    overlays = {
+        1: [{"operator": "deal_damage", "params": {"multiplier": 1.9}}],
+        2: [{"operator": "deal_damage", "params": {"multiplier": 2.0}},
+            # 약한 강도의 player_only 상태 (§5.8.3).
+            # 자기 버프이므로 카드의 target_side(enemy)가 아니라 시전자에게 (§5.8.3).
+            {"operator": "apply_status",
+             "params": {"status_id": "집중", "stacks": 1, "target": "self"}}],
+        3: [{"operator": "deal_damage", "params": {"multiplier": 2.2}},
+            {"operator": "apply_status",
+             "params": {"status_id": "집중", "stacks": 2, "target": "self"}}],
+        # 3→4부터 모든 scope가 열린다.
+        4: [{"operator": "deal_damage", "params": {"multiplier": 2.5}},
+            {"operator": "apply_status",
+             "params": {"status_id": st.BURN, "stacks": 2}}],
+        5: [{"operator": "deal_damage", "params": {"multiplier": 2.8}},
+            {"operator": "apply_status",
+             "params": {"status_id": st.BURN, "stacks": 3}},
+            # 비용 감소도 숫자 변경의 한 형태다 (§5.8.3).
+            {"operator": "modify_cost", "params": {"delta": -1}}],
+    }
+
+    for tier, overlay in overlays.items():
+        cost = costs[str(tier)]
+        db.execute(
+            "INSERT OR REPLACE INTO card_upgrades (content_version_id, card_id, "
+            "target_tier, fragment_cost, wildcard_cost, coin_cost, effects_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (version, CARD_STARTER_SKILL, tier, int(cost["fragments"]),
+             int(cost["wildcards"]), int(cost["coin"]), _json(overlay)),
         )
 
 
@@ -520,6 +579,7 @@ def seed_all(db: Database, *, publish_version: bool = True) -> int:
     _seed_statuses(db, version)
     _seed_strategies(db, version)
     _seed_cards(db, version)
+    _seed_card_upgrades(db, version)
     _seed_characters(db, version)
     _seed_threat_weights(db, version)
     _seed_cursed_cards(db, version)

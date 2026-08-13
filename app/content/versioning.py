@@ -29,6 +29,7 @@ from app.db.connection import Database, utcnow
 #: Every content table, with the columns that make up its logical key.
 CONTENT_TABLES: dict[str, tuple[str, ...]] = {
     "cards": ("card_id",),
+    "card_upgrades": ("card_id", "target_tier"),
     "characters": ("character_id",),
     "enemies": ("enemy_id",),
     "enemy_actions": ("action_id",),

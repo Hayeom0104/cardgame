@@ -38,11 +38,15 @@ CTX_EVENT = "event"
 CTX_REWARD = "reward"
 CTX_SHOP = "shop"
 CTX_SETTLEMENT = "settlement"
+#: §5.8 카드 업그레이드 오버레이. 전투 카드와 같은 제약을 받되(§10.4.1a), 카드
+#: 정의 자체가 아니라 그 위에 덧씌워지는 목록이다.
+CTX_CARD_UPGRADE = "card_upgrade"
 
 #: Contexts that resolve inside a battle turn's effect list. §10.4.1a restricts
 #: these to PURE_SYNCHRONOUS ∩ BATTLE_SAFE.
 IN_BATTLE_CONTEXTS = frozenset(
-    {CTX_BATTLE_CARD, CTX_PASSIVE, CTX_ENEMY_ACTION, CTX_CURSED_CARD, CTX_TRANSITION_EFFECT}
+    {CTX_BATTLE_CARD, CTX_PASSIVE, CTX_ENEMY_ACTION, CTX_CURSED_CARD,
+     CTX_TRANSITION_EFFECT, CTX_CARD_UPGRADE}
 )
 
 #: Contexts where PROGRESSION operators are legal.
@@ -151,10 +155,19 @@ _register(OperatorSpec("heal", BATTLE_SAFE, (
     ParamSpec("value", (int, float)),
 ), _pure))
 
+# §5.8.3 [v6.4] — 카드 업그레이드가 추가하는 상태는 카드 자신의 target_side와
+# 독립적인 대상을 가질 수 있다: "target: self | single enemy | all enemies |
+# all allies | one designated ally". 그 자유도가 없으면 공격 카드에 붙인 자기
+# 버프가 적에게 걸린다.
+APPLY_STATUS_TARGETS = ("self", "single_enemy", "all_enemies", "all_allies",
+                        "designated_ally")
+
 _register(OperatorSpec("apply_status", BATTLE_SAFE, (
     ParamSpec("status_id", (str,)),
     ParamSpec("stacks", (int,), required=False, default=1),
     ParamSpec("duration_override", (int,), required=False),
+    ParamSpec("target", (str,), required=False, choices=APPLY_STATUS_TARGETS),
+    ParamSpec("party_slot", (int,), required=False),
 ), _pure))
 
 _register(OperatorSpec("remove_status", BATTLE_SAFE, (
@@ -209,6 +222,14 @@ _register(OperatorSpec("remove_card_from_run_deck", BATTLE_SAFE, (
 _register(OperatorSpec("modify_hp", BATTLE_SAFE, (
     ParamSpec("mode", (str,), choices=("flat", "percent_max_hp")),
     ParamSpec("delta", (int, float)),
+), _pure))
+
+# §5.8 [v6.4] — 업그레이드 효과는 §10.4 연산자로 표현 가능해야 하고, 그 중
+# "cost change"에 해당하는 연산자가 없었다. §10.4.6 절차대로 등록한다: 구현 +
+# 파라미터 스키마 + 카테고리 규칙. 오버레이가 카드의 `cost` 필드에 적용하므로
+# 전투 중에 실행되는 일은 없다.
+_register(OperatorSpec("modify_cost", BATTLE_SAFE, (
+    ParamSpec("delta", (int,)),
 ), _pure))
 
 _register(OperatorSpec("summon_enemy", BATTLE_SAFE, (
