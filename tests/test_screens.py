@@ -46,6 +46,10 @@ def test_a_fresh_graduate_can_reach_the_main_campaign(db, balance, version,
                         [WORLD_1_ID], version)
     screens.handle_prep(db, balance, user_id, f"{screens.PREP_PREFIX}party",
                         [entry["character_id"] for entry in characters[:2]], version)
+    screens.handle_prep(db, balance, user_id,
+                        f"{screens.PREP_PREFIX}deck_auto:1", [], version)
+    screens.handle_prep(db, balance, user_id,
+                        f"{screens.PREP_PREFIX}deck_auto:2", [], version)
     result = screens.handle_prep(db, balance, user_id,
                                  f"{screens.PREP_PREFIX}confirm", [], version)
 
@@ -90,9 +94,12 @@ def test_the_confirm_screen_shows_what_will_be_snapshotted(db, balance, version,
     """[4] CONFIRM은 §16.2.3에서 얼려질 바로 그 값을 보여준다."""
     screens.handle_prep(db, balance, graduate, f"{screens.PREP_PREFIX}world",
                         [WORLD_1_ID], version)
+    screens.handle_prep(db, balance, graduate, f"{screens.PREP_PREFIX}party",
+                        [STARTER_CHARACTER_ID, "char_aquel"], version)
+    screens.handle_prep(db, balance, graduate,
+                        f"{screens.PREP_PREFIX}deck_auto:1", [], version)
     screen = screens.handle_prep(db, balance, graduate,
-                                 f"{screens.PREP_PREFIX}party",
-                                 [STARTER_CHARACTER_ID, "char_aquel"], version)
+                                 f"{screens.PREP_PREFIX}deck_auto:2", [], version)
 
     # 아쿠엘은 3★ 서포터형: HP 70 × (1 + 0.12×2) = 86, 공 6 × (1 + 0.10×2) = 7
     assert "HP 86" in screen["content"]
@@ -180,9 +187,10 @@ def test_the_passive_step_is_skipped_when_nothing_is_selectable(db, balance,
     assert lc.selectable_passives(db, graduate, version) == []
     screens.handle_prep(db, balance, graduate, f"{screens.PREP_PREFIX}world",
                         [WORLD_1_ID], version)
+    screens.handle_prep(db, balance, graduate, f"{screens.PREP_PREFIX}party",
+                        [STARTER_CHARACTER_ID], version)
     result = screens.handle_prep(db, balance, graduate,
-                                 f"{screens.PREP_PREFIX}party",
-                                 [STARTER_CHARACTER_ID], version)
+                                 f"{screens.PREP_PREFIX}deck_auto:1", [], version)
     assert "[4] 확정" in result["content"]
 
 
@@ -331,9 +339,13 @@ def test_the_confirm_screen_and_its_picture_show_the_same_build(db, balance,
     """글자와 그림이 서로 다른 값을 보여주면 안 된다 (§16.2.3)."""
     screens.handle_prep(db, balance, graduate, f"{screens.PREP_PREFIX}world",
                         [WORLD_1_ID], version)
+    deck_step = screens.handle_prep(db, balance, graduate,
+                                    f"{screens.PREP_PREFIX}party",
+                                    [STARTER_CHARACTER_ID], version)
+    assert deck_step["attachments"][0]["filename"] == "deckout_deck.png"
+
     result = screens.handle_prep(db, balance, graduate,
-                                 f"{screens.PREP_PREFIX}party",
-                                 [STARTER_CHARACTER_ID], version)
+                                 f"{screens.PREP_PREFIX}deck_auto:1", [], version)
     assert result["attachments"], "확정 화면에 그림이 붙지 않았습니다"
     assert result["attachments"][0]["filename"] == "deckout_prep.png"
 

@@ -38,23 +38,32 @@ GACHA_PREFIX = "dko:gacha:"
 def load_draft(db: Database, user_id: int) -> dict:
     row = db.one("SELECT * FROM run_drafts WHERE user_id = ?", (user_id,))
     if row is None:
-        return {"world_id": None, "party": [], "passives": []}
+        return {"world_id": None, "party": [], "passives": [], "deck": {}}
     return {
         "world_id": row["world_id"],
         "party": json.loads(row["party_json"]),
         "passives": json.loads(row["passive_json"]),
+        # 자리 번호는 JSON을 오가며 문자열이 되므로 여기서 정수로 되돌린다.
+        "deck": {int(slot): cards
+                 for slot, cards in json.loads(row["deck_json"]).items()},
     }
 
 
 def save_draft(db: Database, user_id: int, draft: dict) -> None:
     db.execute(
         "INSERT INTO run_drafts (user_id, world_id, party_json, passive_json, "
-        "updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET "
+        "deck_json, updated_at) VALUES (?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(user_id) DO UPDATE SET "
         "world_id = excluded.world_id, party_json = excluded.party_json, "
-        "passive_json = excluded.passive_json, updated_at = excluded.updated_at",
+        "passive_json = excluded.passive_json, deck_json = excluded.deck_json, "
+        "updated_at = excluded.updated_at",
         (user_id, draft.get("world_id"),
          json.dumps(draft.get("party", []), ensure_ascii=False),
-         json.dumps(draft.get("passives", []), ensure_ascii=False), utcnow()),
+         json.dumps(draft.get("passives", []), ensure_ascii=False),
+         json.dumps({str(slot): cards
+                     for slot, cards in (draft.get("deck") or {}).items()},
+                    ensure_ascii=False),
+         utcnow()),
     )
 
 
@@ -136,6 +145,75 @@ def party_select_screen(db: Database, user_id: int, content_version_id: int,
             ],
         }],
     }
+
+
+def deck_select_screen(db: Database, user_id: int, content_version_id: int,
+                       draft: dict, *, slot: int) -> dict:
+    """[3] DECK — 파티 자리마다 그 캐릭터가 들고 갈 카드를 고른다 (§3.2).
+
+    덱은 캐릭터별이다. 캐릭터 카드가 자리를 차지하고, 그 캐릭터가 낼 수 있는
+    행동 카드만 그 덱에 들어간다 (§2.10) — 속성이 맞거나 무속성이어야 한다.
+
+    고른 카드는 §4.3의 기본 카드 몫을 남긴 나머지 자리를 순서대로 채운다.
+    아무것도 고르지 않으면 그 자리는 §4.6.2대로 자동 구성한다. 기본 카드
+    몫을 없앨 수는 없다 — 낼 카드가 없어 자동 방어만 하는 덱이 되어서는
+    안 되기 때문이다.
+    """
+    from app.content import catalog
+
+    party = draft["party"]
+    if slot > len(party):
+        return confirm_screen(db, user_id, content_version_id, draft)
+
+    character_id = party[slot - 1]
+    character = catalog.find(db, content_version_id, character_id, user_id=user_id)
+    playable = catalog.playable_for(db, user_id, content_version_id, character_id)
+
+    balance = Balance(db, content_version_id)
+    size = int(balance.get("base_deck_size"))
+    composition = balance.get("starter_deck_composition")
+    basics = int(composition["평타"]) + int(composition["기본_방어"])
+    free = size - basics
+
+    name = character.name if character else character_id
+    element = character.element if character else ""
+    lines = [f"**준비 화면** — [3] 덱 구성 ({slot}/{len(party)})",
+             f"{name} · {element}",
+             f"덱 {size}장 중 기본 카드 {basics}장은 고정이고, 나머지 "
+             f"{free}장을 고른 카드로 채웁니다.",
+             "고르지 않으면 자동으로 구성합니다."]
+
+    components: list[dict] = []
+    if playable:
+        components.append({
+            "type": "string_select",
+            "custom_id": f"{PREP_PREFIX}deck:{slot}",
+            "placeholder": f"{name}이(가) 낼 수 있는 카드",
+            "min_values": 0,
+            "max_values": min(free, len(playable), 25),
+            "options": [
+                {"label": f"{card.name} ({card.cost})",
+                 "description": f"{card.element} · {card.category}"
+                                + (f" · +{card.upgrade_tier}" if card.upgrade_tier
+                                   else ""),
+                 "value": card.card_id}
+                for card in sorted(playable,
+                                   key=lambda c: (-c.rarity, c.card_id))[:25]
+            ],
+        })
+    else:
+        lines.append("아직 이 캐릭터가 낼 수 있는 카드가 없어 자동 구성합니다.")
+
+    components.append({"type": "button",
+                       "custom_id": f"{PREP_PREFIX}deck_auto:{slot}",
+                       "label": "자동 구성"})
+
+    return {"action": "edit", "content": "\n".join(lines),
+            "components": components,
+            "attachments": visuals.deck(db, balance, user_id=user_id,
+                                        content_version_id=content_version_id,
+                                        character_id=character_id,
+                                        chosen=draft["deck"].get(slot) or [])}
 
 
 def passive_select_screen(db: Database, user_id: int, content_version_id: int,
@@ -269,7 +347,8 @@ def handle_prep(db: Database, balance: Balance, user_id: int, custom_id: str,
                  unlocked_worlds(db, user_id, content_version_id)}
         if chosen not in legal:
             return {"action": "edit", "content": errors.ILLEGAL_STATE}
-        draft = {**draft, "world_id": chosen, "party": [], "passives": []}
+        draft = {**draft, "world_id": chosen, "party": [], "passives": [],
+                 "deck": {}}
         save_draft(db, user_id, draft)
         return party_select_screen(db, user_id, content_version_id, draft)
 
@@ -281,8 +360,40 @@ def handle_prep(db: Database, balance: Balance, user_id: int, custom_id: str,
         chosen = list(dict.fromkeys(values))     # 중복은 여기서 접힌다
         if not chosen or not set(chosen) <= owned:
             return {"action": "edit", "content": errors.ILLEGAL_STATE}
-        draft = {**draft, "party": chosen}
+        # 자리 번호가 가리키는 캐릭터가 바뀌므로 이미 고른 덱은 버린다.
+        draft = {**draft, "party": chosen, "deck": {}}
         save_draft(db, user_id, draft)
+        return deck_select_screen(db, user_id, content_version_id, draft, slot=1)
+
+    if step.startswith("deck"):
+        from app.content import catalog
+
+        action, _, raw_slot = step.partition(":")
+        try:
+            slot = int(raw_slot)
+        except ValueError:
+            return {"action": "edit", "content": errors.ILLEGAL_STATE}
+        if not 1 <= slot <= len(draft["party"]):
+            return {"action": "edit", "content": errors.ILLEGAL_STATE}
+
+        picked: list[str] = []
+        if action == "deck":
+            character_id = draft["party"][slot - 1]
+            # `custom_id`는 위조될 수 있으니, 그 캐릭터가 실제로 낼 수 있는
+            # 카드인지 다시 본다 (§2.10).
+            legal = {card.card_id for card in catalog.playable_for(
+                db, user_id, content_version_id, character_id)}
+            picked = list(dict.fromkeys(values))
+            if not set(picked) <= legal:
+                return {"action": "edit", "content": errors.ILLEGAL_STATE}
+
+        deck = {**draft["deck"], slot: picked}
+        draft = {**draft, "deck": deck}
+        save_draft(db, user_id, draft)
+
+        if slot < len(draft["party"]):
+            return deck_select_screen(db, user_id, content_version_id, draft,
+                                      slot=slot + 1)
         return passive_select_screen(db, user_id, content_version_id, draft)
 
     if step in ("passive", "skip_passive"):
@@ -322,6 +433,7 @@ def materialize(db: Database, balance: Balance, user_id: int, draft: dict,
         party_character_ids=draft["party"],
         passive_card_ids=draft["passives"],
         is_tutorial=bool(world["is_tutorial"]) if world else False,
+        deck_by_slot=draft.get("deck") or {},
     )
     try:
         run_id = lc.create_run(db, balance, request, content_version_id)

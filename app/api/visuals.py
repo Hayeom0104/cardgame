@@ -250,6 +250,43 @@ def prep(db: Database, balance, *, user_id: int, content_version_id: int,
     return safely(build)
 
 
+def deck(db: Database, balance, *, user_id: int, content_version_id: int,
+         character_id: str, chosen: list[str]) -> list[dict]:
+    """덱 구성 화면 — 지금 고른 대로라면 덱이 어떻게 되는지 그대로 보여준다.
+
+    화면과 실제로 만들어질 덱이 다르면 안 되므로, 구성 규칙은 엔진과 같은
+    함수(`lifecycle.preview_deck`)에서 가져온다.
+    """
+
+    def build() -> list[dict]:
+        from app.content import catalog
+        from app.engine import lifecycle as lc
+
+        character = catalog.find(db, content_version_id, character_id,
+                                 user_id=user_id)
+        composed = lc.preview_deck(db, balance, user_id, character_id,
+                                   content_version_id, chosen=chosen)
+        counts: dict[str, int] = {}
+        for card_id in composed:
+            counts[card_id] = counts.get(card_id, 0) + 1
+
+        cards = []
+        for card_id, count in counts.items():
+            entry = catalog.find(db, content_version_id, card_id, user_id=user_id)
+            if entry is None:
+                continue
+            art = entry.as_art()
+            art["count"] = count
+            cards.append(art)
+
+        return attach(panels.render_deck(
+            cards, character=character.as_art() if character else {},
+            title=f"{character.name if character else character_id}의 덱",
+            total=len(composed)))
+
+    return safely(build)
+
+
 # =====================================================================
 # 정산
 # =====================================================================

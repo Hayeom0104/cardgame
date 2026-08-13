@@ -166,6 +166,10 @@ class RunBuildRequest:
     party_character_ids: list[str]
     passive_card_ids: list[str] = field(default_factory=list)
     is_tutorial: bool = False
+    #: 파티 자리(1부터)별로 플레이어가 고른 행동 카드. 자리가 빠져 있거나
+    #: 비어 있으면 그 자리의 덱은 §4.6.2대로 자동 구성한다 — 튜토리얼처럼
+    #: 고를 것이 사실상 없는 경우가 그렇다.
+    deck_by_slot: dict[int, list[str]] = field(default_factory=dict)
 
 
 def selectable_passives(db: Database, user_id: int,
@@ -225,6 +229,8 @@ def validate_build(db: Database, balance: Balance, request: RunBuildRequest,
     if len(passives) > int(account["passive_slots"]):
         raise LifecycleError("too many passives for the account's slots")
 
+    _validate_decks(db, balance, request, content_version_id)
+
     # Ownership, not just count: `run_passives` must never hold an id the
     # account cannot actually bring.
     if passives:
@@ -233,6 +239,32 @@ def validate_build(db: Database, balance: Balance, request: RunBuildRequest,
         for passive_id in passives:
             if passive_id not in legal:
                 raise LifecycleError(f"passive {passive_id!r} is not available")
+
+
+def _validate_decks(db: Database, balance: Balance, request: RunBuildRequest,
+                    content_version_id: int) -> None:
+    """플레이어가 직접 고른 덱을 검사한다 (§3.2, §2.10).
+
+    화면이 걸러 주기는 하지만 `custom_id` 는 위조할 수 있으므로, 실제로
+    런에 들어가기 전에 여기서 한 번 더 본다.
+    """
+    from app.content import catalog
+
+    for slot, card_ids in request.deck_by_slot.items():
+        index = int(slot) - 1
+        if not 0 <= index < len(request.party_character_ids):
+            raise LifecycleError(f"파티 자리 {slot}은(는) 이 파티에 없습니다.")
+        if not card_ids:
+            continue
+
+        character_id = request.party_character_ids[index]
+        legal = {card.card_id for card in catalog.playable_for(
+            db, request.user_id, content_version_id, character_id)}
+        for card_id in card_ids:
+            if card_id not in legal:
+                raise LifecycleError(
+                    f"{card_id!r} 은(는) 이 캐릭터가 낼 수 없거나 해금하지 "
+                    "않은 카드입니다.")
 
 
 def create_run(db: Database, balance: Balance, request: RunBuildRequest,
@@ -273,8 +305,11 @@ def create_run(db: Database, balance: Balance, request: RunBuildRequest,
         account = conn.execute("SELECT * FROM accounts WHERE user_id = ?",
                                (request.user_id,)).fetchone()
         for slot, character_id in enumerate(request.party_character_ids, start=1):
-            _snapshot_and_materialize(conn, balance, run_id, slot, character_id,
-                                      account, content_version_id)
+            _snapshot_and_materialize(
+                conn, balance, run_id, slot, character_id, account,
+                content_version_id,
+                chosen=request.deck_by_slot.get(slot)
+                or request.deck_by_slot.get(str(slot)))
 
         for slot, passive_id in enumerate(request.passive_card_ids, start=1):
             conn.execute(
@@ -292,7 +327,8 @@ def create_run(db: Database, balance: Balance, request: RunBuildRequest,
 
 
 def _snapshot_and_materialize(conn, balance: Balance, run_id: int, slot: int,
-                              character_id: str, account, content_version_id: int) -> None:
+                              character_id: str, account, content_version_id: int,
+                              chosen: list[str] | None = None) -> None:
     """§16.2.3 — freeze the account build, then build the run rows from it."""
     from app.engine import stats
 
@@ -361,7 +397,8 @@ def _snapshot_and_materialize(conn, balance: Balance, run_id: int, slot: int,
     # 보상 nodes add cards at the snapshotted upgrade tier; the starting deck
     # is composed here at the §15.1 base size.
     for position, card_id in enumerate(
-        _compose_deck(conn, balance, account["user_id"], character, content_version_id)
+        _compose_deck(conn, balance, account["user_id"], character,
+                      content_version_id, chosen=chosen)
     ):
         conn.execute(
             "INSERT INTO run_deck_cards (run_id, party_slot, card_id, is_cursed, "
@@ -370,8 +407,26 @@ def _snapshot_and_materialize(conn, balance: Balance, run_id: int, slot: int,
         )
 
 
+def preview_deck(db: Database, balance: Balance, user_id: int, character_id: str,
+                 content_version_id: int, *,
+                 chosen: list[str] | None = None) -> list[str]:
+    """덱 구성 화면이 보여줄 덱. 실제로 만들어질 덱과 **같은 함수**로 만든다.
+
+    화면과 결과가 갈라지면 플레이어는 확정 버튼을 누를 때까지 자기 덱을 알 수
+    없게 된다.
+    """
+    character = db.one(
+        "SELECT element FROM characters WHERE content_version_id = ? "
+        "AND character_id = ?", (content_version_id, character_id))
+    if character is None:
+        return []
+    return _compose_deck(db.conn, balance, user_id, character,
+                         content_version_id, chosen=chosen)
+
+
 def _compose_deck(conn, balance: Balance, user_id: int, character,
-                  content_version_id: int) -> list[str]:
+                  content_version_id: int,
+                  chosen: list[str] | None = None) -> list[str]:
     """Build one character's run deck at exactly `base_deck_size` cards.
 
     §4.3: every character starts with 평타 and a basic defense card, both
@@ -379,6 +434,11 @@ def _compose_deck(conn, balance: Balance, user_id: int, character,
     unlocked cards this character can legally play (§2.10) — for a fresh
     account holding only the starter skill that reproduces §4.6.2's 6/5/7 split
     exactly, and with it the 79.8% skill rate in a 3-card draw.
+
+    `chosen` 은 플레이어가 덱 구성 화면에서 직접 고른 카드다. 고른 것이 있으면
+    자동 선정 대신 그것으로 나머지 자리를 채운다. 기본 카드 몫은 그대로
+    남겨 둔다 — 낼 카드가 없어 자동 방어만 하게 되는 덱을 만들 수 있게
+    해서는 안 된다 (§4.3).
     """
     from app.content.seed import CARD_BASIC_ATTACK, CARD_BASIC_DEFENSE
 
@@ -387,7 +447,12 @@ def _compose_deck(conn, balance: Balance, user_id: int, character,
     deck = ([CARD_BASIC_ATTACK] * int(composition["평타"])
             + [CARD_BASIC_DEFENSE] * int(composition["기본_방어"]))
 
-    playable = [
+    if chosen:
+        playable = [card_id for card_id in dict.fromkeys(chosen)
+                    if card_id not in (CARD_BASIC_ATTACK, CARD_BASIC_DEFENSE)]
+    else:
+        playable = []
+    playable = playable or [
         row["card_id"]
         for row in conn.execute(
             "SELECT uc.card_id FROM unlocked_cards uc JOIN cards c "

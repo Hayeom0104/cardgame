@@ -84,9 +84,8 @@ were not invented**.
 | Item | Why |
 |---|---|
 | **Admin/content dashboard (§10.1–10.3)** | The web CMS front-end is a separate deliverable. Its **validation layer is built** (`app/content/validation.py`) and is the same pass the loader runs, so the dashboard can be added without touching the engine. |
-| **`덱` and `뽑기` screens** | The gacha engine (§5) and deck data exist; their per-screen Discord component layouts are content work (§13.2), and §13.3 explicitly does not claim the UI copy as closed. `캐릭터`, `장비`, `연구` and `상점` now render from real state. |
-| **The `preparing` party/passive pickers** | §16.2.2 steps [2]-[4] are stubbed for the main campaign; the tutorial path (party size 1) materializes directly. `validate_build` already enforces every rule those screens would gate on. |
-| **Art assets** | §11's fallback path is implemented — missing art renders a rarity-tier silhouette plus the entity name, so the game never fails to render. |
+| **The `덱` hub screen** | Deck *building* now happens in the preparing flow (step [3], per party slot). A standalone hub screen for browsing the collection outside a run is still content work (§13.2). |
+| **Art assets** | The *pipeline* is built: drop a PNG into `assets/<kind>/<id>.png` and it is used on the next screen (`python -m app.cli.assets` lists what is wanted). The launch art itself is unauthored, and §11's fallback renders the name on a rarity-coloured field so the game never fails to render. |
 | **Content beyond the launch set** | §13.2's authoring list: full character/card/enemy rosters, passive effects, equipment sets, events beyond the 8 seed, achievements beyond the 3 research-gating ones. |
 | **Daily/attendance claim rules** | §13.2 — the `daily_claims` table exists; the KST boundary and missed-day rules are unspecified. |
 

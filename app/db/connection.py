@@ -18,7 +18,7 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 # Bumped whenever schema.sql changes shape. §18.9: startup fails closed when the
 # file on disk is older than what the code expects.
-EXPECTED_SCHEMA_VERSION = 2
+EXPECTED_SCHEMA_VERSION = 3
 
 #: §18.9 forward-only migrations, applied in one transaction each and recorded.
 #: `schema.sql` uses CREATE TABLE IF NOT EXISTS, so it never alters an existing
@@ -28,6 +28,11 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     # reference them. The base 10 are all `universal`.
     2: (
         "ALTER TABLE statuses ADD COLUMN scope TEXT NOT NULL DEFAULT 'universal'",
+    ),
+    # 런을 시작하기 전에 덱을 직접 구성할 수 있게 됐다. 초안이 자리별로 고른
+    # 카드를 들고 있어야 한다.
+    3: (
+        "ALTER TABLE run_drafts ADD COLUMN deck_json TEXT NOT NULL DEFAULT '{}'",
     ),
 }
 

@@ -176,6 +176,9 @@ CREATE TABLE IF NOT EXISTS run_drafts (
   world_id     TEXT,
   party_json   TEXT NOT NULL DEFAULT '[]',
   passive_json TEXT NOT NULL DEFAULT '[]',
+  -- 파티 자리별로 고른 카드: {"1": ["card_a", ...], "2": [...]}.
+  -- 그 자리가 비어 있으면 덱을 자동으로 구성한다.
+  deck_json    TEXT NOT NULL DEFAULT '{}',
   updated_at   TEXT NOT NULL
 );
 

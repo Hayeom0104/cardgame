@@ -203,7 +203,8 @@ def render_card(card: dict, canvas: Canvas, *, size: tuple[int, int] | None = No
 
     upgrade = int(card.get("upgrade_tier") or 0)
     if upgrade:
-        draw.text((width - 34, 10), f"+{upgrade}", font=small,
+        # 비용 원 바로 아래. 오른쪽 위는 덱 화면의 장수 뱃지 자리라 비워 둔다.
+        draw.text((10, 38), f"+{upgrade}", font=small,
                   fill=theme.color("color_accent"))
 
     line = footer or str(card.get("category", ""))
@@ -607,6 +608,55 @@ def render_prep(party: list[dict], *, world: str, deck: list[dict] | None = None
         canvas.label((canvas.pad, top), f"패시브  {names}"[:70], role="small",
                      color=canvas.muted)
     return canvas.finish("deckout_prep.png")
+
+
+def render_deck(cards: list[dict], *, character: dict, title: str,
+                total: int) -> Attachment:
+    """덱 구성 화면 — 지금 고른 대로라면 덱이 어떻게 되는지 (§3.2).
+
+    같은 카드가 여러 장이면 한 장만 그리고 오른쪽 위에 장수를 적는다. 18장을
+    낱장으로 늘어놓으면 무엇이 몇 장인지가 오히려 안 보인다.
+    """
+    canvas = Canvas(theme_module.load().size("prep_size"))
+    canvas.title(title, right=f"{total}장")
+
+    portrait = canvas.theme.size("portrait_size")
+    if character:
+        art = canvas.assets.art("character", str(character.get("card_id", "")),
+                                label=str(character.get("name", "")),
+                                rarity=character.get("rarity_tier"),
+                                size=portrait)
+        canvas.paste(art, (canvas.pad, 56))
+
+    card_size = canvas.theme.size("card_size")
+    scale = 0.62
+    size = (int(card_size[0] * scale), int(card_size[1] * scale))
+    left_edge = canvas.pad + portrait[0] + canvas.gap
+    columns = max(1, (canvas.width - left_edge - canvas.pad + canvas.gap)
+                  // (size[0] + canvas.gap))
+
+    ordered = sorted(cards, key=lambda entry: (-int(entry.get("count", 1)),
+                                               str(entry.get("name", ""))))
+    for index, card in enumerate(ordered):
+        column, row = index % columns, index // columns
+        left = left_edge + column * (size[0] + canvas.gap)
+        top = 56 + row * (size[1] + canvas.gap)
+        if top + size[1] > canvas.height - canvas.pad:
+            break
+        canvas.paste(render_card(card, canvas, size=size), (left, top))
+
+        count = int(card.get("count", 1))
+        if count > 1:
+            text = f"×{count}"
+            font = canvas.font("body")
+            width = canvas.draw.textlength(text, font=font)
+            badge_left = left + size[0] - width - 12
+            canvas.draw.rounded_rectangle(
+                (badge_left - 4, top + 4, left + size[0] - 4, top + 26),
+                radius=6, fill=canvas.theme.color("color_background"))
+            canvas.draw.text((badge_left, top + 6), text, font=font,
+                             fill=canvas.accent)
+    return canvas.finish("deckout_deck.png")
 
 
 # =====================================================================
