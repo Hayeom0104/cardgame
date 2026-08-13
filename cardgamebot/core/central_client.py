@@ -43,10 +43,10 @@ class CentralUser:
 
 
 class CentralBotClient:
-    def __init__(self, base_url: str | None = None, token: str | None = None) -> None:
+    def __init__(self, base_url: str | None = None, api_key: str | None = None) -> None:
         settings = get_settings()
         self.base_url = (base_url or settings.central_api_base).rstrip("/")
-        self.token = token or settings.central_api_token
+        self.api_key = api_key or settings.central_api_key or settings.central_api_token
         self.timeout = settings.central_api_timeout
         self.enabled = settings.central_api_enabled
         # 중앙봇이 꺼져 있을 때 쓰는 인메모리 스텁 잔액.
@@ -56,8 +56,8 @@ class CentralBotClient:
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
         return headers
 
     async def _request(self, method: str, path: str, **kwargs) -> dict:
@@ -90,45 +90,76 @@ class CentralBotClient:
     async def get_balance(self, user_id: str) -> int:
         return (await self.get_user(user_id)).balance
 
-    async def add_currency(self, user_id: str, amount: int, reason: str = "") -> int:
-        """코인을 더한다(음수면 차감). 변경 후 잔액을 반환한다."""
+    async def add_currency(
+        self, user_id: str, amount: int, *, idempotency_key: str, reason: str = ""
+    ) -> int:
+        """Apply exactly ``amount`` of coin change and return the new balance.
+
+        Central clamps excessive deductions but still returns HTTP 200.  That is
+        a failed purchase, not a successful partial payment, so reject it here
+        before the caller applies its local mutation.
+        """
+        if not idempotency_key:
+            raise CentralAPIError("중앙봇 재화 요청에는 idempotency_key가 필요합니다.")
+        if amount == 0:
+            raise CentralAPIError("중앙봇 재화 요청 금액은 0일 수 없습니다.")
         if not self.enabled:
             new_balance = self._stub_balance.get(user_id, 0) + amount
+            if new_balance < 0:
+                raise CentralAPIError("코인이 부족합니다.")
             self._stub_balance[user_id] = new_balance
             return new_balance
         data = await self._request(
             "POST",
             "/v1/currency/add",
-            json={"user_id": user_id, "amount": amount, "reason": reason},
+            json={
+                "user_id": int(user_id),
+                "amount": amount,
+                "idempotency_key": idempotency_key,
+                "reason": reason,
+            },
         )
         payload = data.get("data", data)
-        return int(payload.get("balance", 0))
+        applied_amount = payload.get("amount")
+        if applied_amount is None or int(applied_amount) != amount:
+            raise CentralAPIError(
+                f"중앙봇이 요청한 코인을 모두 적용하지 않았습니다. (요청 {amount}, 적용 {applied_amount})"
+            )
+        return int(payload.get("value_after", payload.get("balance", 0)))
 
-    async def spend_currency(self, user_id: str, amount: int, reason: str = "") -> int:
-        """코인을 차감한다. 잔액 부족이면 CentralAPIError."""
-        balance = await self.get_balance(user_id)
-        if balance < amount:
-            raise CentralAPIError(f"코인이 부족합니다. (필요 {amount:,}, 보유 {balance:,})")
-        return await self.add_currency(user_id, -amount, reason)
+    async def spend_currency(
+        self, user_id: str, amount: int, *, idempotency_key: str, reason: str = ""
+    ) -> int:
+        if amount <= 0:
+            raise CentralAPIError("차감 금액은 양수여야 합니다.")
+        return await self.add_currency(
+            user_id, -amount, idempotency_key=idempotency_key, reason=reason
+        )
 
-    async def add_xp(self, user_id: str, amount: int, reason: str = "") -> None:
+    async def add_xp(
+        self, user_id: str, amount: int, *, idempotency_key: str, reason: str = ""
+    ) -> None:
         if not self.enabled:
             return
         await self._request(
-            "POST", "/v1/xp/add", json={"user_id": user_id, "amount": amount, "reason": reason}
+            "POST", "/v1/xp/add", json={"user_id": int(user_id), "amount": amount,
+            "idempotency_key": idempotency_key, "reason": reason}
         )
 
     # ------------------------------------------------------------------
     # 업적 (§1.1)
     # ------------------------------------------------------------------
 
-    async def grant_achievement(self, user_id: str, achievement_code: str) -> None:
+    async def grant_achievement(
+        self, user_id: str, achievement_code: str, *, idempotency_key: str
+    ) -> None:
         if not self.enabled:
             return
         await self._request(
             "POST",
             "/v1/achievements/grant",
-            json={"user_id": user_id, "achievement": achievement_code},
+            json={"user_id": int(user_id), "achievement_id": achievement_code,
+                  "idempotency_key": idempotency_key},
         )
 
 

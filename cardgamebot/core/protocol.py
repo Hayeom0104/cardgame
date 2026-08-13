@@ -1,13 +1,8 @@
-"""중앙봇 ↔ 이 봇 사이의 `POST /event` 계약 (설계 문서 §1, §8 참조 항목).
+"""Central Bot HTTP minigame contract.
 
-이 봇은 디스코드 게이트웨이 연결도 토큰도 갖지 않는다. 중앙봇이 메시지를
-받아서 이 서버로 전달하고, 이 서버가 돌려준 응답을 중앙봇이 디스코드에
-게시한다.
-
-⚠️ 정확한 필드명은 `중앙봇_API_연동_가이드_업데이트.md` 에 정의돼 있고 이
-저장소에는 그 문서가 없다. 그래서 입력 파싱은 **여러 별칭을 허용**하도록
-느슨하게 두었고, 출력은 흔한 형태(content + embeds + files)를 따른다.
-가이드와 대조해 확정할 때 고칠 파일은 여기 하나다.
+This module deliberately mirrors ``중앙봇_API_연동_가이드_업데이트 (3).md``.
+Do not add a second, private response envelope here: Central consumes the
+returned action directly.
 """
 
 from __future__ import annotations
@@ -20,20 +15,29 @@ from pydantic import BaseModel, ConfigDict
 
 
 class EventRequest(BaseModel):
-    """중앙봇이 보내는 이벤트.
-
-    별칭을 허용하는 이유는 위 주석 참조. 알 수 없는 필드는 그대로 통과시킨다.
-    """
+    """The permissive common view of Central's five inbound event shapes."""
 
     model_config = ConfigDict(extra="allow")
 
     type: str = "message"
     content: str = ""
+    command: str = ""
+    args: list[str] = []
+    raw_content: str = ""
     user_id: str = ""
     channel_id: str = ""
+    parent_channel_id: str = ""
+    thread_id: str = ""
     guild_id: str = ""
     message_id: str = ""
     username: str = ""
+    custom_id: str = ""
+    component_type: str = "button"
+    values: list[str] = []
+    fields: dict[str, str] = {}
+    request_id: str = ""
+    success: bool | None = None
+    partial: bool | None = None
 
     @classmethod
     def parse(cls, payload: dict[str, Any]) -> "EventRequest":
@@ -42,24 +46,31 @@ class EventRequest(BaseModel):
                 value = payload.get(key)
                 if value not in (None, ""):
                     return str(value)
-            # 중첩된 형태(예: {"author": {"id": ...}}) 도 한 단계 훑는다.
-            for container in ("author", "user", "member", "data"):
-                nested = payload.get(container)
-                if isinstance(nested, dict):
-                    for key in keys:
-                        value = nested.get(key)
-                        if value not in (None, ""):
-                            return str(value)
             return default
 
+        raw_content = pick("raw_content", "content", "message", "text")
+        raw_args = payload.get("args", [])
         return cls(
             type=pick("type", "event_type", default="message"),
-            content=pick("content", "message", "text"),
-            user_id=pick("user_id", "userId", "author_id", "id"),
+            content=raw_content,
+            command=pick("command"),
+            args=[str(v) for v in raw_args] if isinstance(raw_args, list) else [],
+            raw_content=raw_content,
+            user_id=pick("user_id", "userId", "author_id"),
             channel_id=pick("channel_id", "channelId"),
+            parent_channel_id=pick("parent_channel_id", "parentChannelId"),
+            thread_id=pick("thread_id", "threadId"),
             guild_id=pick("guild_id", "guildId"),
             message_id=pick("message_id", "messageId"),
             username=pick("username", "name", "display_name"),
+            custom_id=pick("custom_id", "customId"),
+            component_type=pick("component_type", default="button"),
+            values=[str(v) for v in payload.get("values", []) if isinstance(v, str)],
+            fields={str(k): str(v) for k, v in payload.get("fields", {}).items()}
+            if isinstance(payload.get("fields"), dict) else {},
+            request_id=pick("request_id"),
+            success=payload.get("success") if isinstance(payload.get("success"), bool) else None,
+            partial=payload.get("partial") if isinstance(payload.get("partial"), bool) else None,
         )
 
 
@@ -68,47 +79,48 @@ class Attachment:
     filename: str
     data: bytes
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, str]:
         return {
             "filename": self.filename,
             "content_type": "image/png",
-            # 중앙봇이 JSON 으로 받으므로 base64 로 싣는다.
-            "data": base64.b64encode(self.data).decode("ascii"),
+            "data_b64": base64.b64encode(self.data).decode("ascii"),
         }
 
 
 @dataclass
 class BotResponse:
-    """중앙봇이 디스코드에 게시할 내용."""
-
     content: str = ""
-    handled: bool = True
+    action: str = "reply"
     ephemeral: bool = False
     attachments: list[Attachment] = field(default_factory=list)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
+        if self.action == "ignore":
+            return {"action": "ignore"}
+        action = "reply_ephemeral" if self.ephemeral else self.action
         return {
-            "handled": self.handled,
-            "response": {
-                "content": self.content,
-                "ephemeral": self.ephemeral,
-                "files": [a.to_dict() for a in self.attachments],
-            },
+            "action": action,
+            "content": self.content,
+            "embeds": [],
+            "components": [],
+            "attachments": [a.to_dict() for a in self.attachments],
+            "attachment_mode": "replace",
         }
 
     @classmethod
     def ignored(cls) -> "BotResponse":
-        """이 봇이 처리할 메시지가 아님. 중앙봇은 아무것도 게시하지 않는다."""
-        return cls(handled=False)
+        return cls(action="ignore")
 
     @classmethod
     def text(cls, message: str) -> "BotResponse":
         return cls(content=message)
 
     @classmethod
-    def error(cls, message: str) -> "BotResponse":
-        return cls(content=f"❌ {message}")
+    def error(cls, message: str, *, ephemeral: bool = False) -> "BotResponse":
+        return cls(content=f"❌ {message}", ephemeral=ephemeral)
 
     def with_image(self, filename: str, data: bytes) -> "BotResponse":
+        if len(self.attachments) >= 2:
+            raise ValueError("Central Bot allows at most two PNG attachments per action.")
         self.attachments.append(Attachment(filename, data))
         return self

@@ -119,7 +119,8 @@ async def buy_node_item(session: Session, user: User, run: Run, choice: int) -> 
     # 코인은 중앙봇 소유 (§1.1)
     try:
         await get_central_client().spend_currency(
-            user.discord_id, item["price"], reason=f"shop:{item['code']}"
+            user.discord_id, item["price"],
+            idempotency_key=f"deckout:run-shop:{run.id}:{node_id}:{choice}", reason=f"shop:{item['code']}"
         )
     except CentralAPIError as exc:
         raise ShopError(str(exc)) from exc
@@ -220,7 +221,8 @@ async def buy_hub_item(session: Session, user: User, choice: int) -> str:
     if item["price_coin"] > 0:
         try:
             await get_central_client().spend_currency(
-                user.discord_id, item["price_coin"], reason=f"hubshop:{item['code']}"
+                user.discord_id, item["price_coin"],
+                idempotency_key=f"deckout:hub-shop:{user.id}:{item['code']}", reason=f"hubshop:{item['code']}"
             )
         except CentralAPIError as exc:
             # 카르타를 이미 깎았다면 되돌린다.

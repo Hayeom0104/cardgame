@@ -22,7 +22,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.sessions import SessionMiddleware
 
 from .api.admin.routes import router as admin_router
-from .api.event import router as event_router
+from .api.event import begin_accepting_events, router as event_router
 from .config import get_settings
 from .db.database import init_db, session_scope
 from .db.seed import seed_all
@@ -36,6 +36,7 @@ log = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    begin_accepting_events()
     init_db()
     with session_scope() as session:
         counts = seed_all(session)
