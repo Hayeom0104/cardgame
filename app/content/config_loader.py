@@ -41,6 +41,14 @@ CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 #: TOML에 없는 "빈 값"을 나타내는 약속된 문자열. 로드할 때 `None` 이 된다.
 NONE_SENTINEL = "없음"
 
+#: 게임 결과에 영향을 주지 않고 겉모습만 정하는 파일.
+#:
+#: 이 파일들은 콘텐츠 버전에 고정하지 않고 파일에서 곧장 읽는다. 색을 바꾸면
+#: 새 버전을 발행하지 않아도 다음 화면부터 반영되고, 진행 중인 런도 함께
+#: 바뀐다 — 겉모습이라 그래도 된다. 반대로 게임 수치는 절대 이렇게 다루지
+#: 않는다. 런이 도는 도중에 피해 배율이 바뀌면 안 되기 때문이다 (§10.6).
+PRESENTATION_FILES = ("10_화면.toml", "11_에셋.toml")
+
 #: 설명이 아니라 칸막이인 주석 (예: `# ─────────────`).
 _RULE_CHARACTERS = set("-─=—_·* ")
 
@@ -56,11 +64,14 @@ def config_dir() -> Path:
     return Path(override) if override else CONFIG_DIR
 
 
-def config_files() -> list[Path]:
-    """`config/` 안의 모든 `.toml` 을 파일명 순서로 돌려준다.
+def config_files(*, presentation: bool | None = None) -> list[Path]:
+    """`config/` 안의 `.toml` 파일들을 파일명 순서로 돌려준다.
 
     파일명 앞의 번호(`01_`, `02_` …)는 순서를 눈에 보이게 하려는 것뿐이고,
     설정 이름은 파일 전체에서 유일해야 하므로 순서가 값을 바꾸지는 않는다.
+
+    `presentation` 이 True면 겉모습 파일만, False면 게임 수치 파일만,
+    None(기본)이면 전부 돌려준다.
     """
     directory = config_dir()
     if not directory.is_dir():
@@ -68,7 +79,10 @@ def config_files() -> list[Path]:
     files = sorted(directory.glob("*.toml"))
     if not files:
         raise ConfigError(f"설정 파일이 하나도 없습니다: {directory}")
-    return files
+    if presentation is None:
+        return files
+    return [path for path in files
+            if (path.name in PRESENTATION_FILES) is presentation]
 
 
 # =====================================================================
@@ -85,14 +99,14 @@ def _resolve(value: Any) -> Any:
     return value
 
 
-def load_constants() -> dict[str, Any]:
-    """모든 설정 파일을 하나의 평평한 `{설정 이름: 값}` 으로 합친다.
+def _merge(paths: list[Path]) -> dict[str, Any]:
+    """주어진 파일들을 하나의 평평한 `{설정 이름: 값}` 으로 합친다.
 
     두 파일이 같은 설정을 정의하면 어느 쪽이 이겼는지 알 수 없으므로 거부한다.
     """
     merged: dict[str, Any] = {}
     owner: dict[str, str] = {}
-    for path in config_files():
+    for path in paths:
         try:
             parsed = tomllib.loads(path.read_text(encoding="utf-8"))
         except tomllib.TOMLDecodeError as error:
@@ -108,8 +122,18 @@ def load_constants() -> dict[str, Any]:
     return merged
 
 
+def load_constants() -> dict[str, Any]:
+    """게임 수치 설정. 콘텐츠 버전에 고정되어 `Balance` 로 읽힌다."""
+    return _merge(config_files(presentation=False))
+
+
+def load_presentation() -> dict[str, Any]:
+    """겉모습 설정. 버전에 고정하지 않고 파일에서 곧장 읽는다."""
+    return _merge(config_files(presentation=True))
+
+
 def source_files() -> dict[str, str]:
-    """`{설정 이름: 그 설정이 정의된 파일 이름}`."""
+    """`{설정 이름: 그 설정이 정의된 파일 이름}`. 겉모습 파일까지 포함한다."""
     origins: dict[str, str] = {}
     for path in config_files():
         parsed = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -180,4 +204,5 @@ def load_docs() -> dict[str, str]:
 def undocumented() -> list[str]:
     """설명이 붙지 않은 설정 이름. 비어 있어야 정상이다."""
     docs = load_docs()
-    return sorted(key for key in load_constants() if key not in docs)
+    every = {**load_constants(), **load_presentation()}
+    return sorted(key for key in every if key not in docs)

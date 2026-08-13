@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.api import custom_id as cid
-from app.api import errors
+from app.api import errors, visuals
 from app.api import events as ev
 from app.api.gates import GateError, check_gates
 from app.api import screens
@@ -421,7 +421,31 @@ def _on_node_choose(ctx: HandlerContext, event: ev.InteractionEvent,
     content = _screen_summary(node, result)
     if conclusion is not None:
         content = f"{content}\n{_conclusion_summary(conclusion)}"
-    return {"action": "edit", "content": content}
+    return {"action": "edit", "content": content,
+            "attachments": _screen_art(ctx, gate.run, result, conclusion)}
+
+
+def _screen_art(ctx: HandlerContext, run, result: dict,
+                conclusion: dict | None = None) -> list[dict]:
+    """이 화면에 붙일 그림 (§11).
+
+    그림은 곁가지라 실패해도 글자만으로 화면이 나간다 — `visuals` 가 예외를
+    삼킨다. 여기서 터지면 조작이 통째로 되돌아가고 중앙봇이 이벤트를 무한히
+    재전송하게 된다 (§16.7).
+    """
+    if conclusion is not None and conclusion.get("screen") == "settlement":
+        return visuals.settlement(conclusion["report"])
+    # 런 행은 전투가 진행되며 갱신되므로 다시 읽는다.
+    fresh = ctx.db.one("SELECT * FROM runs WHERE run_id = ?", (run["run_id"],))
+    screen = result.get("screen")
+    if screen == "battle" and result.get("battle_id"):
+        return visuals.battle(ctx.db, ctx.balance,
+                              battle_id=result["battle_id"], run=fresh)
+    if screen == "shop":
+        return visuals.shop(ctx.db, fresh, result.get("items", []))
+    if screen == "map":
+        return visuals.game_map(ctx.db, fresh)
+    return []
 
 
 def _screen_summary(node, result: dict) -> str:
@@ -499,8 +523,13 @@ def _on_shop_buy(ctx: HandlerContext, event: ev.InteractionEvent,
             message = (errors.INSUFFICIENT_CURRENCY if "재화" in str(error)
                        else errors.ILLEGAL_STATE)
             raise GateError(message, reason=str(error)) from error
+    run = ctx.db.one("SELECT * FROM runs WHERE run_id = ?", (parsed.run_id,))
+    items = [dict(row) for row in ctx.db.query(
+        "SELECT * FROM run_shop_items WHERE run_id = ? AND node_index = ? "
+        "ORDER BY item_index", (parsed.run_id, run["current_node_index"]))]
     return {"action": "edit",
-            "content": f"구매 완료 · 탐험 자금 {result['run_currency']}"}
+            "content": f"구매 완료 · 탐험 자금 {result['run_currency']}",
+            "attachments": visuals.shop(ctx.db, run, items)}
 
 
 def _on_event_branch(ctx: HandlerContext, event: ev.InteractionEvent,
@@ -534,7 +563,8 @@ def _on_event_branch(ctx: HandlerContext, event: ev.InteractionEvent,
         content = "전투가 시작되었습니다."
         if conclusion is not None:
             content = f"{content}\n{_conclusion_summary(conclusion)}"
-        return {"action": "edit", "content": content}
+        return {"action": "edit", "content": content,
+                "attachments": _screen_art(ctx, gate.run, result, conclusion)}
     return {"action": "edit", "content": "이벤트를 해결했습니다."}
 
 
@@ -677,7 +707,12 @@ def _resolve_card(ctx, run, engine, unit, card_instance_id, target_ids,
                 ctx.db, ctx.balance, _rng(ctx, run), run_id=parsed.run_id,
                 battle_id=engine.battle_id)
             lines.append(_conclusion_summary(conclusion))
-    return {"action": "edit", "content": "\n".join(lines)}
+    run = ctx.db.one("SELECT * FROM runs WHERE run_id = ?", (parsed.run_id,))
+    art = (visuals.settlement(conclusion["report"])
+           if conclusion is not None and conclusion.get("screen") == "settlement"
+           else visuals.battle(ctx.db, ctx.balance, battle_id=engine.battle_id,
+                               run=run))
+    return {"action": "edit", "content": "\n".join(lines), "attachments": art}
 
 
 def _conclusion_summary(conclusion: dict) -> str:

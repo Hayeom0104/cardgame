@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.central.client import MAX_PNG_DIMENSION
-from app.render import panels
+from app.render import panels, theme
 
 
 # =====================================================================
@@ -65,7 +65,7 @@ def test_missing_art_still_renders_a_silhouette_and_name():
 def test_the_enemy_panel_renders_all_eight_enemies():
     """§2.6 — the cap is set by readability; the panel must fit the cap."""
     image = panels.render_enemy_panel([_enemy(i) for i in range(8)], {})
-    assert image.size == (panels.PANEL_WIDTH, panels.PANEL_HEIGHT)
+    assert image.size == tuple(theme.load().size("panel_size"))
 
 
 def test_the_map_renders_as_one_image():

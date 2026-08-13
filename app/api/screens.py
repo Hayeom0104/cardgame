@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import logging
 
-from app.api import errors
+from app.api import errors, visuals
 from app.content.balance import Balance
 from app.db.connection import Database, utcnow
 from app.engine import gacha
@@ -183,6 +183,8 @@ def confirm_screen(db: Database, user_id: int, content_version_id: int,
 
     lines = ["**준비 화면** — [4] 확정",
              f"월드: {world['name'] if world else draft['world_id']}"]
+    #: 글자와 그림이 같은 값을 보여주도록 한 번만 계산해 둘 다에 쓴다.
+    members: list[dict] = []
     for character_id in draft["party"]:
         row = db.one(
             "SELECT oc.star_rank, c.name, c.job_role, c.element FROM owned_characters oc "
@@ -202,6 +204,11 @@ def confirm_screen(db: Database, user_id: int, content_version_id: int,
         lines.append(
             f"　{row['name']} {'★' * int(row['star_rank'])} · {row['element']} · "
             f"HP {block['hp']} / 공 {block['atk']} / 방 {block['def']} / 속 {block['spd']}")
+        members.append({
+            "character_id": character_id, "name": row["name"],
+            "star_rank": int(row["star_rank"]), "element": row["element"],
+            "job_role": row["job_role"], **block,
+        })
 
     if draft["passives"]:
         lines.append(f"패시브: {len(draft['passives'])}개")
@@ -213,6 +220,11 @@ def confirm_screen(db: Database, user_id: int, content_version_id: int,
             {"type": "button", "custom_id": f"{PREP_PREFIX}confirm", "label": "확정"},
             {"type": "button", "custom_id": f"{PREP_PREFIX}cancel", "label": "취소"},
         ],
+        # 여기 보이는 값이 §16.2.3에서 그대로 얼려진다.
+        "attachments": visuals.prep(
+            db, balance, user_id=user_id, content_version_id=content_version_id,
+            world_name=world["name"] if world else draft["world_id"],
+            party=members),
     }
 
 
@@ -399,8 +411,12 @@ def gacha_screen(db: Database, balance: Balance, user_id: int,
             "label": f"10연 {ten}",
         })
 
+    # 배너 그림은 첫 배너 것을 붙인다 — 확률과 천장을 글자로만 보여주면
+    # 무엇에 돈을 쓰는지 한눈에 들어오지 않는다.
+    art = (visuals.banner(db, balance, available[0], user_id=user_id,
+                          carta=int(account["carta"])) if available else [])
     return {"action": "reply_ephemeral", "content": "\n".join(lines),
-            "components": components}
+            "components": components, "attachments": art}
 
 
 def handle_gacha(db: Database, balance: Balance, user_id: int, custom_id: str,
@@ -429,8 +445,14 @@ def handle_gacha(db: Database, balance: Balance, user_id: int, custom_id: str,
         logger.info("gacha rejected for %s: %s", user_id, error)
         return {"action": "edit", "content": message}
 
-    return {"action": "edit", "content": format_results(db, outcome,
-                                                        content_version_id)}
+    results = [{"kind": result.kind, "entity_id": result.entity_id,
+                "is_duplicate": result.is_duplicate,
+                "fragments": result.fragments,
+                "forced": result.forced_by_guarantee}
+               for result in outcome.results]
+    return {"action": "edit",
+            "content": format_results(db, outcome, content_version_id),
+            "attachments": visuals.gacha_results(db, content_version_id, results)}
 
 
 def format_results(db: Database, outcome: gacha.GachaOutcome,

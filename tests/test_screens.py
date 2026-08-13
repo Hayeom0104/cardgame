@@ -324,3 +324,30 @@ def test_the_forced_result_is_labelled(db, balance, version, user_id):
         gacha.PullResult(index=9, band=gacha.BAND_BASE, kind="character",
                          entity_id="char_terradon", forced_by_guarantee=True)])
     assert "첫 뽑기 보장" in screens.format_results(db, outcome, version)
+
+
+def test_the_confirm_screen_and_its_picture_show_the_same_build(db, balance,
+                                                                version, graduate):
+    """글자와 그림이 서로 다른 값을 보여주면 안 된다 (§16.2.3)."""
+    screens.handle_prep(db, balance, graduate, f"{screens.PREP_PREFIX}world",
+                        [WORLD_1_ID], version)
+    result = screens.handle_prep(db, balance, graduate,
+                                 f"{screens.PREP_PREFIX}party",
+                                 [STARTER_CHARACTER_ID], version)
+    assert result["attachments"], "확정 화면에 그림이 붙지 않았습니다"
+    assert result["attachments"][0]["filename"] == "deckout_prep.png"
+
+
+def test_the_gacha_screen_shows_the_banner(db, balance, version, user_id):
+    screen = screens.gacha_screen(db, balance, user_id, version)
+    assert screen["attachments"][0]["filename"] == "deckout_banner.png"
+
+
+def test_the_pull_result_is_also_a_picture(db, balance, version, user_id):
+    db.execute("UPDATE accounts SET carta = 100000 WHERE user_id = ?", (user_id,))
+    banner = db.one("SELECT banner_id FROM banners WHERE content_version_id = ? "
+                    "AND banner_type = 'standard'", (version,))
+    result = screens.handle_gacha(
+        db, balance, user_id, f"{screens.GACHA_PREFIX}{banner['banner_id']}:single",
+        version, event_id="evt-그림-1")
+    assert result["attachments"][0]["filename"] == "deckout_gacha.png"
