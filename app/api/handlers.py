@@ -378,6 +378,8 @@ def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
     Re-issuing it while a run is active re-renders the current screen (§16.3);
     if the thread was deleted it is recreated at surface_generation + 1 (§16.8).
     """
+    expired = lc.expire_if_stale(ctx.db, ctx.balance, user_id)
+
     run = lc.active_run_for(ctx.db, user_id)
     if run is not None:
         if run["thread_id"] is None:
@@ -389,7 +391,11 @@ def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
                 "content": errors.RUN_ALREADY_ACTIVE}
 
     account = ctx.db.one("SELECT * FROM accounts WHERE user_id = ?", (user_id,))
-    lines = [
+    lines = []
+    if expired is not None:
+        kept = len(expired.get("inventory", {}).get("kept", []))
+        lines.append(f"오래 조작이 없어 이전 런을 정리했습니다. 보관 {kept}개.")
+    lines += [
         "**덱아웃**",
         f"카르타 {account['carta']} · 와일드카드 {account['wildcards']}",
         f"파티 슬롯 {account['party_slots']} · 패시브 슬롯 {account['passive_slots']}",
@@ -405,6 +411,9 @@ def start_run(ctx: HandlerContext, user_id: int) -> dict:
     NO run row and NO thread exist yet: steps 1-4 are pure UI, so abandoning
     them costs nothing and creates no `one_active_run` conflict.
     """
+    # 방치된 런이 §16.3 규칙으로 계정을 막고 있을 수 있다. 새 런을 거절하기
+    # **전에** 확인한다 — 그러지 않으면 만료 규칙이 있으나 마나가 된다.
+    lc.expire_if_stale(ctx.db, ctx.balance, user_id)
     if lc.active_run_for(ctx.db, user_id) is not None:
         return _ephemeral(errors.RUN_ALREADY_ACTIVE)
 
@@ -916,13 +925,15 @@ def _on_skip(ctx: HandlerContext, event: ev.InteractionEvent,
 
 def _on_shop_exit(ctx: HandlerContext, event: ev.InteractionEvent,
                   parsed: cid.CustomId) -> dict:
-    check_gates(ctx.db, user_id=event.user_id, custom_id=parsed,
-                allowed_states={lc.SHOP})
+    gate = check_gates(ctx.db, user_id=event.user_id, custom_id=parsed,
+                       allowed_states={lc.SHOP})
     with ctx.db.tx():
         lc.claim_mutation(ctx.db, parsed.run_id, parsed.revision)
-        ctx.db.execute("UPDATE runs SET state = ? WHERE run_id = ?",
-                       (lc.MAP_NAVIGATION, parsed.run_id))
-    return {"action": "edit", "content": errors.LABEL_EXIT}
+        # 상태 전이는 `nodes` 가 소유한다. 여기서 UPDATE를 직접 쓰면 두 곳이
+        # 같은 규칙을 따로 들고 있게 되어 언젠가 갈라진다.
+        nodes.leave_shop(ctx.db, parsed.run_id)
+    return {"action": "edit", "content": errors.LABEL_EXIT,
+            "attachments": visuals.game_map(ctx.db, gate.run)}
 
 
 _INTERACTION_HANDLERS = {

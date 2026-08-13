@@ -509,6 +509,39 @@ def touch(db: Database, run_id: int) -> None:
                (utcnow(), run_id))
 
 
+def expire_run(db: Database, balance: Balance, run) -> dict:
+    """§16.3 — 방치된 런을 정산해 끝낸다. `포기`와 같은 경로를 지난다.
+
+    §15.10의 보존 밴드가 그대로 적용되므로, 방치가 포기보다 이득이 되는 일은
+    없다. 정산 각 단계는 receipt(§17.6)나 저널 키(§16.4)로 멱등하므로 도중에
+    죽어도 다시 들어와 이어서 끝낸다.
+    """
+    from app.engine import settlement as sl
+
+    run_id = run["run_id"]
+    if run["state"] != RUN_SETTLEMENT:
+        sl.enter_settlement(db, run_id, target_state=RUN_EXPIRED,
+                            end_reason="자동 만료 (§16.3)")
+    rng = JournaledRng(db, run_id, run["rng_seed"])
+    return sl.advance_settlement(db, balance, rng, run_id=run_id,
+                                 content_version_id=run["content_version_id"])
+
+
+def expire_if_stale(db: Database, balance: Balance, user_id: int) -> dict | None:
+    """이 계정의 런이 방치되었으면 정산하고 보고서를, 아니면 None을 돌려준다.
+
+    §16.3의 계정당 하나 규칙 때문에, 만료가 실제로 일어나지 않으면 방치된
+    런 하나가 그 계정의 새 런을 **영구히** 막는다. 서비스에는 주기 작업이
+    없으므로, 계정이 막혀 있는지가 실제로 문제가 되는 순간 — 허브를 열거나
+    새 런을 시작하려는 순간 — 에 확인한다.
+    """
+    run = active_run_for(db, user_id)
+    if run is None or not is_expired(db, balance, run):
+        return None
+    logger.info("run %s expired after inactivity; settling", run["run_id"])
+    return expire_run(db, balance, run)
+
+
 # =====================================================================
 # §16.8 startup recovery
 # =====================================================================

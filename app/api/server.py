@@ -57,7 +57,12 @@ async def lifespan(app: FastAPI):
 
     # §16.8 startup scan; §17.4 transaction resume.
     if state["balance"] is not None:
-        state["recovery_plan"] = lifecycle.recover_runs(db, state["balance"])
+        plan = lifecycle.recover_runs(db, state["balance"])
+        state["recovery_plan"] = plan
+        # 계획을 세워 놓고 아무것도 하지 않으면 §16.3의 만료 규칙은 없는 것과
+        # 같다. 만료된 런은 여기서 바로 정산한다 — 나머지 항목은 화면을 다시
+        # 그리는 일이라 §16.6 단일 기록자 큐를 통해야 하므로 계획으로 남긴다.
+        state["expired_settled"] = _settle_expired(db, state["balance"], plan)
     if state["central"] is not None:
         from app.central.transactions import resume_pending
         from app.engine.progression import local_handlers
@@ -69,6 +74,29 @@ async def lifespan(app: FastAPI):
     yield
 
     db.close()
+
+
+def _settle_expired(db: Database, balance, plan: list[dict]) -> int:
+    """기동 시 이미 만료된 런을 정산한다 (§16.3).
+
+    하나가 실패해도 나머지를 계속 처리한다. 만료 정산에 걸려 서비스가 아예
+    뜨지 못하면, 막힌 계정을 풀어 줄 방법마저 사라진다.
+    """
+    settled = 0
+    for entry in plan:
+        if entry.get("action") != "settle_expired":
+            continue
+        run = db.one("SELECT * FROM runs WHERE run_id = ?", (entry["run_id"],))
+        if run is None:
+            continue
+        try:
+            lifecycle.expire_run(db, balance, run)
+            settled += 1
+        except Exception:                                    # noqa: BLE001
+            logger.exception("run %s 만료 정산에 실패했습니다", entry["run_id"])
+    if settled:
+        logger.info("기동 시 만료된 런 %d개를 정산했습니다", settled)
+    return settled
 
 
 app = FastAPI(title="Deckout", lifespan=lifespan)

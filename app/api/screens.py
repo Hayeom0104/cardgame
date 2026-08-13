@@ -334,6 +334,8 @@ def handle_prep(db: Database, balance: Balance, user_id: int, custom_id: str,
         clear_draft(db, user_id)
         return {"action": "edit", "content": "준비를 취소했습니다.", "components": []}
 
+    # 준비 화면도 §16.3으로 거절하므로, 방치된 런을 먼저 정리한다.
+    lc.expire_if_stale(db, balance, user_id)
     if lc.active_run_for(db, user_id) is not None:
         clear_draft(db, user_id)
         return {"action": "edit", "content": errors.RUN_ALREADY_ACTIVE,
