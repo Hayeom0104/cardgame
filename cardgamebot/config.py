@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     # --- 이 서비스의 HTTP 수신 주소 ---
     # 중앙봇이 service_url 로 호출하는 FastAPI 서버의 bind 설정이다.
     service_host: str = "0.0.0.0"
-    service_port: int = 8090
+    service_port: int = 8087
 
     # --- 명령 처리 ---
     command_prefix: str = "!"
