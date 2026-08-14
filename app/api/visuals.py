@@ -15,6 +15,7 @@ import logging
 
 from app.db.connection import Database
 from app.engine import statuses as st
+from app.engine import timed_effects as te
 from app.engine import units as un
 from app.render import panels
 
@@ -104,6 +105,10 @@ def _unit_view(db: Database, unit: un.Unit, run) -> dict:
         "block": unit.block,
         "is_alive": unit.is_alive,
         "statuses": st.active_statuses(db, unit.battle_unit_id),
+        # 무적·라운드 한정 스탯 변화는 전투 계산에는 이미 반영되지만(§2.5.3),
+        # 화면에는 지금까지 하나도 나오지 않았다 — 왜 대미지가 0인지,
+        # 왜 공격력이 갑자기 달라졌는지 플레이어가 알 방법이 없었다.
+        "timed_effects": te.active_for_unit(db, unit.battle_unit_id),
     }
     view["character_id" if is_ally else "enemy_id"] = unit.unit_def_id
     return view

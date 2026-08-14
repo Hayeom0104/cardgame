@@ -225,6 +225,29 @@ def render_card(card: dict, canvas: Canvas, *, size: tuple[int, int] | None = No
 # =====================================================================
 # 전투
 # =====================================================================
+def _timed_effect_label(entry: dict) -> str:
+    """`battle_timed_effects` 한 행을 짧은 표시로 (§2.5.3).
+
+    무적·라운드 한정 스탯 변화는 전투 계산에는 이미 반영되지만, 화면에는
+    지금까지 나온 적이 없었다 — 대미지가 왜 0인지, 공격력이 왜 갑자기
+    달라졌는지 플레이어가 알 방법이 없었다."""
+    if entry.get("effect_kind") == "invulnerable":
+        return "무적"
+    stat = entry.get("stat", "")
+    delta = float(entry.get("delta", 0))
+    sign = "+" if delta >= 0 else ""
+    suffix = "%" if entry.get("is_percent") else ""
+    return f"{stat}{sign}{delta:g}{suffix}"
+
+
+def _status_line(unit: dict) -> str:
+    statuses = " ".join(f"{entry['status_id']}×{entry['stacks']}"
+                        for entry in unit.get("statuses", []))
+    timed = " ".join(_timed_effect_label(entry)
+                     for entry in unit.get("timed_effects", []))
+    return " ".join(part for part in (statuses, timed) if part)
+
+
 def render_ally_panel(units: list[dict], *, resource: int, round_no: int,
                       canvas: Canvas | None = None) -> Image.Image:
     """아군 패널 — 배치, 체력, 방어막, 상태이상 (§11)."""
@@ -249,10 +272,9 @@ def render_ally_panel(units: list[dict], *, resource: int, round_no: int,
         canvas.label((left, top + 10), str(unit.get("name", "?")))
         canvas.bar(left, top + 38, 300, 14, unit.get("hp_current", 0),
                    unit.get("hp_max", 1), unit.get("block", 0))
-        statuses = " ".join(f"{entry['status_id']}×{entry['stacks']}"
-                            for entry in unit.get("statuses", []))
-        if statuses:
-            canvas.label((left, top + 58), statuses[:60], role="small",
+        line = _status_line(unit)
+        if line:
+            canvas.label((left, top + 58), line[:60], role="small",
                          color=canvas.muted)
         if not unit.get("is_alive", True):
             canvas.label((canvas.width - 100, top + 30), "전투불능",
@@ -291,6 +313,12 @@ def render_enemy_panel(units: list[dict], telegraphs: dict[int, dict],
         canvas.bar(left + 8, top + art_size + 16, 80, 10,
                    unit.get("hp_current", 0), unit.get("hp_max", 1),
                    unit.get("block", 0))
+        # 아군 패널과 달리 여기는 상태이상을 한 번도 그린 적이 없었다 — 화상·
+        # 방어력 감소 같은 적 상태가 화면에서는 아예 보이지 않았다.
+        line = _status_line(unit)
+        if line:
+            canvas.label((left + 8, top + art_size + 30), line[:20],
+                         role="small", color=canvas.muted)
 
         telegraph = telegraphs.get(unit.get("battle_unit_id"), {})
         label = telegraph.get("label", "행동 완료")

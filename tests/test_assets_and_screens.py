@@ -253,6 +253,66 @@ def test_a_font_without_hangul_is_passed_over_when_one_exists():
 # =====================================================================
 # 핸들러에 실제로 붙는가
 # =====================================================================
+def test_invulnerability_and_stat_modifiers_show_up_on_the_unit_view(db, balance,
+                                                                     version, user_id):
+    """§2.5.3 — 무적·라운드 한정 스탯 변화는 전투 계산에는 이미 반영되지만,
+    화면에는 지금까지 하나도 나오지 않았다. 왜 대미지가 0인지, 왜 공격력이
+    갑자기 달라졌는지 플레이어가 알 방법이 없었다."""
+    from app.api import visuals
+    from app.content.seed import STARTER_CHARACTER_ID, TUTORIAL_WORLD_ID
+    from app.engine import encounter as enc
+    from app.engine import lifecycle as lc
+    from app.engine import timed_effects as te
+    from app.engine import units as un
+
+    run_id = lc.create_run(
+        db, balance,
+        lc.RunBuildRequest(user_id=user_id, world_id=TUTORIAL_WORLD_ID,
+                           party_character_ids=[STARTER_CHARACTER_ID],
+                           is_tutorial=True),
+        version)
+    battle_id = enc.create_battle(db, balance, run_id=run_id, node_index=0,
+                                  encounter_id="enc_tut_2",
+                                  content_version_id=version)
+    run = db.one("SELECT * FROM runs WHERE run_id = ?", (run_id,))
+    ally = un.load_units(db, battle_id, side=un.ALLY)[0]
+
+    te.create_invulnerable(db, battle_id, ally.battle_unit_id,
+                           current_round=1, duration_rounds=1)
+    te.create_stat_modifier(db, battle_id, ally.battle_unit_id,
+                            stat="atk", delta=20, is_percent=True,
+                            current_round=1, duration_rounds=1)
+
+    view = visuals._unit_view(db, ally, run)
+    kinds = {entry["effect_kind"] for entry in view["timed_effects"]}
+    assert kinds == {"invulnerable", "stat_modifier"}
+
+
+def test_timed_effects_render_as_visible_labels():
+    from app.render import panels
+
+    unit = {"name": "이그니스", "hp_current": 10, "hp_max": 20, "statuses": [],
+           "timed_effects": [{"effect_kind": "invulnerable"},
+                             {"effect_kind": "stat_modifier", "stat": "atk",
+                              "delta": 20, "is_percent": True}]}
+    line = panels._status_line(unit)
+    assert "무적" in line
+    assert "atk+20%" in line
+
+
+def test_the_enemy_panel_now_draws_its_statuses():
+    """예전에는 아군 패널만 상태이상을 그렸고, 적 패널은 한 번도 그린 적이
+    없었다 — 화상을 건 적이 그림에서는 멀쩡해 보였다."""
+    from app.render import panels
+
+    enemy = {"battle_unit_id": 1, "enemy_id": "e", "name": "적",
+             "hp_current": 5, "hp_max": 10,
+             "statuses": [{"status_id": "화상", "stacks": 2}]}
+    attachment = panels.to_attachment(
+        panels.render_enemy_panel([enemy], {}), "enemy.png")
+    attachment.validate()
+
+
 def test_a_real_battle_response_carries_the_panels(db, balance, version, user_id):
     """전투 화면 응답에 그림이 실제로 실려 나가야 한다.
 
