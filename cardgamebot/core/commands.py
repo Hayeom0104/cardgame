@@ -374,7 +374,7 @@ def _map_image(run) -> bytes:
     game_map = run_service.get_map(run)
     available = [n.id for n in run_service.available_nodes(run)]
     return map_render.render_map(
-        game_map, run.current_node_id, run.cleared_node_ids, available
+        game_map, run.current_node_id, run.cleared_node_ids, available, party=run.party
     )
 
 
