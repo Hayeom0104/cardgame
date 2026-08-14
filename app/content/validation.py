@@ -167,6 +167,29 @@ def _validate_constants(db: Database, version_id: int) -> None:
             f"gacha_band_rarity_tiers에 희귀도 {sorted(missing)}이(가) 어느 "
             "등급에도 없습니다 — 그 희귀도의 카드는 영영 뽑히지 않습니다")
 
+    share = float(get("gacha_passive_share_of_cards"))
+    if not 0.0 <= share <= 1.0:
+        raise ValidationError(
+            f"gacha_passive_share_of_cards {share}은(는) 0과 1 사이여야 합니다")
+
+    # 출석 (§13.2)
+    reset_hour = int(get("daily_reset_hour_kst"))
+    if not 0 <= reset_hour <= 23:
+        raise ValidationError(
+            f"daily_reset_hour_kst {reset_hour}은(는) 0~23 이어야 합니다")
+    if int(get("daily_streak_grace_days")) < 0:
+        raise ValidationError("daily_streak_grace_days는 0 이상이어야 합니다")
+    rewards = get("daily_rewards")
+    if not rewards:
+        raise ValidationError(
+            "daily_rewards가 비어 있습니다 — 출석 주기의 길이가 0이 되어 "
+            "며칠째인지 정할 수 없습니다")
+    days = sorted(int(day) for day in rewards)
+    if days != list(range(1, len(days) + 1)):
+        raise ValidationError(
+            f"daily_rewards의 날짜가 1부터 연속이 아닙니다: {days} — 주기를 "
+            "도는 도중 빈 날이 생깁니다")
+
     table = get("equipment_drop_tier_by_depth")
     deepest = len(get("map_depth_structure")) + 1
     if not table or int(table[-1]["max_depth"]) < deepest:

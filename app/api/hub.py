@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 
 from app.api import errors
+from app.engine import attendance as att
 from app.engine import progression as pg
 
 logger = logging.getLogger(__name__)
@@ -111,6 +112,22 @@ def _dispatch(ctx, user_id: int, action: str, chosen: str, argument: str, *,
                                   user_id=user_id, tier=int(chosen),
                                   tx_id=_tx_id(event_id))
         return _settled(result, "강화석을 구매했습니다."), "hub_shop_screen"
+
+    if action == "daily":
+        # 출석은 날짜에서 유도한 키를 쓰므로(§17.3 규칙 2) 이벤트 키를
+        # 넘기지 않는다 — 같은 날의 두 번째 클릭도 같은 키여야 한다.
+        result = att.claim(ctx.db, ctx.balance, ctx.central, user_id=user_id)
+        if result.already_claimed:
+            return "오늘 출석 보상은 이미 받았습니다.", None
+        got = [f"코인 {result.coin}"] if result.coin else []
+        if result.carta:
+            got.append(f"카르타 {result.carta}")
+        if result.wildcards:
+            got.append(f"와일드카드 {result.wildcards}")
+        message = f"{result.streak}일째 출석 — {' · '.join(got)}"
+        if result.coin_result is not None:
+            message = _settled(result.coin_result, message)
+        return message, None
 
     # -- 여기서부터는 순수 로컬이다. Central 왕복이 필요 없다. -----------
     if action == "enhance":

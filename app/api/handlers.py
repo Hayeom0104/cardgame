@@ -24,6 +24,7 @@ from app.content.balance import Balance
 from app.content.seed import TUTORIAL_WORLD_ID, create_account
 from app.db.connection import Database
 from app.engine import achievements as ach
+from app.engine import attendance as att
 from app.engine import battle as bt
 from app.engine import deck
 from app.engine import lifecycle as lc
@@ -402,7 +403,25 @@ def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
     ]
     if account["tutorial_completed_at"] is None:
         lines.append("튜토리얼이 아직 남아 있습니다. `!덱아웃 시작`")
-    return _reply("\n".join(lines))
+
+    daily = att.status(ctx.db, ctx.balance, user_id=user_id)
+    components = []
+    if daily["claimable"]:
+        reward = daily["reward"]
+        lines.append(
+            f"출석 {daily['streak']}일째 — 받을 것: 코인 {reward['coin']} · "
+            f"카르타 {reward['carta']}")
+        components.append({
+            "type": "button", "custom_id": f"{hub.HUB_PREFIX}daily",
+            "label": "출석 보상 받기",
+        })
+    else:
+        lines.append(f"출석 {daily['streak']}일째 — 오늘 것은 받았습니다.")
+
+    screen = _reply("\n".join(lines))
+    if components:
+        screen["components"] = components
+    return screen
 
 
 def start_run(ctx: HandlerContext, user_id: int) -> dict:

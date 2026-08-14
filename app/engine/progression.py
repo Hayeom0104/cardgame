@@ -22,6 +22,7 @@ from app.central import transactions as tx
 from app.content.balance import Balance
 from app.db.connection import Database, utcnow
 from app.engine import achievements as ach
+from app.engine import attendance
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ def local_handlers() -> dict:
         "research": _apply_research,
         "hub_equipment": _apply_hub_equipment,
         "hub_stone": _apply_hub_stone,
+        attendance.CLAIM_TYPE: attendance._apply_claim,
     }
 
 
