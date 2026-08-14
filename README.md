@@ -13,7 +13,7 @@ pip install -e ".[dev]"
 python -m app.cli.bootstrap --db deckout.db      # migrate + seed + publish content
 python -m app.cli.check_content --db deckout.db  # §10.5 validation pass
 uvicorn app.api.server:app --port 8080
-pytest                                           # 683 tests
+pytest                                           # 695 tests
 ```
 
 Registration (§1.3.0) — `route_threads: true` is **mandatory** and defaults to

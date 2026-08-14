@@ -35,6 +35,7 @@ def validate_version(db: Database, version_id: int) -> None:
     _validate_transition_effects(db, version_id)
     _validate_boss_phases(db, version_id)
     _validate_events(db, version_id)
+    _validate_reward_tables(db, version_id)
     _validate_encounters(db, version_id)
     _validate_world_coverage(db, version_id)
     _validate_research(db, version_id)
@@ -453,6 +454,56 @@ def _validate_boss_phases(db: Database, version_id: int) -> None:
         if thresholds != sorted(thresholds, reverse=True):
             raise ValidationError(
                 f"boss {enemy_id!r}: hp thresholds must descend with phase index")
+
+
+def _validate_reward_tables(db: Database, version_id: int) -> None:
+    """§10.4 `offer_reward` 가 가리키는 목록이 실제로 있는가.
+
+    없는 목록을 가리키는 이벤트는 플레이어가 그 분기를 고른 **뒤에야** 터진다.
+    저장할 때 막는 편이 낫다.
+    """
+    cards = {row["card_id"] for row in db.query(
+        "SELECT card_id FROM cards WHERE content_version_id = ?", (version_id,))}
+    tables = {}
+    for row in db.query("SELECT * FROM reward_tables WHERE content_version_id = ?",
+                        (version_id,)):
+        label = f"reward table {row['reward_table_id']!r}"
+        try:
+            entries = json.loads(row["entries_json"])
+        except json.JSONDecodeError as error:
+            raise ValidationError(f"{label}: entries_json 이 JSON 이 아닙니다") from error
+        if not isinstance(entries, list) or not entries:
+            raise ValidationError(f"{label}: 후보가 비어 있습니다")
+        for index, entry in enumerate(entries):
+            card_id = entry.get("card_id")
+            if card_id not in cards:
+                raise ValidationError(
+                    f"{label}: entries[{index}] 의 카드 {card_id!r} 가 없습니다")
+            if float(entry.get("weight", 1.0)) <= 0:
+                raise ValidationError(
+                    f"{label}: entries[{index}] 의 weight 는 0보다 커야 합니다 — "
+                    "0이면 그 카드는 영영 뽑히지 않습니다")
+        tables[row["reward_table_id"]] = entries
+
+    for row in db.query("SELECT * FROM events WHERE content_version_id = ?",
+                        (version_id,)):
+        for branch_index, branch in enumerate(json.loads(row["branches_json"])):
+            effects = branch.get("effects") or []
+            for index, entry in enumerate(effects):
+                if entry.get("operator") != "offer_reward":
+                    continue
+                table_id = (entry.get("params") or {}).get("reward_table_id")
+                if table_id not in tables:
+                    raise ValidationError(
+                        f"event {row['event_id']!r} branch[{branch_index}] "
+                        f"effect[{index}]: 보상 목록 {table_id!r} 이(가) 없습니다")
+                # 보상을 고르고 나면 런은 지도로 돌아가므로(§3.2), 그 뒤의
+                # 연산자는 플레이어가 이미 화면을 떠난 다음에 놓이게 된다.
+                if index != len(effects) - 1:
+                    raise ValidationError(
+                        f"event {row['event_id']!r} branch[{branch_index}]: "
+                        "'offer_reward' 뒤에 다른 효과를 둘 수 없습니다 — 수령이 "
+                        "끝나면 런이 지도로 돌아가 그 효과들이 실행되지 않습니다")
 
 
 def _validate_events(db: Database, version_id: int) -> None:

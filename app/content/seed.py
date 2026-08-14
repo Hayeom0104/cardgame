@@ -709,6 +709,15 @@ def _seed_events(db: Database, version: int) -> None:
              "effects": [{"operator": "grant_currency",
                           "params": {"currency": "run_currency", "amount": 60}}]},
         ]),
+        # `offer_reward` 를 실제로 쓰는 이벤트. 이 연산자는 등록도 검증도
+        # 되어 있으면서 어느 콘텐츠도 쓰지 않아, 그것이 만든 보류 선택을
+        # 처리하는 코드가 없다는 사실이 드러나지 않았다.
+        ("event_원소무기고", "원소 무기고", "choice", "none", [
+            {"label": "무기를 하나 고른다",
+             "effects": [{"operator": "offer_reward",
+                          "params": {"reward_table_id": "reward_원소무기고"}}]},
+            {"label": "손대지 않는다", "effects": []},
+        ]),
         ("event_길잃은학자", "길 잃은 학자", "choice", "none", [
             {"label": "길을 알려준다",
              "effects": [{"operator": "grant_currency",
@@ -729,6 +738,31 @@ def _seed_events(db: Database, version: int) -> None:
 # =====================================================================
 # §20.4 seed achievements and §9.2 research nodes
 # =====================================================================
+def _seed_reward_tables(db: Database, version: int) -> None:
+    """§10.4 `offer_reward` 가 뽑아 갈 목록.
+
+    보상 칸(§3.2)은 계정이 해금한 카드에서 고르지만, 이벤트가 주는 보상은
+    "이 이벤트에서만 나오는 것" 이어야 의미가 있다. 그 목록이 여기다.
+
+    `weight` 는 서로에 대한 비율일 뿐이라 합이 1일 필요가 없다.
+    """
+    tables = {
+        "reward_원소무기고": [
+            {"card_id": "card_화_강타", "weight": 1.0},
+            {"card_id": "card_수_보호막", "weight": 1.0},
+            {"card_id": "card_풍_질풍", "weight": 1.0},
+            {"card_id": "card_암_출혈", "weight": 1.0},
+            {"card_id": "card_광_정화", "weight": 0.5},
+        ],
+    }
+    for table_id, entries in tables.items():
+        db.execute(
+            "INSERT OR REPLACE INTO reward_tables (content_version_id, "
+            "reward_table_id, entries_json) VALUES (?, ?, ?)",
+            (version, table_id, _json(entries)),
+        )
+
+
 def _seed_passives(db: Database, version: int) -> None:
     """§6 패시브 카드.
 
@@ -907,6 +941,7 @@ def seed_all(db: Database, *, publish_version: bool = True) -> int:
     _seed_enemies(db, version)
     _seed_encounters(db, version)
     _seed_worlds(db, version)
+    _seed_reward_tables(db, version)
     _seed_events(db, version)
     _seed_passives(db, version)
     _seed_achievements(db, version)
