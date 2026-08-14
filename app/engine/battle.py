@@ -26,6 +26,7 @@ from app.engine import card_upgrades as cu
 from app.engine import deck
 from app.engine import effects as fx
 from app.engine import enemy_ai as ai
+from app.engine import passives as pv
 from app.engine import statuses as st
 from app.engine import stats
 from app.engine import targeting as tg
@@ -148,6 +149,10 @@ class BattleEngine:
         """Round 1 setup: snapshot, resource, and the first telegraphs."""
         self.build_round_order(1)
         self._refill_resource()
+        # §6 — 상시 패시브는 첫 텔레그래프보다 먼저 걸린다. 적의 계획은 이미
+        # 오른 방어력을 보고 세워져야 하기 때문이다.
+        pv.snapshot_battle(self.db, self.battle_id, self.run_id)
+        pv.fire(self, pv.TRIGGER_BATTLE_START)
         self._build_plans(1)
         self.db.execute(
             "UPDATE battles SET turn_cursor = 0, turn_phase = ? WHERE battle_id = ?",
@@ -738,6 +743,10 @@ class BattleEngine:
         self.build_round_order(next_round)
         # 6. Refill and PERSIST party_resource_current.
         self._refill_resource()
+        # 6a. §6 — 라운드 시작 패시브. 자원을 채운 뒤에 도는 것은 자원을
+        #     건드리는 패시브가 리필에 덮이지 않게 하기 위해서고, 계획을 세우기
+        #     전에 도는 것은 적이 이미 걸린 버프를 보고 판단해야 하기 때문이다.
+        pv.fire(self, pv.TRIGGER_ROUND_START)
         # 7. Create plans for living enemies that have none.
         self._build_plans(next_round)
         # 8. turn_cursor <- first entry of the new snapshot

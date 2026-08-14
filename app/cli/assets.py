@@ -27,6 +27,7 @@ from app.render.theme import load as load_theme
 #: 콘텐츠에서 그림이 필요한 것들. (에셋 종류, 테이블, id 열, 이름 열)
 CONTENT_SOURCES = (
     ("card", "cards", "card_id", "name"),
+    ("passive", "passive_cards", "passive_card_id", "name"),
     ("character", "characters", "character_id", "name"),
     ("enemy", "enemies", "enemy_id", "name"),
     ("banner", "banners", "banner_id", "name"),

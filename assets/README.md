@@ -10,6 +10,7 @@
 | 폴더 | 무엇 | 예 |
 | --- | --- | --- |
 | `cards/` | 카드 그림 | `cards/card_화_강타.png` |
+| `passives/` | 패시브 카드 그림 | `passives/pas_예리함.png` |
 | `characters/` | 캐릭터 초상화 | `characters/char_ignis.png` |
 | `enemies/` | 적 그림 | `enemies/enemy_w1_고블린.png` |
 | `banners/` | 뽑기 배너의 큰 그림 | `banners/b_limited_01.png` |

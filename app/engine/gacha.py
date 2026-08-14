@@ -41,7 +41,7 @@ class GachaError(RuntimeError):
 class PullResult:
     index: int
     band: str
-    kind: str                  # 'character' | 'card'
+    kind: str                  # 'character' | 'card' | 'passive'
     entity_id: str
     is_duplicate: bool = False
     fragments: int = 0
@@ -279,6 +279,17 @@ def _resolve_entity(conn, rng: random.Random, balance: Balance, *, user_id: int,
                     guarantee_pending: bool) -> PullResult:
     won_5050: bool | None = None
 
+    # §6 획득 — 패시브는 가챠로만 해금된다. §5.1이 확정한 것은 캐릭터:카드
+    # 비율(3:7)이므로, 그 비율을 흔들지 않도록 패시브는 **카드 몫 안에서**
+    # 갈라져 나온다. 비율은 `gacha_passive_share_of_cards` 로 조정한다.
+    # 뽑을 패시브가 아예 없으면 주사위를 굴리지 않는다 — 패시브를 넣기 전과
+    # 후로 같은 시드의 결과가 달라지지 않게 하기 위해서다.
+    if kind == "card":
+        share = float(balance.get("gacha_passive_share_of_cards"))
+        if share > 0 and _pool_for(conn, balance, content_version_id, "passive", band):
+            if rng.random() < share:
+                kind = "passive"
+
     if (band == BAND_TOP and banner["banner_type"] == "limited"
             and banner["pickup_type"]):
         # §5.4.1 — won or guaranteed yields the pickup target.
@@ -317,6 +328,17 @@ def _pool_for(conn, balance: Balance, content_version_id: int, kind: str,
 
     tiers = [int(tier) for tier in balance.get("gacha_band_rarity_tiers")[band]]
     placeholders = ",".join("?" * len(tiers))
+
+    if kind == "passive":
+        # §5.6 — 패시브도 같은 6등급 체계를 쓰므로 등급 밴드도 그대로다.
+        rows = conn.execute(
+            f"SELECT passive_card_id AS id FROM passive_cards "
+            f"WHERE content_version_id = ? AND is_retired = 0 AND in_gacha_pool = 1 "
+            f"AND rarity_tier IN ({placeholders}) ORDER BY passive_card_id",
+            (content_version_id, *tiers),
+        ).fetchall()
+        return [row["id"] for row in rows if row["id"] != exclude_id]
+
     rows = conn.execute(
         f"SELECT card_id FROM cards WHERE content_version_id = ? AND is_retired = 0 "
         f"AND rarity_tier IN ({placeholders}) ORDER BY card_id",
@@ -365,6 +387,35 @@ def _grant(conn, balance: Balance, user_id: int, kind: str, entity_id: str,
             "amount = amount + excluded.amount",
             (user_id, entity_id, result.fragments),
         )
+        conn.execute(
+            "UPDATE accounts SET wildcards = wildcards + ? WHERE user_id = ?",
+            (result.wildcards, user_id),
+        )
+        return result
+
+    if kind == "passive":
+        existing = conn.execute(
+            "SELECT passive_card_id FROM unlocked_passives WHERE user_id = ? "
+            "AND passive_card_id = ?", (user_id, entity_id),
+        ).fetchone()
+        if existing is None:
+            conn.execute(
+                "INSERT INTO unlocked_passives (user_id, passive_card_id, "
+                "unlocked_at) VALUES (?, ?, ?)", (user_id, entity_id, utcnow()),
+            )
+            return result
+        # 패시브에는 업그레이드 경로가 없어서 조각을 줄 곳이 없다. 중복은
+        # 와일드카드로 바꾼다 — 카드/캐릭터 강화에 두루 쓰이는 재화라
+        # 패시브 전용 재화를 새로 만들지 않아도 된다.
+        # 🟡 수치는 `duplicate_passive_yield`(config/04_뽑기.toml)에서 조정한다.
+        tier = conn.execute(
+            "SELECT rarity_tier FROM passive_cards WHERE content_version_id = ? "
+            "AND passive_card_id = ?", (content_version_id, entity_id),
+        ).fetchone()
+        yields = balance.get("duplicate_passive_yield")
+        result.is_duplicate = True
+        result.wildcards = int(yields.get(str(tier["rarity_tier"] if tier else 1),
+                                          yields["1"]))
         conn.execute(
             "UPDATE accounts SET wildcards = wildcards + ? WHERE user_id = ?",
             (result.wildcards, user_id),

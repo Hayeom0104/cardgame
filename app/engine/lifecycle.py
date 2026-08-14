@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from app.content.balance import Balance
 from app.db.connection import Database, utcnow
 from app.engine import map_gen
+from app.engine import passives as pv
 from app.engine.rng import JournaledRng
 
 logger = logging.getLogger(__name__)
@@ -180,13 +181,10 @@ def selectable_passives(db: Database, user_id: int,
     this list and `validate_build` accepts exactly this list, so a forged
     `custom_id` submission can never smuggle in an id the screen never showed.
 
-    §6 passive content is not authored in the launch content set (see README),
-    and the `cards` table carries no passive marker — `cards.category` is one
-    of 공격 | 방어 | 버프디버프 | 회복. There is therefore nothing to select yet,
-    and this returns empty rather than filtering on a value that cannot exist.
-    When passives are authored, this function is the only place that changes.
+    §6 획득 순서대로, 가챠로 해금(`unlocked_passives`)한 것만 나온다. 한 번도
+    뽑지 않은 계정에는 빈 목록이 돌아가고, 준비 화면은 그 단계를 건너뛴다.
     """
-    return []
+    return pv.owned(db, user_id, content_version_id)
 
 
 def validate_build(db: Database, balance: Balance, request: RunBuildRequest,
@@ -234,7 +232,7 @@ def validate_build(db: Database, balance: Balance, request: RunBuildRequest,
     # Ownership, not just count: `run_passives` must never hold an id the
     # account cannot actually bring.
     if passives:
-        legal = {row["card_id"] for row in
+        legal = {row["passive_card_id"] for row in
                  selectable_passives(db, request.user_id, content_version_id)}
         for passive_id in passives:
             if passive_id not in legal:

@@ -58,6 +58,10 @@ card = { directory = "cards", size = [180, 250], fit = "cover" }
 # 캐릭터 초상화. 파일 이름은 캐릭터 id 입니다.
 character = { directory = "characters", size = [140, 140], fit = "cover" }
 
+# 패시브 카드 그림. 파일 이름은 패시브 id 입니다.
+# (예: assets/passives/pas_예리함.png) 행동 카드와 같은 크기로 그립니다.
+passive = { directory = "passives", size = [180, 250], fit = "cover" }
+
 # 적 그림. 파일 이름은 적 id 입니다.
 enemy = { directory = "enemies", size = [140, 140], fit = "cover" }
 

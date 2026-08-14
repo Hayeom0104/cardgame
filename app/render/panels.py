@@ -538,7 +538,8 @@ def render_gacha_results(results: list[dict]) -> Attachment:
         if top + size[1] > canvas.height:
             break
 
-        kind = "character" if result.get("kind") == "character" else "card"
+        kind = result.get("kind")
+        kind = kind if kind in ("character", "passive") else "card"
         art = canvas.assets.art(
             kind, str(result.get("entity_id", "")),
             label=str(result.get("name", result.get("entity_id", ""))),

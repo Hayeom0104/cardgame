@@ -38,7 +38,58 @@ def validate_version(db: Database, version_id: int) -> None:
     _validate_encounters(db, version_id)
     _validate_research(db, version_id)
     _validate_card_upgrades(db, version_id)
+    _validate_passives(db, version_id)
     _validate_constants(db, version_id)
+
+
+def _validate_passives(db: Database, version_id: int) -> None:
+    """§6 패시브 카드.
+
+    패시브에는 시전자가 없다 (`engine/passives.py` 참고). 시전자의 능력치나
+    손패에 기대는 연산자는 전투 중에 조용히 아무 일도 하지 않거나 엉뚱한
+    대상을 잡으므로, 저장하는 시점에 막는다.
+    """
+    from app.engine import passives as pv
+
+    scopes = _status_scopes(db, version_id)
+    for row in db.query("SELECT * FROM passive_cards WHERE content_version_id = ?",
+                        (version_id,)):
+        label = f"passive {row['passive_card_id']!r}"
+        if row["trigger_event"] not in pv.TRIGGERS:
+            raise ValidationError(
+                f"{label}: trigger_event {row['trigger_event']!r} 은(는) "
+                f"{list(pv.TRIGGERS)} 중 하나여야 합니다 (§6)")
+        if row["target_scope"] not in pv.SCOPES:
+            raise ValidationError(
+                f"{label}: target_scope {row['target_scope']!r} 은(는) "
+                f"{list(pv.SCOPES)} 중 하나여야 합니다")
+        if not 1 <= int(row["rarity_tier"]) <= 6:
+            raise ValidationError(f"{label}: rarity_tier must be 1-6 (§5.6)")
+        if int(row["once_per_battle"]) < 0:
+            raise ValidationError(f"{label}: once_per_battle 은 0 이상이어야 합니다")
+        try:
+            json.loads(row["trigger_params_json"] or "{}")
+        except json.JSONDecodeError as error:
+            raise ValidationError(f"{label}: trigger_params_json 이 JSON 이 아닙니다") from error
+
+        effects = _effects(row["effects_json"])
+        if not effects:
+            raise ValidationError(f"{label}: 효과가 비어 있습니다")
+        try:
+            ops.validate_effect_list(effects, ops.CTX_PASSIVE)
+        except ValidationError as error:
+            raise ValidationError(f"{label}: {error}") from error
+        for index, entry in enumerate(effects):
+            if entry.get("operator") not in pv.ALLOWED_OPERATORS:
+                raise ValidationError(
+                    f"{label}: effect[{index}] 의 {entry.get('operator')!r} 은(는) "
+                    "패시브에 쓸 수 없습니다 — 패시브는 시전자도 손패도 없이 "
+                    f"발동합니다. 쓸 수 있는 것: {sorted(pv.ALLOWED_OPERATORS)}")
+        # 적을 대상으로 하는 패시브는 §2.5.1a 의 적 풀에 속한다.
+        if row["target_scope"] == pv.SCOPE_ENEMIES:
+            _reject_scoped_statuses(effects, scopes, st.PLAYER_ONLY, label)
+        else:
+            _reject_scoped_statuses(effects, scopes, st.ENEMY_ONLY, label)
 
 
 def _validate_constants(db: Database, version_id: int) -> None:

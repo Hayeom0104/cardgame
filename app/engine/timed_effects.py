@@ -26,6 +26,22 @@ from app.db.connection import Database
 INVULNERABLE = "invulnerable"
 STAT_MODIFIER = "stat_modifier"
 
+#: `duration_rounds = -1` 은 "전투가 끝날 때까지" 를 뜻한다. §6 의 상시 패시브가
+#: 이걸 쓴다 — 라운드 수를 크게 적어 두는 것과 달리, 긴 전투에서 조용히 꺼지는
+#: 일이 없다.
+BATTLE_LONG = -1
+
+#: 위 -1 을 저장할 때 쓰는 만료 라운드. 어떤 라운드 번호보다도 크므로
+#: `expire_round` 의 조건에 절대 걸리지 않는다. 전투가 끝나면 행 자체가
+#: 사라지므로 남지 않는다.
+_NEVER = 2_000_000_000
+
+
+def _expires_after(current_round: int, duration_rounds: int) -> int:
+    if duration_rounds < 0:
+        return _NEVER
+    return current_round + duration_rounds
+
 
 def create_invulnerable(db: Database, battle_id: int, unit_id: int, *,
                         current_round: int, duration_rounds: int,
@@ -35,7 +51,7 @@ def create_invulnerable(db: Database, battle_id: int, unit_id: int, *,
         "(battle_id, battle_unit_id, effect_kind, applied_at_round, "
         " expires_after_round, source_ref) VALUES (?, ?, ?, ?, ?, ?)",
         (battle_id, unit_id, INVULNERABLE, current_round,
-         current_round + duration_rounds, source_ref),
+         _expires_after(current_round, duration_rounds), source_ref),
     )
     return int(cursor.lastrowid)
 
@@ -52,7 +68,7 @@ def create_stat_modifier(db: Database, battle_id: int, unit_id: int, *,
         " applied_at_round, expires_after_round, source_ref) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (battle_id, unit_id, STAT_MODIFIER, stat, float(delta), int(is_percent),
-         current_round, current_round + duration_rounds, source_ref),
+         current_round, _expires_after(current_round, duration_rounds), source_ref),
     )
     return int(cursor.lastrowid)
 

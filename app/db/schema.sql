@@ -790,3 +790,53 @@ CREATE TABLE IF NOT EXISTS balancing_metadata (
   source_file TEXT NOT NULL,   -- 이 설정이 정의된 config 파일 이름
   description TEXT NOT NULL
 );
+
+-- §6 패시브 카드 정의.
+--
+-- 행동 카드(`cards`)와 다른 테이블에 두는 이유: 패시브는 손에 잡히지 않고,
+-- 코스트도 원소도 없으며, 대상 선택도 하지 않는다. `cards` 에 억지로 넣으면
+-- 그 네 컬럼이 전부 의미 없는 값으로 채워지고, 손패를 뽑는 모든 질의가
+-- "패시브는 빼고" 라는 조건을 달고 다녀야 한다.
+--
+-- `trigger_event` — 언제 켜지는가 (§6 "상시" 와 "전투 중 조건부" 두 갈래):
+--   battle_start  전투가 시작할 때 한 번. 지속시간 -1 과 함께 쓰면 상시 효과.
+--   round_start   라운드가 시작할 때마다.
+--   ally_fallen   아군이 쓰러졌을 때.
+-- `once_per_battle` 은 조건부 패시브가 한 전투에서 몇 번까지 터지는지 정한다.
+CREATE TABLE IF NOT EXISTS passive_cards (
+  content_version_id INTEGER NOT NULL,
+  passive_card_id    TEXT    NOT NULL,
+  name               TEXT    NOT NULL,
+  description        TEXT    NOT NULL DEFAULT '',
+  rarity_tier        INTEGER NOT NULL,          -- §5.6, 1..6
+  trigger_event      TEXT    NOT NULL,
+  trigger_params_json TEXT   NOT NULL DEFAULT '{}',
+  effects_json       TEXT    NOT NULL,          -- ordered [{operator, params}]
+  target_scope       TEXT    NOT NULL DEFAULT 'party',   -- party | enemies
+  once_per_battle    INTEGER NOT NULL DEFAULT 0,
+  art_asset          TEXT,
+  in_gacha_pool      INTEGER NOT NULL DEFAULT 1,
+  is_retired         INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (content_version_id, passive_card_id)
+);
+
+-- §6 획득 — 가챠로 "해금"된 패시브. 행동 카드의 `unlocked_cards` 와 같은 역할.
+CREATE TABLE IF NOT EXISTS unlocked_passives (
+  user_id         INTEGER NOT NULL,
+  passive_card_id TEXT    NOT NULL,
+  unlocked_at     TEXT    NOT NULL,
+  PRIMARY KEY (user_id, passive_card_id)
+);
+
+-- 전투 시작 시점의 장착 패시브 스냅샷.
+--
+-- `run_passives` 를 직접 읽지 않는 이유는 §16.2.3 과 같다: 전투 중에 런의
+-- 장착이 바뀌어도 진행 중인 전투는 시작할 때의 구성으로 끝나야 한다.
+-- `fired_count` 는 `once_per_battle` 을 강제한다.
+CREATE TABLE IF NOT EXISTS battle_passives (
+  battle_id       INTEGER NOT NULL,
+  passive_slot    INTEGER NOT NULL,
+  passive_card_id TEXT    NOT NULL,
+  fired_count     INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (battle_id, passive_slot)
+);

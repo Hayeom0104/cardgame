@@ -15,7 +15,9 @@ import json
 from app.content.balance import seed_constants
 from app.content.versioning import create_version, publish
 from app.db.connection import Database, utcnow
+from app.engine import passives as pv
 from app.engine import statuses as st
+from app.engine import timed_effects as te
 
 STARTER_CHARACTER_ID = "starter_001"    # §4.6.1, display name is 🔴 PENDING (P-2)
 TUTORIAL_WORLD_ID = "world_tutorial"
@@ -496,6 +498,69 @@ def _seed_events(db: Database, version: int) -> None:
 # =====================================================================
 # §20.4 seed achievements and §9.2 research nodes
 # =====================================================================
+def _seed_passives(db: Database, version: int) -> None:
+    """§6 패시브 카드.
+
+    §6이 확정한 것은 구조다 — 파티 공유 슬롯, 런 단위 장착, 가챠 해금,
+    6등급 체계, 그리고 "상시" 와 "전투 중 조건부" 두 발동 방식. 효과 목록
+    자체는 문서에 없다. 그래서 여기 있는 8장은 **그 구조를 빠짐없이 밟는
+    출시용 세트**이지 확정된 기획이 아니다: 등급 1~6이 모두 한 번씩 나오고,
+    두 발동 방식이 모두 쓰이고, 파티 대상과 적 대상이 모두 있다.
+
+    수치를 바꾸거나 장수를 늘리는 것은 관리자 대시보드에서 초안을 열어
+    하면 되고, 코드는 손대지 않아도 된다.
+    """
+    rows = [
+        # (id, 이름, 설명, 등급, 발동, 조건, 대상, 1전투 제한, 효과)
+        ("pas_예리함", "예리함", "전투 내내 파티의 공격력이 오릅니다.", 1,
+         pv.TRIGGER_BATTLE_START, {}, pv.SCOPE_PARTY, 0,
+         [{"operator": "modify_stat",
+           "params": {"stat": "atk", "delta": 2, "duration_rounds": te.BATTLE_LONG}}]),
+        ("pas_굳은가죽", "굳은 가죽", "전투 내내 파티의 방어력이 오릅니다.", 2,
+         pv.TRIGGER_BATTLE_START, {}, pv.SCOPE_PARTY, 0,
+         [{"operator": "modify_stat",
+           "params": {"stat": "def", "delta": 2, "duration_rounds": te.BATTLE_LONG}}]),
+        ("pas_선제방벽", "선제 방벽", "전투를 시작할 때 파티가 방어도를 얻습니다.", 2,
+         pv.TRIGGER_BATTLE_START, {}, pv.SCOPE_PARTY, 0,
+         [{"operator": "grant_block", "params": {"mode": "multiplier", "value": 1.0}}]),
+        ("pas_경보", "경보", "전투 내내 파티의 속도가 오릅니다.", 3,
+         pv.TRIGGER_BATTLE_START, {}, pv.SCOPE_PARTY, 0,
+         [{"operator": "modify_stat",
+           "params": {"stat": "spd", "delta": 5, "duration_rounds": te.BATTLE_LONG}}]),
+        ("pas_전열정비", "전열 정비", "라운드가 시작할 때마다 파티가 방어도를 얻습니다.", 4,
+         pv.TRIGGER_ROUND_START, {}, pv.SCOPE_PARTY, 0,
+         [{"operator": "grant_block", "params": {"mode": "multiplier", "value": 0.5}}]),
+        # 조건부 발동 (§6) — 한 전투에 한 번만.
+        ("pas_역전의호흡", "역전의 호흡",
+         "파티원이 절반 아래로 떨어진 라운드에 자원을 더 얻습니다. 전투당 1회.", 4,
+         pv.TRIGGER_ROUND_START, {"hp_below": 0.5}, pv.SCOPE_PARTY, 1,
+         [{"operator": "modify_resource", "params": {"delta": 2}}]),
+        ("pas_최후의불꽃", "최후의 불꽃",
+         "파티원이 40% 아래로 떨어지면 회복하고 공격력이 오릅니다. 전투당 1회.", 5,
+         pv.TRIGGER_ROUND_START, {"hp_below": 0.4}, pv.SCOPE_PARTY, 1,
+         [{"operator": "heal", "params": {"mode": "percent_max_hp", "value": 0.2}},
+          {"operator": "apply_status",
+           "params": {"status_id": st.ATTACK_UP, "stacks": 3}}]),
+        ("pas_적진교란", "적진 교란", "전투를 시작할 때 적 전체를 약화시킵니다.", 6,
+         pv.TRIGGER_BATTLE_START, {}, pv.SCOPE_ENEMIES, 0,
+         [{"operator": "apply_status",
+           "params": {"status_id": st.DEFENSE_DOWN, "stacks": 2}},
+          {"operator": "apply_status",
+           "params": {"status_id": st.SPEED_DOWN, "stacks": 1}}]),
+    ]
+    for (passive_id, name, description, tier, trigger, trigger_params, scope,
+         once, effects) in rows:
+        db.execute(
+            "INSERT OR REPLACE INTO passive_cards (content_version_id, "
+            "passive_card_id, name, description, rarity_tier, trigger_event, "
+            "trigger_params_json, effects_json, target_scope, once_per_battle, "
+            "art_asset, in_gacha_pool, is_retired) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, 0)",
+            (version, passive_id, name, description, tier, trigger,
+             _json(trigger_params), _json(effects), scope, once),
+        )
+
+
 def _seed_achievements(db: Database, version: int) -> None:
     # The ladder shares one counter deliberately, so a player always knows how
     # progress is made. The tutorial boss counts toward `boss_defeated`.
@@ -589,6 +654,7 @@ def seed_all(db: Database, *, publish_version: bool = True) -> int:
     _seed_encounters(db, version)
     _seed_worlds(db, version)
     _seed_events(db, version)
+    _seed_passives(db, version)
     _seed_achievements(db, version)
     _seed_research(db, version)
     _seed_banners(db, version)

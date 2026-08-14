@@ -237,7 +237,8 @@ def passive_select_screen(db: Database, user_id: int, content_version_id: int,
             {"type": "string_select", "custom_id": f"{PREP_PREFIX}passive",
              "placeholder": "패시브를 선택하세요",
              "min_values": 0, "max_values": min(slots, len(passives)),
-             "options": [{"label": row["name"], "value": row["card_id"]}
+             "options": [{"label": row["name"], "value": row["passive_card_id"],
+                          "description": (row["description"] or "")[:100]}
                          for row in passives[:25]]},
             {"type": "button", "custom_id": f"{PREP_PREFIX}skip_passive",
              "label": "건너뛰기"},
@@ -288,8 +289,12 @@ def confirm_screen(db: Database, user_id: int, content_version_id: int,
             "job_role": row["job_role"], **block,
         })
 
-    if draft["passives"]:
-        lines.append(f"패시브: {len(draft['passives'])}개")
+    chosen_passives = [row for row in
+                       lc.selectable_passives(db, user_id, content_version_id)
+                       if row["passive_card_id"] in draft["passives"]]
+    if chosen_passives:
+        lines.append("패시브: "
+                     + " · ".join(row["name"] for row in chosen_passives))
 
     return {
         "action": "edit",
@@ -302,7 +307,7 @@ def confirm_screen(db: Database, user_id: int, content_version_id: int,
         "attachments": visuals.prep(
             db, balance, user_id=user_id, content_version_id=content_version_id,
             world_name=world["name"] if world else draft["world_id"],
-            party=members),
+            party=members, passives=chosen_passives),
     }
 
 
@@ -403,7 +408,7 @@ def handle_prep(db: Database, balance: Balance, user_id: int, custom_id: str,
             return world_select_screen(db, user_id, content_version_id)
         chosen = list(dict.fromkeys(values)) if step == "passive" else []
         # `custom_id`는 위조될 수 있으니, 화면이 실제로 보여준 목록과 대조한다.
-        legal = {row["card_id"] for row in
+        legal = {row["passive_card_id"] for row in
                  lc.selectable_passives(db, user_id, content_version_id)}
         if not set(chosen) <= legal:
             return {"action": "edit", "content": errors.ILLEGAL_STATE}
@@ -592,8 +597,10 @@ def format_results(db: Database, outcome: gacha.GachaOutcome,
 
 def _entity_name(db: Database, result: gacha.PullResult,
                  content_version_id: int) -> str:
-    table, column = (("characters", "character_id") if result.kind == "character"
-                     else ("cards", "card_id"))
+    table, column = {
+        "character": ("characters", "character_id"),
+        "passive": ("passive_cards", "passive_card_id"),
+    }.get(result.kind, ("cards", "card_id"))
     row = db.one(
         f"SELECT name FROM {table} WHERE content_version_id = ? AND {column} = ?",
         (content_version_id, result.entity_id))
