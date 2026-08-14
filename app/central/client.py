@@ -53,6 +53,19 @@ MAX_PNG_BYTES = 4 * 1024 * 1024
 MAX_PNG_DIMENSION = 4096
 MAX_FILENAME_LENGTH = 128
 
+#: Component Contract 2.0 — outer rows are numeric type 1, buttons are 2,
+#: string selects are 3. Handlers build human-readable flat dicts
+#: (`{"type": "button"}`); `to_action_rows` is the one place that turns those
+#: into what Central actually accepts.
+ACTION_ROW_TYPE = 1
+BUTTON_TYPE = 2
+STRING_SELECT_TYPE = 3
+_COMPONENT_TYPE_NUMBERS = {"button": BUTTON_TYPE, "string_select": STRING_SELECT_TYPE}
+#: 🟡 Discord's own button schema requires a style (1-5); Central's guide isn't
+#: in this repo to confirm it forwards that requirement verbatim, but sending
+#: a default is strictly safer than omitting a field a real button needs.
+DEFAULT_BUTTON_STYLE = 1
+
 
 class CapabilityError(RuntimeError):
     """Raised when the Central Bot does not satisfy §1.3.4. Fails startup."""
@@ -73,6 +86,32 @@ class CurrencyResult:
     @property
     def matched(self) -> bool:
         return self.requested == self.applied
+
+
+#: §1.3.8 `/v1/currency/add` response keys, in preference order. The deployed
+#: Central `ChangeResponse` returns `amount` (the applied delta) and
+#: `value_after` (the balance after) — confirmed against a real production
+#: +500 daily-attendance grant that this client used to misread as `applied=0`
+#: because it only looked for `applied_delta`/`applied`/`balance`, which
+#: silently routed a successfully-applied grant into `OPERATOR_REQUIRED`.
+#: The old names are kept as a fallback only; never reorder them ahead of the
+#: confirmed keys.
+APPLIED_DELTA_KEYS = ("amount", "applied_delta", "applied")
+BALANCE_AFTER_KEYS = ("value_after", "balance", "balance_after")
+
+
+def _applied_delta(payload: dict) -> int:
+    for key in APPLIED_DELTA_KEYS:
+        if key in payload and payload[key] is not None:
+            return int(payload[key])
+    return 0
+
+
+def _balance_after(payload: dict) -> int | None:
+    for key in BALANCE_AFTER_KEYS:
+        if key in payload and payload[key] is not None:
+            return int(payload[key])
+    return None
 
 
 class CentralClient:
@@ -123,8 +162,8 @@ class CentralClient:
         })
         return CurrencyResult(
             requested=amount,
-            applied=int(payload.get("applied_delta", payload.get("applied", 0))),
-            balance_after=payload.get("balance"),
+            applied=_applied_delta(payload),
+            balance_after=_balance_after(payload),
         )
 
     def currency_deduct(self, user_id: int, amount: int,
@@ -136,9 +175,8 @@ class CentralClient:
             "amount": -abs(amount),
             "idempotency_key": idempotency_key,
         })
-        applied = int(payload.get("applied_delta", payload.get("applied", 0)))
-        return CurrencyResult(requested=-abs(amount), applied=applied,
-                              balance_after=payload.get("balance"))
+        return CurrencyResult(requested=-abs(amount), applied=_applied_delta(payload),
+                              balance_after=_balance_after(payload))
 
     # =================================================================
     # §1.3.5 private thread lifecycle
@@ -162,7 +200,7 @@ class CentralClient:
             "thread_name": thread_name,
             "content": content,
             "embeds": embeds or [],
-            "components": components or [],
+            "components": to_action_rows(components),
         })
 
     def delete_thread(self, *, logical_session_id: str, expected_thread_id: int,
@@ -224,7 +262,7 @@ class CentralClient:
             "new_presentation_revision": new_presentation_revision,
             "content": content,
             "embeds": embeds or [],
-            "components": components or [],
+            "components": to_action_rows(components),
             "attachment_policy": attachment_policy,
         })
 
@@ -269,6 +307,55 @@ def validate_png_attachment(*, data_b64: str, filename: str, width: int,
     if not filename.endswith(".png") or len(filename) > MAX_FILENAME_LENGTH:
         raise CentralError(f"filename must be a .png basename of at most "
                            f"{MAX_FILENAME_LENGTH} characters")
+
+
+def to_action_rows(components: list[dict] | None) -> list[dict]:
+    """Component Contract 2.0 — wrap a flat component list into action rows.
+
+    Deckout's handlers build a flat list of human-readable dicts
+    (`{"type": "button", ...}`, `{"type": "string_select", ...}`). Central
+    requires an explicit outer row (`{"type": 1, "components": [...]}`) and
+    numeric component types inside it — a flat, string-typed list is a
+    contract violation Central rejects outright, which is what turned every
+    interactive reply (including the very first prep screen) into the
+    generic "처리 중 문제가 발생했습니다" error.
+
+    A select menu takes its row alone; up to five buttons share a row.
+    Idempotent — a list that is already wrapped in rows (type 1 outer dicts)
+    passes through unchanged, so this is safe to apply defensively at more
+    than one boundary.
+    """
+    if not components:
+        return []
+    if all(isinstance(item, dict) and item.get("type") == ACTION_ROW_TYPE
+           for item in components):
+        return components
+
+    rows: list[dict] = []
+    current_buttons: list[dict] = []
+
+    def flush_buttons() -> None:
+        if current_buttons:
+            rows.append({"type": ACTION_ROW_TYPE, "components": list(current_buttons)})
+            current_buttons.clear()
+
+    for item in components:
+        kind = item.get("type")
+        numeric = _COMPONENT_TYPE_NUMBERS.get(kind)
+        if numeric is None:
+            raise CentralError(f"unknown component type {kind!r}")
+        body = {key: value for key, value in item.items() if key != "type"}
+        body["type"] = numeric
+        if numeric == BUTTON_TYPE:
+            body.setdefault("style", DEFAULT_BUTTON_STYLE)
+            current_buttons.append(body)
+            if len(current_buttons) == 5:
+                flush_buttons()
+        else:
+            flush_buttons()
+            rows.append({"type": ACTION_ROW_TYPE, "components": [body]})
+    flush_buttons()
+    return rows
 
 
 def validate_multi_action(children: list[dict]) -> None:

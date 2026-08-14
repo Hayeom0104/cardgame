@@ -22,8 +22,12 @@ logger = logging.getLogger(__name__)
 
 
 def attach(*attachments) -> list[dict]:
-    """중앙봇이 받는 모양으로 바꾼다 (§1.3.7)."""
-    return [{"filename": item.filename, "data_b64": item.data_b64}
+    """중앙봇이 받는 모양으로 바꾼다 (§1.3.7).
+
+    `content_type` 이 빠져 있었다 — 첨부가 전부 PNG 인데도 그 사실을 응답에
+    적어 보내지 않고 있었다."""
+    return [{"filename": item.filename, "data_b64": item.data_b64,
+             "content_type": "image/png"}
             for item in attachments if item is not None]
 
 

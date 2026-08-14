@@ -139,18 +139,24 @@ def test_every_screen_renders_within_the_attachment_limits():
         assert attachment.decoded_size > 0
 
 
-def test_the_battle_screen_is_two_panels_plus_the_hand():
-    """§1.3.7 두 패널 규칙. 손패를 넘기면 한 장이 더 붙는다."""
+def test_the_battle_screen_never_exceeds_the_two_attachment_limit():
+    """§1.3.7 — 중앙봇은 action 하나에 PNG 두 장까지만 받는다.
+
+    손패를 세 번째 첨부로 따로 보내던 시절에는 실제 전투마다(손패가 항상
+    있으므로) 이 한도를 넘겨 거절당했다. 손패가 있어도 없어도 항상 두 장이어야
+    한다."""
     ally = [{"character_id": "c", "name": "아군", "hp_current": 10, "hp_max": 20,
              "statuses": []}]
     enemy = [{"battle_unit_id": 1, "enemy_id": "e", "name": "적",
               "hp_current": 5, "hp_max": 10}]
-    assert len(panels.render_battle_screen(ally, enemy, {}, resource=3,
-                                           round_no=1)) == 2
+    without_hand = panels.render_battle_screen(ally, enemy, {}, resource=3,
+                                                round_no=1)
+    assert len(without_hand) == 2
     with_hand = panels.render_battle_screen(ally, enemy, {}, resource=3,
                                             round_no=1, hand=[CARD])
-    assert len(with_hand) == 3
-    assert with_hand[2].filename == "deckout_hand.png"
+    assert len(with_hand) == 2
+    for attachment in with_hand:
+        attachment.validate()
 
 
 def test_a_sold_out_item_stays_on_the_shelf():

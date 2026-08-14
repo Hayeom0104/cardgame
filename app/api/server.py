@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse
 from app.api import events as ev
 from app.api import handlers
 from app.central import delivery, surfaces
-from app.central.client import CapabilityError, CentralClient
+from app.central.client import CapabilityError, CentralClient, to_action_rows
 from app.config import settings
 from app.content.balance import Balance
 from app.content.versioning import current_version_id
@@ -74,13 +74,17 @@ async def lifespan(app: FastAPI):
         # 그리는 일이라 §16.6 단일 기록자 큐를 통해야 하므로 계획으로 남긴다.
         state["expired_settled"] = _settle_expired(
             db, state["balance"], plan, state.get("central"))
-        # 계획을 세워 놓고 실행하지 않으면 그 계획은 없는 것과 같다. 나머지
-        # 항목(전투·상점 화면 다시 그리기)은 런이 그대로 살아 있어 플레이어가
-        # 이어서 누를 수 있지만, 아래 둘은 **플레이어가 스스로 풀 수 없다.**
+        # 계획을 세워 놓고 실행하지 않으면 그 계획은 없는 것과 같다. 아래 둘은
+        # **플레이어가 스스로 풀 수 없다.**
         state["settlements_resumed"] = _resume_settlements(
             db, state["balance"], plan, state.get("central"))
         state["surfaces_retried"] = _retry_surfaces(
             db, plan, state.get("central"))
+        # `rerender_*`/`resume_map` 도 마찬가지로 계획만 세워지고 아무도
+        # 실행하지 않았다 — 로컬 상태는 전투로 넘어갔는데 디스코드 화면은
+        # 지도에 멈춰 있는 채로 방치되는 사고가 바로 이 구멍이었다.
+        state["stale_screens_rerendered"] = _rerender_stale_screens(
+            db, state["balance"], plan, state.get("central"))
     if state["central"] is not None:
         from app.central.transactions import resume_pending
         from app.engine.progression import local_handlers
@@ -214,6 +218,35 @@ def _retry_surfaces(db: Database, plan: list[dict], central=None) -> int:
     return retried
 
 
+def _rerender_stale_screens(db: Database, balance, plan: list[dict],
+                            central=None) -> int:
+    """로컬 상태는 앞서 있는데 화면 전달이 실패한 런의 글자·버튼을 다시 맞춘다.
+
+    `recover_runs` 는 처음부터 이 런들을 `resume_map`/`rerender_battle`/
+    `rerender_pending_choice` 로 분류하고 있었다. 그 계획을 아무도 실행하지
+    않아, 로컬 상태는 전투로 넘어갔는데 스레드에는 지도가 남아 있는 런이
+    생겨도 재기동으로는 고쳐지지 않았다.
+
+    `rerun_node_resolution`(노드 해결 도중)은 여기서 다루지 않는다 — 안전한
+    재구성을 하려면 노드 해결을 다시 실행해야 하는데, 그 경계는 아직
+    검증하지 못했다. 발명하는 대신 남겨 둔다.
+    """
+    rerendered = 0
+    for entry in plan:
+        if entry.get("action") not in ("resume_map", "rerender_battle",
+                                       "rerender_pending_choice"):
+            continue
+        try:
+            if surfaces.rerender_stale_screen(db, balance, central, entry["run_id"]):
+                rerendered += 1
+        except Exception:                                        # noqa: BLE001
+            logger.exception("run %s 의 화면을 다시 맞추지 못했습니다",
+                             entry["run_id"])
+    if rerendered:
+        logger.info("기동 시 화면이 밀려 있던 런 %d개를 다시 맞췄습니다", rerendered)
+    return rerendered
+
+
 app = FastAPI(title="Deckout", lifespan=lifespan)
 
 # §10.1 관리자 대시보드. 중앙봇 계약(§1.3)과 완전히 분리된 경로이며,
@@ -280,6 +313,13 @@ async def event(request: Request) -> JSONResponse:
     response = surfaces.fulfil_thread_request(
         db, state.get("central"), response,
         parent_channel_id=settings.parent_channel_id)
+
+    # Component Contract 2.0 — this HTTP response body IS the action Central
+    # executes; it never passes through CentralClient. Handlers build a flat,
+    # human-readable component list, so it has to be wrapped into action rows
+    # with numeric types right here, at the very last step before it leaves.
+    if "components" in response:
+        response["components"] = to_action_rows(response["components"])
 
     # Recorded only after the handler returns. Marking it up front would make a
     # handler exception permanently swallow Central's redelivery of an event

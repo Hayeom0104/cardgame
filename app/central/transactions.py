@@ -307,6 +307,71 @@ def _result(row) -> TransactionResult:
 
 
 # =====================================================================
+# §17.3 rule 8 — operator reconciliation for a parked GRANT
+# =====================================================================
+def reconcile_operator_required(db: Database, central: CentralClient, *,
+                                tx_id: str | None = None,
+                                handlers: dict[str, Callable] | None = None
+                                ) -> list[TransactionResult]:
+    """Re-examine GRANT transactions parked at `OPERATOR_REQUIRED`.
+
+    `OPERATOR_REQUIRED` is deliberately in `TERMINAL_STATUSES` — `resume_pending`
+    never touches it, because an applied-delta mismatch on a grant must not
+    auto-resolve on every startup. This is the operator's tool, called by hand
+    (e.g. `python -m app.cli.reconcile_transactions`), not part of the startup
+    scan.
+
+    It re-issues the grant's ORIGINAL idempotency key — never a fresh one, for
+    the same reason §17.3 rule 6 re-issues the same key on `coin_unknown`.
+    Central's idempotency guarantee means this cannot double-grant: a key
+    already settled just replays its stored result. That is exactly how a
+    grant Central genuinely applied in full, but that Deckout misread as
+    partial (e.g. because it parsed the wrong response fields), gets
+    reconciled here without ever calling `currency_add` for a fresh amount.
+
+    A transaction whose re-checked applied delta still does not match the
+    requested amount stays at `OPERATOR_REQUIRED` — a real partial grant is
+    not something this function may resolve on its own.
+    """
+    query = ("SELECT * FROM purchase_transactions WHERE status = ? "
+            "AND direction = ?")
+    params: list = [OPERATOR_REQUIRED, GRANT]
+    if tx_id is not None:
+        query += " AND tx_id = ?"
+        params.append(tx_id)
+    rows = db.query(query, tuple(params))
+    return [_reconcile_one_grant(db, central, row, (handlers or {}).get(row["operation"]),
+                                 row["operation"])
+            for row in rows]
+
+
+def _reconcile_one_grant(db, central, row, apply_local, kind) -> TransactionResult:
+    tx_id = row["tx_id"]
+    amount = abs(int(row["expected_coin_delta"]))
+    try:
+        result: CurrencyResult = central.currency_add(
+            row["user_id"], amount, row["coin_idempotency_key"])
+    except Exception as error:
+        logger.warning("operator reconciliation for %s unclear: %s", tx_id, error)
+        return _reload(db, tx_id)          # stays at OPERATOR_REQUIRED
+
+    if result.applied != amount:
+        # Re-checked with the SAME key and it still does not match — a real
+        # anomaly, not a parsing artifact. Leave it exactly where it was.
+        _update(db, tx_id, coin_applied_delta=result.applied)
+        return _reload(db, tx_id)
+
+    _update(db, tx_id, status=COIN_GRANTED, central_status=APPLIED,
+           coin_applied_delta=result.applied)
+    row = db.one("SELECT * FROM purchase_transactions WHERE tx_id = ?", (tx_id,))
+    if row["local_status"] != NOT_REQUIRED:
+        _apply_local_guarded(db, row, apply_local, kind)
+        _update(db, tx_id, local_status=LOCAL_APPLIED)
+    _update(db, tx_id, status=COMPLETED)
+    return _reload(db, tx_id)
+
+
+# =====================================================================
 # §17.4 recovery
 # =====================================================================
 def resume_pending(db: Database, central: CentralClient,

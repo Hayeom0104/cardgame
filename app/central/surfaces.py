@@ -285,6 +285,104 @@ def retry_surface(db: Database, central, run_id: int, *,
     return int(row["thread_id"]) if row and row["thread_id"] else None
 
 
+def rerender_stale_screen(db: Database, balance, central, run_id: int) -> bool:
+    """§16.8 나머지 복구 계획 — 로컬 상태는 앞서 있는데 화면 전달이 실패한 런의
+    글자와 버튼을 지금 상태에 맞춰 고친다.
+
+    `recover_runs()` 는 전투·보상·이벤트·상점·지도로 다시 그려야 하는 런을
+    처음부터 `rerender_*`/`resume_map` 으로 분류해 왔다. 그 계획을 실행하는
+    코드가 없어서, 예를 들어 노드 해결이 전투로 끝난 뒤 응답 전달이
+    실패하면 런은 `battle` 인데 스레드에는 지도가 그대로 남고 누를 것도
+    맞지 않는 채로 방치됐다 — 신고된 버그(로컬 상태는 전투로 넘어갔는데
+    디스코드 화면은 지도에 멈춰 있다)가 이 모양이다.
+
+    이미 커밋된 행만 읽는다. 노드를 다시 해결하거나 보상을 다시 굴리는
+    식으로 게임 로직을 재실행하지 않는다 — 그러면 이미 벌어진 일을
+    되풀이하게 되고, 그것은 §17이 화폐 트랜잭션에서 막으려는 것과 같은
+    실수다. 중첩된 연산자 정지 화면(예: 보상 중 저주 카드 정리)처럼 원래도
+    안전하게 재구성하려면 약간의 로직 재실행이 필요한 경우는 이 함수가
+    건드리지 않고 그대로 둔다 — 잘못 재구성해 화면을 보여주는 것보다야
+    낫다.
+
+    `edit_message` 는 그림을 새로 보낼 수 없다(§1.3.6 — `attachment_policy`
+    는 `preserve` 뿐이다). 글자와 버튼만 고친다. 오래된 그림은 다음 실제
+    조작이 오면 자연히 새로 그려진다 — 다만 버튼이 지금 상태와 맞아야
+    플레이어가 그 "다음 조작"을 할 수 있다.
+    """
+    from app.engine import lifecycle as lc
+
+    run = db.one("SELECT * FROM runs WHERE run_id = ?", (run_id,))
+    if run is None:
+        return False
+
+    if run["state"] == lc.PREPARING and run["thread_id"]:
+        _leave_preparing(db, run_id)
+        run = db.one("SELECT * FROM runs WHERE run_id = ?", (run_id,))
+
+    payload = _current_screen_payload(db, balance, run)
+    if payload is None:
+        return False
+    content, components = payload
+    return push_frame(db, central, run_id, content=content, components=components)
+
+
+def _current_screen_payload(db: Database, balance, run) -> tuple[str, list] | None:
+    """이미 커밋된 상태만으로 지금 화면의 (글자, 버튼)을 다시 만든다.
+
+    재구성할 수 없으면(예: 중첩 정지 화면) None — 호출자는 아무것도 보내지
+    않는다."""
+    import json as _json
+
+    from app.api import controls
+    from app.api import errors as api_errors
+    from app.engine import battle as bt
+    from app.engine import lifecycle as lc
+
+    state = run["state"]
+    run_id = run["run_id"]
+    prefix = "(화면을 새로고침했습니다) "
+
+    if state == lc.MAP_NAVIGATION:
+        return prefix + "지도에서 갈 곳을 고르세요.", controls.game_map(db, run_id)
+
+    if state in (lc.BATTLE, lc.BOSS_BATTLE):
+        active = db.one(
+            "SELECT battle_id FROM battles WHERE run_id = ? AND state = 'active' "
+            "ORDER BY battle_id DESC LIMIT 1", (run_id,))
+        if active is None:
+            return None
+        engine = bt.build_engine(
+            db, balance, battle_id=int(active["battle_id"]), run_id=run_id,
+            content_version_id=run["content_version_id"], rng=None)
+        return prefix + "전투가 진행 중입니다.", controls.battle(db, run_id, engine)
+
+    if state == lc.SHOP:
+        items = [dict(row) for row in db.query(
+            "SELECT * FROM run_shop_items WHERE run_id = ? AND node_index = ? "
+            "ORDER BY item_index", (run_id, run["current_node_index"]))]
+        return prefix + f"상점입니다. {api_errors.LABEL_EXIT}", \
+            controls.shop(db, run_id, items)
+
+    if state in (lc.REWARD_SELECTION, lc.EVENT_CHOICE):
+        choice = db.one("SELECT * FROM pending_choices WHERE run_id = ? "
+                        "AND status = 'open'", (run_id,))
+        if choice is None:
+            return None
+        if choice["choice_type"] == "reward_card":
+            options = _json.loads(choice["options_json"] or "[]")
+            return prefix + "보상 카드를 고르세요.", \
+                controls.reward(db, run_id, options, skip_available=True)
+        if choice["choice_type"] == "event_branch":
+            options = _json.loads(choice["options_json"] or "{}")
+            return prefix + f"이벤트: {options.get('name', '')}", \
+                controls.event(db, run_id, options)
+        # 다른 choice_type(중첩 연산자 정지 등)은 안전하게 재구성하려면
+        # 로직 재실행이 필요하다 — 여기서는 건드리지 않는다.
+        return None
+
+    return None
+
+
 def reopen_thread(db: Database, central, run_id: int, *,
                   parent_channel_id: int) -> int | None:
     """§16.8 — 스레드가 사라진 런의 화면을 새 세대로 다시 연다.

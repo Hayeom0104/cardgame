@@ -308,24 +308,34 @@ def render_battle_screen(ally_units: list[dict], enemy_units: list[dict],
                          telegraphs: dict[int, dict], *, resource: int,
                          round_no: int, hand: list[dict] | None = None
                          ) -> list[Attachment]:
-    """두 패널을 한 action 으로 (§1.3.7). 손패가 있으면 세 번째 장을 붙인다."""
+    """§1.3.7 — 중앙봇은 한 action 에 PNG 두 장까지만 받는다.
+
+    손패를 세 번째 첨부로 따로 보내면 실제 전투마다(손패가 항상 있으므로)
+    한도를 넘겨 거절당했다 — 상태는 이미 `battle` 로 넘어갔는데 화면은
+    지도에 멈춰 있던 원인 중 하나였다. 정보를 잃지 않도록 손패를 아군
+    패널 아래에 이어 붙여 한 장으로 만든다."""
     theme = theme_module.load()
     assets = AssetLibrary(theme)
     size = theme.size("panel_size")
 
-    attachments = [
-        to_attachment(render_ally_panel(
-            ally_units, resource=resource, round_no=round_no,
-            canvas=Canvas(size, theme, assets)), "deckout_ally.png"),
+    ally_image = render_ally_panel(
+        ally_units, resource=resource, round_no=round_no,
+        canvas=Canvas(size, theme, assets))
+    if hand:
+        hand_image = render_hand(
+            hand, resource=resource, canvas=Canvas(size, theme, assets))
+        combined = Image.new("RGB", (size[0], size[1] * 2),
+                             theme.color("color_background"))
+        combined.paste(ally_image, (0, 0))
+        combined.paste(hand_image, (0, size[1]))
+        ally_image = combined
+
+    return [
+        to_attachment(ally_image, "deckout_ally.png"),
         to_attachment(render_enemy_panel(
             enemy_units, telegraphs, canvas=Canvas(size, theme, assets)),
             "deckout_enemy.png"),
     ]
-    if hand:
-        attachments.append(to_attachment(
-            render_hand(hand, resource=resource,
-                        canvas=Canvas(size, theme, assets)), "deckout_hand.png"))
-    return attachments
 
 
 def render_hand(hand: list[dict], *, resource: int,
