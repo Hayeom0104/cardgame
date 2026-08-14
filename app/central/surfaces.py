@@ -32,7 +32,7 @@ from __future__ import annotations
 import logging
 
 from app.central import delivery
-from app.db.connection import Database
+from app.db.connection import Database, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -100,21 +100,46 @@ def fulfil_thread_request(db: Database, central, response: dict, *,
         logger.exception("런 %s 의 스레드 생성이 실패했습니다", run_id)
         return response
 
-    _bind(db, request_id, result, run_id=run_id,
-          surface_generation=int(request["surface_generation"]))
+    bound = _bind(db, request_id, result, run_id=run_id,
+                  surface_generation=int(request["surface_generation"]))
+    if bound and run_id is not None:
+        _leave_preparing(db, run_id)
     return response
 
 
+def _leave_preparing(db: Database, run_id: int) -> None:
+    """§16.2.2 [6] SURFACE 가 끝나면 런은 지도로 넘어간다.
+
+    `preparing → map_navigation` 은 §16.1의 합법 전이로 선언만 되어 있고
+    실제로 그것을 수행하는 코드가 없었다. 그래서 런은 영원히 `preparing` 에
+    머물렀고, 지도의 첫 칸을 눌러도 게이트가 "지금은 할 수 없는 동작" 으로
+    거절했다.
+
+    스레드를 열지 못했으면 옮기지 않는다 — `recover_runs` 가 `preparing` 인
+    런을 보고 `retry_surface` 로 분류해 다시 시도하게 해야 한다 (§16.8).
+    """
+    from app.engine import lifecycle as lc
+
+    cursor = db.execute(
+        "UPDATE runs SET state = ?, updated_at = ? WHERE run_id = ? AND state = ?",
+        (lc.MAP_NAVIGATION, utcnow(), run_id, lc.PREPARING))
+    if cursor.rowcount:
+        logger.info("run %s left preparing for the map", run_id)
+
+
 def _bind(db: Database, request_id: str | None, result: dict, *,
-          run_id: int | None, surface_generation: int) -> None:
-    """동기 응답을 §1.3.3 콜백과 같은 모양으로 바꿔 기록한다."""
+          run_id: int | None, surface_generation: int) -> bool:
+    """동기 응답을 §1.3.3 콜백과 같은 모양으로 바꿔 기록한다.
+
+    스레드를 실제로 묶었으면 True.
+    """
     thread_id = _first(result or {}, THREAD_ID_KEYS)
     if thread_id is None:
         logger.error(
             "스레드 생성 응답에서 thread_id 를 찾지 못했습니다. 받은 키: %s "
             "— app/central/surfaces.py 의 THREAD_ID_KEYS 를 연동 가이드에 "
             "맞춰 고쳐야 합니다", sorted((result or {}).keys()))
-        return
+        return False
 
     if request_id is None:
         # intent 없이 온 경우는 없어야 하지만, 있더라도 스레드는 묶어 둔다 —
@@ -123,7 +148,7 @@ def _bind(db: Database, request_id: str | None, result: dict, *,
         if run_id is not None:
             db.execute("UPDATE runs SET thread_id = ? WHERE run_id = ?",
                        (int(thread_id), run_id))
-        return
+        return run_id is not None
 
     delivery.handle_delivery_result(db, {
         "request_id": request_id,
@@ -134,6 +159,7 @@ def _bind(db: Database, request_id: str | None, result: dict, *,
         "message_id": _first(result or {}, MESSAGE_ID_KEYS),
         "channel_id": result.get("parent_channel_id"),
     })
+    return True
 
 
 def push_frame(db: Database, central, run_id: int, *, content: str,

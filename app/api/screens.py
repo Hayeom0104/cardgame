@@ -468,8 +468,13 @@ def surface_request(db: Database, run_id: int, user_id: int) -> dict:
         surface_generation=run["surface_generation"],
         presentation_revision=run["presentation_revision"],
     )
+    # 스레드가 열리자마자 보이는 첫 화면이 곧 지도다. 여기에 칸 버튼을 붙이지
+    # 않으면 플레이어는 열린 스레드를 보고도 한 발짝을 못 뗀다 (§3.5).
+    from app.api import controls
+
     return {
-        "content": "런을 시작합니다.",
+        "content": "런을 시작합니다. 갈 칸을 고르세요.",
+        "components": controls.game_map(db, run_id),
         "metadata": {"request_id": request_id},
         # 응답 경로의 `create_thread`가 아니라 서비스 주도 API를 쓴다 —
         # 전자는 공개 스레드를 만든다 (§1.3.5).

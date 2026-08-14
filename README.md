@@ -13,7 +13,7 @@ pip install -e ".[dev]"
 python -m app.cli.bootstrap --db deckout.db      # migrate + seed + publish content
 python -m app.cli.check_content --db deckout.db  # §10.5 validation pass
 uvicorn app.api.server:app --port 8080
-pytest                                           # 666 tests
+pytest                                           # 683 tests
 ```
 
 Registration (§1.3.0) — `route_threads: true` is **mandatory** and defaults to
@@ -99,6 +99,7 @@ double-crediting is forbidden. A registered bot name **cannot be re-registered**
 | `app/api/server.py` | §1.3.1 `/event`, `/shutdown`, `/healthz` |
 | `app/api/events.py` | §1.2 per-type parsing (five shapes, not a shared model) |
 | `app/api/custom_id.py`, `gates.py`, `errors.py` | §19.2 `custom_id`, §1.3.10 five gates, §19.4 strings |
+| `app/api/controls.py` | §19.2 the components each run screen offers |
 | `app/render/panels.py` | §11 two-panel battle screen, map, settlement |
 | `app/render/artgen.py` | placeholder art derived from the content id |
 

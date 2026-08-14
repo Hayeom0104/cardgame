@@ -272,6 +272,78 @@ def _offer_reward(db: Database, balance: Balance, rng: JournaledRng, run,
             "skip_available": True, **node_income}
 
 
+def materialize_offer_reward(db: Database, balance: Balance, rng: JournaledRng,
+                             run_id: int, choice) -> dict:
+    """§10.4 `offer_reward` — 보류된 선택을 실제 카드 제안으로 바꾼다.
+
+    이 연산자는 등록도 되어 있고 §10.5 검증도 통과하고 대시보드에서 이벤트에
+    넣을 수도 있었지만, 그것이 만든 보류 선택을 처리하는 코드가 없었다.
+    저주받은 카드 제거용 화면이 그것을 대신 받아 "제거할 저주받은 카드가
+    없습니다" 라고 답하고는 보상을 조용히 없앴다.
+
+    보상 칸(§3.2)과 다른 점은 후보를 어디서 가져오느냐 하나뿐이다: 저쪽은
+    계정이 해금한 카드에서, 이쪽은 `reward_tables` 가 지정한 목록에서
+    가져온다. 그래서 만들어 낸 선택은 보상 칸과 **같은 모양**이고, 이미
+    있는 화면과 수령 코드가 그대로 처리한다.
+    """
+    run = _run(db, run_id)
+    params = json.loads(choice["options_json"] or "{}")
+    table_id = params.get("reward_table_id")
+    table = db.one(
+        "SELECT entries_json FROM reward_tables WHERE content_version_id = ? "
+        "AND reward_table_id = ?", (run["content_version_id"], table_id))
+    if table is None:
+        raise NodeError(f"reward table {table_id!r} is not defined — §10.5 "
+                        "should have rejected this content")
+
+    entries = json.loads(table["entries_json"])
+    pool = []
+    for entry in entries:
+        card = db.one(
+            "SELECT card_id, name, element, rarity_tier FROM cards "
+            "WHERE content_version_id = ? AND card_id = ? AND is_retired = 0",
+            (run["content_version_id"], entry["card_id"]))
+        if card is None:
+            continue
+        recipients = _legal_recipients(db, run, card["element"])
+        if not recipients:
+            # 아무도 낼 수 없는 카드를 제안하면 고를 수 없는 선택지가 된다 —
+            # 보상 칸이 이미 같은 이유로 걸러 내고 있다 (§3.2).
+            continue
+        pool.append({**dict(card), "weight": float(entry.get("weight", 1.0)),
+                     "recipients": recipients})
+
+    if not pool:
+        return {"screen": "map", "reason": "no playable card in the reward table"}
+
+    op_key = f"choice:{choice['choice_id']}:offer"
+    count = min(int(balance.get("reward_cards_offered")), len(pool))
+    options: list[dict] = []
+    remaining = list(pool)
+    for index in range(count):
+        picked = rng.weighted_choice(
+            f"{op_key}:{index}", remaining,
+            [entry["weight"] for entry in remaining])
+        remaining = [entry for entry in remaining
+                     if entry["card_id"] != picked["card_id"]]
+        options.append({
+            "card_id": picked["card_id"], "name": picked["name"],
+            "element": picked["element"], "rarity_tier": picked["rarity_tier"],
+            "recipients": picked["recipients"],
+        })
+
+    # 같은 행을 보상 칸과 같은 모양으로 고쳐 쓴다. 새 행을 만들면 열린 선택이
+    # 둘이 되고, `_open_choice` 는 하나만 있다고 가정한다.
+    db.execute(
+        "UPDATE pending_choices SET choice_type = ?, options_json = ?, "
+        "rng_op_key = ? WHERE choice_id = ?",
+        (CHOICE_REWARD, json.dumps(options, ensure_ascii=False), op_key,
+         choice["choice_id"]))
+    _set_state(db, run_id, lc.REWARD_SELECTION)
+    return {"screen": "reward", "choice_id": choice["choice_id"],
+            "options": options, "skip_available": True}
+
+
 def _reward_node_income(db: Database, balance: Balance, rng: JournaledRng, run,
                         node_index: int) -> dict:
     """§15.4 — 보상 node 탐험 자금 (20-40) and the higher reward-node drop rates.

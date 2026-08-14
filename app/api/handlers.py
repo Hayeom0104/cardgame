@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.api import custom_id as cid
-from app.api import errors, hub, visuals
+from app.api import controls, errors, hub, visuals
 from app.api import events as ev
 from app.api.gates import GateError, check_gates
 from app.api import screens
@@ -740,7 +740,32 @@ def _on_node_choose(ctx: HandlerContext, event: ev.InteractionEvent,
     if conclusion is not None:
         content = f"{content}\n{_conclusion_summary(conclusion)}"
     return {"action": "edit", "content": content,
+            "components": _screen_controls(ctx, gate.run, result, conclusion),
             "attachments": _screen_art(ctx, gate.run, result, conclusion)}
+
+
+def _screen_controls(ctx: HandlerContext, run, result: dict,
+                     conclusion: dict | None = None) -> list[dict]:
+    """이 화면에서 누를 수 있는 것 (§19.2).
+
+    그림(`_screen_art`)과 짝을 이룬다. 다만 그림은 없어도 화면을 볼 수 있고,
+    컨트롤은 없으면 아무것도 할 수 없다.
+
+    전투가 끝나 정산으로 넘어간 경우에는 누를 것이 없다 — 런이 끝났다.
+    """
+    if conclusion is not None and conclusion.get("screen") == "settlement":
+        return []
+    screen = result.get("screen")
+    if conclusion is not None and conclusion.get("screen") == "map":
+        # 전투가 승리로 끝나 지도로 돌아갔다.
+        return controls.game_map(ctx.db, run["run_id"])
+    if screen == "battle" and result.get("battle_id"):
+        engine = bt.build_engine(
+            ctx.db, ctx.balance, battle_id=result["battle_id"],
+            run_id=run["run_id"], content_version_id=run["content_version_id"],
+            rng=_rng(ctx, run))
+        return controls.battle(ctx.db, run["run_id"], engine)
+    return controls.for_screen(ctx.db, run["run_id"], result)
 
 
 def _screen_art(ctx: HandlerContext, run, result: dict,
@@ -822,7 +847,11 @@ def _on_reward_pick(ctx: HandlerContext, event: ev.InteractionEvent,
                                 party_slot=int(slot) if slot else None)
         except nodes.NodeError as error:
             raise GateError(errors.ILLEGAL_STATE, reason=str(error)) from error
-    return {"action": "edit", "content": f"{card_id} 카드를 받았습니다."}
+    # 수령이 끝나면 런은 지도로 돌아간다 (§3.2). 지도 버튼을 다시 붙이지
+    # 않으면 그 자리에서 더 갈 곳이 없어진다.
+    return {"action": "edit", "content": f"{card_id} 카드를 받았습니다.",
+            "components": controls.game_map(ctx.db, parsed.run_id),
+            "attachments": visuals.game_map(ctx.db, gate.run)}
 
 
 def _on_shop_buy(ctx: HandlerContext, event: ev.InteractionEvent,
@@ -847,6 +876,7 @@ def _on_shop_buy(ctx: HandlerContext, event: ev.InteractionEvent,
         "ORDER BY item_index", (parsed.run_id, run["current_node_index"]))]
     return {"action": "edit",
             "content": f"구매 완료 · 탐험 자금 {result['run_currency']}",
+            "components": controls.shop(ctx.db, parsed.run_id, items),
             "attachments": visuals.shop(ctx.db, run, items)}
 
 
@@ -882,18 +912,35 @@ def _on_event_branch(ctx: HandlerContext, event: ev.InteractionEvent,
         if conclusion is not None:
             content = f"{content}\n{_conclusion_summary(conclusion)}"
         return {"action": "edit", "content": content,
+                "components": _screen_controls(ctx, gate.run, result, conclusion),
                 "attachments": _screen_art(ctx, gate.run, result, conclusion)}
-    return {"action": "edit", "content": "이벤트를 해결했습니다."}
+    return {"action": "edit", "content": "이벤트를 해결했습니다.",
+            "components": controls.game_map(ctx.db, parsed.run_id),
+            "attachments": visuals.game_map(ctx.db, gate.run)}
 
 
 def _render_nested_choice(ctx: HandlerContext, run, parsed: cid.CustomId,
                           result: dict) -> dict:
     """Prompt for a suspended operator's decision (§16.5).
 
-    Only `remove_cursed_card` needs a real picker in the seed content — with
-    more than one cursed card present the player picks, with exactly one it
-    auto-resolves, and with none the operator is a no-op (§2.7.4).
+    **어떤 연산자가 멈춘 것인지 보고 갈라야 한다.** 예전에는 무조건 저주받은
+    카드 화면을 띄웠고, 그래서 `offer_reward` 로 멈춘 이벤트는 "제거할
+    저주받은 카드가 없습니다" 라는 엉뚱한 답을 받고 보상이 사라졌다.
     """
+    choice = ctx.db.one(
+        "SELECT * FROM pending_choices WHERE run_id = ? AND status = 'open'",
+        (parsed.run_id,))
+    if choice is not None and choice["choice_type"] == "offer_reward":
+        offer = nodes.materialize_offer_reward(
+            ctx.db, ctx.balance, _rng(ctx, run), parsed.run_id, choice)
+        if offer["screen"] != "reward":
+            nodes.resume_pending_choice(ctx.db, parsed.run_id, selection=None)
+            return {"action": "edit", "content": "받을 수 있는 카드가 없습니다."}
+        return {"action": "edit", "content": "보상 카드를 고르세요.",
+                "components": controls.reward(
+                    ctx.db, parsed.run_id, offer["options"],
+                    skip_available=offer.get("skip_available", True))}
+
     revision = ctx.db.one("SELECT presentation_revision FROM runs WHERE run_id = ?",
                           (parsed.run_id,))["presentation_revision"]
     cursed = deck.cursed_cards_in_deck(ctx.db, parsed.run_id)
@@ -1002,6 +1049,10 @@ def _resolve_card(ctx, run, engine, unit, card_instance_id, target_ids,
     transaction (§16.7, B-14) — the player submits again only when the battle is
     back at PHASE D-P step P7.
     """
+    # 전투가 끝나지 않으면 아래 `if ended:` 가 실행되지 않는다. 초기화가
+    # 없으면 평범한 카드 한 장에 UnboundLocalError 가 나고, 그러면 이벤트가
+    # 기록되지 않아 중앙봇이 같은 조작을 무한히 재전송한다 (§16.7).
+    conclusion = None
     with ctx.db.tx():
         lc.claim_mutation(ctx.db, parsed.run_id, parsed.revision)
         try:
@@ -1030,7 +1081,11 @@ def _resolve_card(ctx, run, engine, unit, card_instance_id, target_ids,
            if conclusion is not None and conclusion.get("screen") == "settlement"
            else visuals.battle(ctx.db, ctx.balance, battle_id=engine.battle_id,
                                run=run))
-    return {"action": "edit", "content": "\n".join(lines), "attachments": art}
+    return {"action": "edit", "content": "\n".join(lines),
+            "components": _screen_controls(
+                ctx, run, {"screen": "battle", "battle_id": engine.battle_id},
+                conclusion),
+            "attachments": art}
 
 
 def _conclusion_summary(conclusion: dict) -> str:
@@ -1079,6 +1134,7 @@ def _on_shop_exit(ctx: HandlerContext, event: ev.InteractionEvent,
         # 같은 규칙을 따로 들고 있게 되어 언젠가 갈라진다.
         nodes.leave_shop(ctx.db, parsed.run_id)
     return {"action": "edit", "content": errors.LABEL_EXIT,
+            "components": controls.game_map(ctx.db, parsed.run_id),
             "attachments": visuals.game_map(ctx.db, gate.run)}
 
 
