@@ -50,6 +50,7 @@ CMD_EQUIPMENT = "장비"
 CMD_RESEARCH = "연구"
 CMD_SHOP = "상점"
 CMD_ACHIEVEMENTS = "업적"
+CMD_PASSIVES = "패시브"
 
 
 @dataclass
@@ -91,6 +92,8 @@ def handle_message(ctx: HandlerContext, event: ev.MessageEvent) -> dict:
         return achievements_screen(ctx, event.user_id)
     if subcommand == CMD_CHARACTERS:
         return characters_screen(ctx, event.user_id)
+    if subcommand == CMD_PASSIVES:
+        return passives_screen(ctx, event.user_id)
     if subcommand == CMD_EQUIPMENT:
         return equipment_screen(ctx, event.user_id)
     if subcommand == CMD_RESEARCH:
@@ -196,6 +199,57 @@ def _run_deck_screen(ctx: HandlerContext, run) -> dict:
     lines.append("이 런의 덱은 시작할 때 고정됩니다. "
                  "계정에서 카드를 강화해도 다음 런부터 반영됩니다. (§16.2.3)")
     return _reply("\n".join(lines))
+
+
+def passives_screen(ctx: HandlerContext, user_id: int) -> dict:
+    """`!덱아웃 패시브` — 보유 패시브와 그것이 실제로 하는 일 (§6).
+
+    패시브를 뽑을 수는 있는데 그것을 볼 곳이 준비 화면의 드롭다운뿐이었다.
+    무엇을 가지고 있는지도, 그것이 무슨 효과인지도 확인할 방법이 없으면
+    슬롯에 무엇을 넣을지 고를 수가 없다.
+    """
+    from app.engine import passives as pv
+
+    owned = pv.owned(ctx.db, user_id, ctx.content_version_id)
+    account = ctx.db.one("SELECT passive_slots FROM accounts WHERE user_id = ?",
+                         (user_id,))
+    slots = int(account["passive_slots"]) if account else 0
+
+    if not owned:
+        return _reply(
+            f"**패시브** — 슬롯 {slots}칸\n"
+            "아직 해금한 패시브가 없습니다. 패시브는 `!덱아웃 뽑기`로 얻습니다.")
+
+    # 진행 중인 런이 있으면 지금 무엇을 끼고 있는지도 보여준다 — 장착은 런
+    # 단위이고 (§6) 런 도중에는 바꿀 수 없으므로, 그 사실이 드러나야 한다.
+    run = lc.active_run_for(ctx.db, user_id)
+    equipped = set()
+    if run is not None:
+        equipped = {row["passive_card_id"] for row in ctx.db.query(
+            "SELECT passive_card_id FROM run_passives WHERE run_id = ?",
+            (run["run_id"],))}
+
+    when = {pv.TRIGGER_BATTLE_START: "전투 시작", pv.TRIGGER_ROUND_START: "라운드마다"}
+    lines = [f"**패시브** — 보유 {len(owned)}장 · 슬롯 {slots}칸"]
+    for row in owned:
+        mark = "▶" if row["passive_card_id"] in equipped else "　"
+        lines.append(
+            f"{mark} {row['name']} ({'★' * int(row['rarity_tier'])}) · "
+            f"{when.get(row['trigger_event'], row['trigger_event'])}")
+        if row["description"]:
+            lines.append(f"　　{row['description']}")
+
+    if run is not None:
+        lines.append("장착은 런을 시작할 때 정해집니다. "
+                     "진행 중인 런에서는 바꿀 수 없습니다. (§6)")
+    else:
+        lines.append(f"런을 시작할 때 최대 {slots}장까지 고를 수 있습니다. "
+                     "슬롯은 `!덱아웃 연구`로 늘립니다.")
+
+    return {**_reply("\n".join(lines)),
+            "attachments": visuals.passive_collection(
+                ctx.db, user_id=user_id,
+                content_version_id=ctx.content_version_id)}
 
 
 def characters_screen(ctx: HandlerContext, user_id: int) -> dict:

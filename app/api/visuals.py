@@ -287,6 +287,25 @@ def deck(db: Database, balance, *, user_id: int, content_version_id: int,
     return safely(build)
 
 
+def passive_collection(db: Database, *, user_id: int,
+                       content_version_id: int) -> list[dict]:
+    """보유 패시브 한 장 (§6)."""
+
+    def build() -> list[dict]:
+        from app.engine import passives as pv
+
+        owned = pv.owned(db, user_id, content_version_id)
+        if not owned:
+            return []
+        return attach(panels.render_collection(
+            [{"card_id": row["passive_card_id"], "name": row["name"],
+              "rarity_tier": row["rarity_tier"], "kind": "passive"}
+             for row in owned],
+            title=f"패시브 {len(owned)}장"))
+
+    return safely(build)
+
+
 def collection(db: Database, *, user_id: int,
                content_version_id: int) -> list[dict]:
     """소장 카드 한 장 — 캐릭터 카드와 행동 카드를 한 화면에 (§5)."""

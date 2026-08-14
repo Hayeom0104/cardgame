@@ -686,10 +686,12 @@ def render_collection(cards: list[dict], *, title: str) -> Attachment:
         column, row = index % columns, index // columns
         left = canvas.pad + column * (size[0] + canvas.gap)
         top = 56 + row * (size[1] + canvas.gap)
-        kind = "character" if card.get("kind") == "character" else "card"
-        if kind == "character":
-            # 캐릭터 카드는 그림을 characters/ 에서 찾는다.
-            art = canvas.assets.art("character", str(card.get("card_id", "")),
+        kind = card.get("kind")
+        kind = kind if kind in ("character", "passive") else "card"
+        if kind != "card":
+            # 캐릭터와 패시브는 그림을 각자의 폴더에서 찾는다. 행동 카드처럼
+            # 코스트나 원소를 그릴 것이 없어서 그림 한 장으로 놓는다.
+            art = canvas.assets.art(kind, str(card.get("card_id", "")),
                                     label=str(card.get("name", "")),
                                     rarity=card.get("rarity_tier"), size=size)
             canvas.paste(art, (left, top))

@@ -329,3 +329,64 @@ def test_a_round_start_passive_fires_at_each_boundary(db, balance, version,
     assert first > 0
     assert pv.fire(engine, pv.TRIGGER_ROUND_START)
     assert un.load_unit(db, ally.battle_unit_id).block > first
+
+
+# =====================================================================
+# 화면에서 닿는가
+# =====================================================================
+def _ctx(db, balance, version):
+    from app.api import handlers
+
+    return handlers.HandlerContext(db=db, balance=balance, central=None,
+                                   content_version_id=version)
+
+
+def test_a_new_account_is_told_where_passives_come_from(db, balance, version,
+                                                        user_id):
+    from app.api import handlers
+
+    screen = handlers.passives_screen(_ctx(db, balance, version), user_id)
+    assert "뽑기" in screen["content"]
+    assert "슬롯" in screen["content"]
+
+
+def test_the_screen_shows_what_a_passive_actually_does(db, balance, version,
+                                                       user_id):
+    """준비 화면의 드롭다운 말고는 패시브를 볼 곳이 없었다."""
+    from app.api import handlers
+
+    unlock(db, user_id, "pas_적진교란")
+    screen = handlers.passives_screen(_ctx(db, balance, version), user_id)
+    definition = pv.definition(db, version, "pas_적진교란")
+    assert definition["name"] in screen["content"]
+    assert definition["description"] in screen["content"]
+    assert screen["attachments"], "패시브 그림이 붙지 않았습니다"
+
+
+def test_the_screen_marks_what_this_run_is_wearing(db, balance, version, user_id):
+    from app.api import handlers
+
+    unlock(db, user_id, "pas_예리함")
+    unlock(db, user_id, "pas_굳은가죽")
+    start_run(db, balance, version, user_id, ["pas_예리함"])
+
+    screen = handlers.passives_screen(_ctx(db, balance, version), user_id)
+    equipped_line = next(line for line in screen["content"].splitlines()
+                         if "예리함" in line)
+    other_line = next(line for line in screen["content"].splitlines()
+                      if "굳은 가죽" in line)
+    assert equipped_line.startswith("▶")
+    assert not other_line.startswith("▶")
+    assert "진행 중인 런에서는 바꿀 수 없습니다" in screen["content"]
+
+
+def test_the_command_reaches_the_screen(db, balance, version, user_id):
+    from app.api import events as ev
+    from app.api import handlers
+
+    unlock(db, user_id, "pas_예리함")
+    event = ev.MessageEvent(event_id="e1", user_id=user_id, guild_id=1,
+                            channel_id=2, command="덱아웃", args=["패시브"],
+                            raw_content="!덱아웃 패시브")
+    screen = handlers.handle_message(_ctx(db, balance, version), event)
+    assert "예리함" in screen["content"]
