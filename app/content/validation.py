@@ -319,10 +319,23 @@ def _validate_threat_grid(db: Database, version_id: int) -> None:
 
 
 def _validate_cards(db: Database, version_id: int) -> None:
-    """Every card has a valid element (one of 7) and a target_side."""
+    """Every card has a valid element (one of 7) and a target_side.
+
+    §15의 `card_cost_min`/`card_cost_max` 는 지금까지 §10.5가 이 범위를
+    벗어난 카드의 저장을 막는다고 **문서에만** 적혀 있었다
+    (config/01_전투.toml 의 설명 참고) — 실제 검사는 없었다. 그 틈으로
+    비용 0짜리 카드가 실제로 발행된 적이 있다.
+    """
+    balance = _balance(db, version_id)
+    cost_min = int(balance.get("card_cost_min"))
+    cost_max = int(balance.get("card_cost_max"))
     for row in db.query("SELECT * FROM cards WHERE content_version_id = ?",
                         (version_id,)):
         label = f"card {row['card_id']!r}"
+        if not cost_min <= int(row["cost"]) <= cost_max:
+            raise ValidationError(
+                f"{label}: cost {row['cost']}이(가) 허용 범위 "
+                f"[{cost_min}, {cost_max}] 밖입니다 (§15, card_cost_min/max)")
         # `modify_cost` only means something to the §5.8 overlay, which folds it
         # into the card's `cost` field. Left on a card's own effect list it would
         # reach the executor, which has no handler for it, and blow up mid-turn.
@@ -597,18 +610,54 @@ def _summon_bound(enemy_row, actions: dict, budget: int) -> int:
     return total
 
 
+#: `progression._apply_research` 가 실제로 아는 효과 종류. 여기 없는
+#: `kind` 은 §9.2 문서에도 없다 — 새 종류를 콘텐츠에 쓰려면 먼저 엔진에
+#: 핸들러를 등록해야 한다 (§10.4.6 절차와 같은 순서).
+KNOWN_RESEARCH_EFFECT_KINDS = frozenset({"party_slot", "passive_slot", "stat_step"})
+
+
 def _validate_research(db: Database, version_id: int) -> None:
-    """Every achievement referenced by a research node exists (§20)."""
+    """Every achievement referenced by a research node exists (§20).
+
+    `effect_json` 은 지금까지 전혀 검사되지 않았다. 그 결과 두 가지가 조용히
+    가능했다: 오타 난 `kind` 를 쓴 노드를 발행하면 `_apply_research` 가
+    아무 `elif` 에도 걸리지 않아 **와일드카드와 코인만 나가고 아무 효과도
+    없이 끝난다** — `offer_reward` 가 비어 있던 것과 같은 모양이다. 그리고
+    `party_slot` 값에 상한이 없어서, 실제로 지원하는 파티 인원
+    (`max_party_slots`, 덱 구성·인코운터 다운스케일이 이 값을 전제한다)보다
+    큰 값을 그대로 지급할 수 있었다.
+    """
     achievements = {row["achievement_id"] for row in db.query(
         "SELECT achievement_id FROM achievements WHERE content_version_id = ?",
         (version_id,))}
+    balance = _balance(db, version_id)
+    max_party_slots = int(balance.get("max_party_slots"))
+
     for row in db.query("SELECT * FROM research_nodes WHERE content_version_id = ?",
                         (version_id,)):
+        label = f"research node {row['node_id']!r}"
         required = row["required_achievement"]
         if required and required not in achievements:
             raise ValidationError(
-                f"research node {row['node_id']!r}: required achievement "
-                f"{required!r} does not resolve")
+                f"{label}: required achievement {required!r} does not resolve")
+
+        try:
+            effect = json.loads(row["effect_json"])
+        except json.JSONDecodeError as error:
+            raise ValidationError(f"{label}: effect_json 이 JSON 이 아닙니다") from error
+        kind = effect.get("kind")
+        if kind not in KNOWN_RESEARCH_EFFECT_KINDS:
+            raise ValidationError(
+                f"{label}: effect.kind {kind!r} 은(는) "
+                f"{sorted(KNOWN_RESEARCH_EFFECT_KINDS)} 중 하나여야 합니다 — "
+                "그 외의 값은 재화만 나가고 아무 효과도 주지 않습니다")
+        if kind == "party_slot":
+            value = int(effect.get("value", 0))
+            if not 1 <= value <= max_party_slots:
+                raise ValidationError(
+                    f"{label}: party_slot 값 {value} 이(가) 1..{max_party_slots} "
+                    "범위 밖입니다 (max_party_slots) — 실제로 지원하는 파티 "
+                    "인원을 넘는 슬롯을 지급하게 됩니다")
 
 
 def _validate_card_upgrades(db: Database, version_id: int) -> None:

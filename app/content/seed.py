@@ -143,6 +143,9 @@ def _seed_threat_weights(db: Database, version: int) -> None:
 # §4.3 / §4.6.2 starter cards and characters
 # =====================================================================
 def _seed_cards(db: Database, version: int) -> None:
+    from app.content.balance import Balance
+
+    card_cost_min = int(Balance(db, version).get("card_cost_min"))
     cards = [
         # 평타 and a basic defense card, both 무속성, guaranteeing playability.
         (CARD_BASIC_ATTACK, "평타", "무속성", 1, "공격", "enemy", 1,
@@ -185,7 +188,10 @@ def _seed_cards(db: Database, version: int) -> None:
         ("card_광_정화", "정화의 빛", "광", 2, "회복", "ally", 4,
          [{"operator": "remove_status", "params": {"category": "debuff", "count": 2}},
           {"operator": "heal", "params": {"mode": "percent_max_hp", "value": 0.15}}]),
-        ("card_무_재정비", "재정비", "무속성", 0, "버프디버프", "self", 4,
+        # 비용은 하드코딩하지 않고 card_cost_min 을 그대로 쓴다 — §10.5가
+        # "카드 하나의 비용은 이 값 밑으로 내려갈 수 없다" 고 강제하므로, 이
+        # 카드가 낼 수 있는 최저가여야 한다는 뜻 자체가 card_cost_min 이다.
+        ("card_무_재정비", "재정비", "무속성", card_cost_min, "버프디버프", "self", 4,
          [{"operator": "draw_cards", "params": {"count": 1}},
           {"operator": "modify_resource", "params": {"delta": 1}}]),
         ("card_화_폭발", "연쇄 폭발", "화", 3, "공격", "all", 5,

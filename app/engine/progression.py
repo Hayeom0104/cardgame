@@ -574,6 +574,11 @@ def _apply_research(db: Database, payload: dict) -> None:
         db.execute(
             "UPDATE accounts SET stat_research_step = stat_research_step + 1 "
             "WHERE user_id = ?", (user_id,))
+    else:
+        # §10.5가 이 지점에 닿기 전에 막아야 한다 — 여기 도달했다는 것은
+        # 검증을 거치지 않은 콘텐츠이거나 검증 자체에 구멍이 생겼다는 뜻이다.
+        # 조용히 넘어가면 와일드카드와 코인만 나가고 아무 효과도 없이 끝난다.
+        raise ProgressionError(f"research effect kind {kind!r} has no handler")
 
 
 # =====================================================================
