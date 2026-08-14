@@ -274,3 +274,70 @@ def test_the_collection_screen_shows_characters_as_cards(ctx, db, user_id):
     screen = handlers.deck_screen(ctx, user_id)
     assert "캐릭터" in screen["content"]
     assert screen["attachments"][0]["filename"] == "deckout_collection.png"
+
+
+# =====================================================================
+# 코인 잔액 — 가격만 보이고 잔액은 어디에도 없었다
+# =====================================================================
+class BalanceCentral(FakeCentral):
+    def __init__(self, payload=None, *, fails: bool = False):
+        super().__init__()
+        self.payload = payload
+        self.fails = fails
+        self.reads = 0
+
+    def get_user(self, user_id):
+        self.reads += 1
+        if self.fails:
+            raise RuntimeError("중앙봇이 응답하지 않습니다")
+        return self.payload
+
+
+def _with(db, balance, version, central):
+    return handlers.HandlerContext(db=db, balance=balance, central=central,
+                                   content_version_id=version)
+
+
+def test_the_hub_shows_how_much_coin_you_have(db, balance, version, user_id):
+    ctx = _with(db, balance, version, BalanceCentral({"balance": 4321}))
+    assert "코인 4321" in handlers.hub_screen(ctx, user_id)["content"]
+
+
+def test_every_screen_that_quotes_a_coin_price_shows_the_balance(
+        db, balance, version, user_id):
+    """가격만 보여 주고 잔액을 감추면 살 수 있는지를 눌러 봐야 안다."""
+    db.execute("INSERT INTO owned_characters (user_id, character_id, star_rank, "
+               "acquired_at) VALUES (?, 'char_terradon', 1, ?)", (user_id, utcnow()))
+    for screen in (handlers.hub_screen, handlers.characters_screen,
+                   handlers.equipment_screen, handlers.research_screen,
+                   handlers.hub_shop_screen):
+        ctx = _with(db, balance, version, BalanceCentral({"balance": 777}))
+        assert "코인 777" in screen(ctx, user_id)["content"], screen.__name__
+
+
+def test_a_central_that_is_down_still_renders_the_screen(db, balance, version,
+                                                         user_id):
+    ctx = _with(db, balance, version, BalanceCentral(fails=True))
+    content = handlers.hub_screen(ctx, user_id)["content"]
+    assert "코인 —" in content
+
+
+def test_an_unrecognised_balance_shape_is_logged_not_guessed(db, balance, version,
+                                                             user_id, caplog):
+    ctx = _with(db, balance, version, BalanceCentral({"unexpected": "shape"}))
+    with caplog.at_level("WARNING"):
+        assert handlers.coin_balance(ctx, user_id) is None
+    assert "COIN_BALANCE_KEYS" in caplog.text
+
+
+def test_the_balance_is_never_used_to_block_a_button(db, balance, version,
+                                                     user_id):
+    """§17.3 — 권위 있는 검사는 §17 트랜잭션 안의 중앙봇이 한다. 여기서 읽은
+    값과 결제 사이에 다른 미니게임이 차감할 수 있다."""
+    db.execute("INSERT INTO character_fragments (user_id, character_id, amount) "
+               "VALUES (?, ?, 999)", (user_id, STARTER_CHARACTER_ID))
+    db.execute("UPDATE accounts SET wildcards = 99 WHERE user_id = ?", (user_id,))
+
+    broke = _with(db, balance, version, BalanceCentral({"balance": 0}))
+    screen = handlers.characters_screen(broke, user_id)
+    assert screen["components"], "코인 0이라고 버튼을 감췄습니다"

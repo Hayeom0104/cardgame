@@ -69,6 +69,48 @@ def _reply(content: str, components: list | None = None) -> dict:
     return {"action": "reply", "content": content, "components": components or []}
 
 
+#: 중앙봇의 사용자 응답에서 코인 잔액을 찾을 때 볼 키들. 연동 가이드의 응답
+#: 스키마가 이 저장소에 없어서(§1.1 표에 경로만 있다) 흔한 이름을 순서대로
+#: 본다. 가이드를 확인하면 고칠 곳은 이 상수 하나다.
+COIN_BALANCE_KEYS = ("balance", "coin", "coins", "currency", "value")
+
+
+def coin_balance(ctx: HandlerContext, user_id: int) -> int | None:
+    """플레이어의 코인 잔액. 알 수 없으면 None.
+
+    **표시 전용이다 (§17.3).** 권위 있는 검사는 언제나 §17 트랜잭션 안에서
+    중앙봇이 한다 — 여기서 읽은 값과 결제 시점 사이에 다른 미니게임이 차감할
+    수 있기 때문이다. 그래서 이 값으로 버튼을 막지 않는다.
+
+    코인 가격은 성급 상승·카드 강화·연구·상점 다섯 화면에 전부 찍히는데
+    "내가 얼마 있는지"는 어디에도 없었다. 살 수 있는지 없는지를 눌러 봐야
+    아는 화면이었다는 뜻이다.
+
+    중앙봇이 죽어 있어도 화면은 떠야 하므로 실패는 None 으로 돌려준다.
+    """
+    if ctx.central is None:
+        return None
+    try:
+        payload = ctx.central.get_user(user_id) or {}
+    except Exception:                                        # noqa: BLE001
+        logger.info("코인 잔액을 읽지 못했습니다 (user %s)", user_id)
+        return None
+    for key in COIN_BALANCE_KEYS:
+        value = payload.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return int(value)
+    logger.warning(
+        "사용자 응답에서 코인 잔액을 찾지 못했습니다. 받은 키: %s — "
+        "handlers.COIN_BALANCE_KEYS 를 연동 가이드에 맞춰 고쳐야 합니다",
+        sorted(payload.keys()))
+    return None
+
+
+def _coin_line(ctx: HandlerContext, user_id: int) -> str:
+    balance = coin_balance(ctx, user_id)
+    return f"코인 {balance}" if balance is not None else "코인 —"
+
+
 # =====================================================================
 # Message commands
 # =====================================================================
@@ -129,7 +171,8 @@ def deck_screen(ctx: HandlerContext, user_id: int) -> dict:
     actions = [card for card in cards if not card.is_character]
 
     lines = [f"**덱** — 소장 {len(cards)}장 "
-             f"(캐릭터 {len(characters)} · 카드 {len(actions)})"]
+             f"(캐릭터 {len(characters)} · 카드 {len(actions)}) · "
+             f"{_coin_line(ctx, user_id)}"]
     for card in characters:
         lines.append(f"　{card.name} {'★' * card.star_rank} · {card.element}")
 
@@ -280,7 +323,7 @@ def characters_screen(ctx: HandlerContext, user_id: int) -> dict:
     if not rows:
         return _reply("보유한 캐릭터가 없습니다.")
 
-    lines = ["**캐릭터**"]
+    lines = [f"**캐릭터** — {_coin_line(ctx, user_id)}"]
     #: 재화가 실제로 충분한 것만 버튼에 올린다. 눌러도 거절되는 선택지를
     #: 늘어놓으면 목록만 길어진다.
     ready: list[tuple] = []
@@ -329,7 +372,7 @@ def equipment_screen(ctx: HandlerContext, user_id: int) -> dict:
         "SELECT tier, amount FROM enhancement_stones WHERE user_id = ? "
         "AND amount > 0 ORDER BY tier", (user_id,))
 
-    lines = ["**장비**"]
+    lines = [f"**장비** — {_coin_line(ctx, user_id)}"]
     if stones:
         lines.append("강화석 " + " · ".join(
             f"T{row['tier']}×{row['amount']}" for row in stones))
@@ -378,7 +421,8 @@ def research_screen(ctx: HandlerContext, user_id: int) -> dict:
                                  content_version_id=ctx.content_version_id)
     account = ctx.db.one("SELECT wildcards FROM accounts WHERE user_id = ?",
                          (user_id,))
-    lines = [f"**연구** (와일드카드 {account['wildcards']})"]
+    lines = [f"**연구** — {_coin_line(ctx, user_id)} · "
+             f"와일드카드 {account['wildcards']}"]
     available: list[dict] = []
     for entry in listing:
         completed = entry["steps_taken"] >= entry["max_steps"]
@@ -421,7 +465,7 @@ def hub_shop_screen(ctx: HandlerContext, user_id: int) -> dict:
     (§7.2)."""
     listing = pg.hub_shop_listing(ctx.db, ctx.balance,
                                   content_version_id=ctx.content_version_id)
-    lines = ["**허브 상점**", "장비"]
+    lines = [f"**허브 상점** — {_coin_line(ctx, user_id)}", "장비"]
     for entry in listing["equipment"]:
         lines.append(f"　{entry['name']} ({entry['slot']}) — 코인 {entry['price_coin']}")
     lines.append("장비 강화석")
@@ -475,7 +519,8 @@ def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
         lines.append(f"오래 조작이 없어 이전 런을 정리했습니다. 보관 {kept}개.")
     lines += [
         "**덱아웃**",
-        f"카르타 {account['carta']} · 와일드카드 {account['wildcards']}",
+        f"{_coin_line(ctx, user_id)} · 카르타 {account['carta']} · "
+        f"와일드카드 {account['wildcards']}",
         f"파티 슬롯 {account['party_slots']} · 패시브 슬롯 {account['passive_slots']}",
     ]
     if account["tutorial_completed_at"] is None:
