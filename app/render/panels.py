@@ -353,10 +353,17 @@ def render_hand(hand: list[dict], *, resource: int,
 def render_map(nodes: list[dict], edges: list[tuple[int, int]], *,
                current_node_index: int | None,
                available: set[int] | None = None,
+               visited: set[int] | None = None,
                world_id: str | None = None) -> Attachment:
-    """맵 화면 — 지도 전체를 한 장으로 (§11)."""
+    """맵 화면 — 지도 전체를 한 장으로 (§11).
+
+    칸은 네 가지로 그려진다: 지금 서 있는 칸, 갈 수 있는 칸, 지나온 칸,
+    그리고 아직 닿지 않은 칸. 지나온 칸과 닿지 않은 칸을 같은 색으로 그리면
+    지도가 어디까지 왔는지 말해 주지 못한다.
+    """
     canvas = Canvas(theme_module.load().size("map_size"))
     available = available or set()
+    visited = visited or set()
 
     if world_id:
         # 월드 그림을 넣어 두었으면 바탕으로 깐다. 없으면 그냥 배경색이다.
@@ -386,17 +393,23 @@ def render_map(nodes: list[dict], edges: list[tuple[int, int]], *,
             canvas.draw.line((*positions[source], *positions[target]),
                              fill=canvas.border, width=2)
 
-    visited = canvas.theme.color("color_visited")
+    visited_color = canvas.theme.color("color_visited")
     selectable = canvas.theme.color("color_selectable")
     for node in nodes:
         x, y = positions[node["node_index"]]
         is_current = node["node_index"] == current_node_index
         is_open = node["node_index"] in available
-        fill = (canvas.accent if is_current
-                else canvas.theme.node_color(node["node_type"]) if is_open
-                else visited)
+        is_past = node["node_index"] in visited
+        if is_current:
+            fill = canvas.accent
+        elif is_open:
+            fill = canvas.theme.node_color(node["node_type"])
+        elif is_past:
+            fill = visited_color
+        else:
+            fill = canvas.muted
         canvas.draw.ellipse((x - 22, y - 22, x + 22, y + 22), fill=fill,
-                            outline=selectable if is_open else canvas.muted,
+                            outline=selectable if is_open else canvas.border,
                             width=3 if is_open else 1)
         text = str(node["node_type"])[:2]
         font = canvas.font("small")

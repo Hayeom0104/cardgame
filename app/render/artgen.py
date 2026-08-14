@@ -30,6 +30,11 @@ from app.render.theme import Theme
 #: 그림을 이 배율로 크게 그린 뒤 줄인다. 계단 현상을 없애는 가장 싼 방법이다.
 SUPERSAMPLE = 3
 
+#: 이름 띠와 글자의 최종 크기(픽셀) 상한. 카드 한 장에는 넉넉하고, 월드 배경
+#: 처럼 큰 그림에서는 이름이 화면을 덮지 않을 만큼이다.
+MAX_LABEL_BAND = 34
+MAX_LABEL_FONT = 14
+
 
 def _seed(entity_id: str) -> int:
     return int.from_bytes(hashlib.sha256(entity_id.encode("utf-8")).digest()[:8],
@@ -111,10 +116,15 @@ def generate(theme: Theme, *, size: tuple[int, int], entity_id: str,
                    outline=(*border, 220), width=max(2, width // 150))
 
     # 이름은 아래쪽 띠 위에 올린다. 무늬 위에 그냥 쓰면 읽기 어렵다.
+    #
+    # 띠와 글자 크기에 상한을 둔다. 비율로만 정하면 월드 배경처럼 큰 그림에서
+    # 이름이 간판만 해져서, 그 위에 그려지는 지도의 칸을 덮어 버린다.
     if label:
-        band = int(height * 0.22)
+        band = min(int(height * 0.22), int(MAX_LABEL_BAND * SUPERSAMPLE))
         draw.rectangle([0, height - band, width, height], fill=(0, 0, 0, 130))
-        font = theme.font(max(10, band // 3), role="small")
+        font = theme.font(max(10, min(band // 3,
+                                      int(MAX_LABEL_FONT * SUPERSAMPLE))),
+                          role="small")
         _centered(draw, label, (0, height - band, width, height), font,
                   theme.color("color_text"))
 

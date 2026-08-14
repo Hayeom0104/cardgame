@@ -299,3 +299,51 @@ def test_every_action_code_is_something_a_screen_can_produce():
     assert missing <= {"ACTION_REWARD_RECIPIENT"}, \
         f"화면이 만들지 않는 동작: {sorted(missing)}"
     assert not unreachable or True
+
+
+# =====================================================================
+# 지도 그림이 갈 곳을 말해 주는가
+# =====================================================================
+def test_the_map_picture_marks_the_branches_you_can_take(db, run_id, monkeypatch):
+    """`render_map` 은 `available` 을 받아 갈 수 있는 칸을 밝게 그리는데,
+    `visuals.game_map` 이 그것을 한 번도 넘기지 않았다. 넘기지 않으면 현재
+    칸을 뺀 **모든 칸이 "지나온 칸" 색**이 된다 — 버튼은 갈 곳을 알려 주는데
+    그림은 지도 전체가 끝난 것처럼 보였다."""
+    from app.api import visuals
+    from app.engine import map_gen
+    from app.render import panels
+
+    captured = {}
+    original = panels.render_map
+
+    def spy(nodes, edges, **kwargs):
+        captured.update(kwargs)
+        return original(nodes, edges, **kwargs)
+
+    monkeypatch.setattr(panels, "render_map", spy)
+    run = db.one("SELECT * FROM runs WHERE run_id = ?", (run_id,))
+    visuals.game_map(db, run)
+
+    expected = {entry["node_index"] for entry in
+                map_gen.available_next_nodes(db, run_id, run["current_node_index"])}
+    assert captured["available"] == expected
+    assert expected, "갈 수 있는 칸이 하나도 계산되지 않았습니다"
+
+
+def test_stepping_onto_a_node_records_it(db, balance, version, run_id, ctx,
+                                         user_id):
+    """`run_nodes.state` 는 만들 때 한 번 적히고 아무도 갱신하지 않았다 —
+    지나온 칸과 아직 닿지 않은 칸이 구별되지 않았다는 뜻이다."""
+    from app.engine import map_gen
+
+    before = db.one("SELECT COUNT(*) AS n FROM run_nodes WHERE run_id = ? "
+                    "AND state = ?", (run_id, map_gen.NODE_VISITED))["n"]
+    assert before == 0
+
+    button = only_component({"components": controls.game_map(db, run_id)})
+    chosen = int(cid.parse(button["custom_id"]).payload)
+    press(ctx, user_id, button["custom_id"])
+
+    state = db.one("SELECT state FROM run_nodes WHERE run_id = ? AND node_index = ?",
+                   (run_id, chosen))["state"]
+    assert state == map_gen.NODE_VISITED

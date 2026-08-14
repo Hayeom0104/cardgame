@@ -62,6 +62,11 @@ def resolve_node(db: Database, balance: Balance, rng: JournaledRng, *,
     if node is None:
         raise NodeError(f"node {node_index} does not exist in run {run_id}")
 
+    # 이 칸에 발을 들였다는 사실을 남긴다. 지도가 지나온 길과 아직 닿지 않은
+    # 길을 구별해 그릴 수 있어야 한다 — 열은 처음부터 있었지만 아무도 갱신하지
+    # 않아 모든 칸이 같은 색이었다.
+    map_gen.mark_visited(db, run_id, node_index)
+
     node_type = node["node_type"]
     if node_type == map_gen.COMBAT:
         return _start_battle(db, balance, rng, run, node, kind="normal")

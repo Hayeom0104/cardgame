@@ -376,8 +376,9 @@ def persist_map(db: Database, run_id: int, generated: GeneratedMap) -> None:
         for node in generated.nodes:
             conn.execute(
                 "INSERT INTO run_nodes (run_id, node_index, depth, node_type, state) "
-                "VALUES (?, ?, ?, ?, 'available')",
-                (run_id, node["node_index"], node["depth"], node["node_type"]),
+                "VALUES (?, ?, ?, ?, ?)",
+                (run_id, node["node_index"], node["depth"], node["node_type"],
+                 NODE_AVAILABLE),
             )
         for source, target in generated.edges:
             conn.execute(
@@ -396,6 +397,19 @@ def persist_map(db: Database, run_id: int, generated: GeneratedMap) -> None:
                     "to_node_index) VALUES (?, ?, ?)",
                     (run_id, node["node_index"], boss_index),
                 )
+
+
+#: `run_nodes.state` 값. 지도를 그릴 때 "지나온 칸" 과 "아직 닿지 않은 칸" 을
+#: 구별하는 데 쓴다. 두 가지를 같은 색으로 그리면 지도가 어디까지 왔는지
+#: 말해 주지 못한다.
+NODE_AVAILABLE = "available"
+NODE_VISITED = "visited"
+
+
+def mark_visited(db: Database, run_id: int, node_index: int) -> None:
+    db.execute(
+        "UPDATE run_nodes SET state = ? WHERE run_id = ? AND node_index = ?",
+        (NODE_VISITED, run_id, node_index))
 
 
 def available_next_nodes(db: Database, run_id: int,

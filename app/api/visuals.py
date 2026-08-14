@@ -137,18 +137,34 @@ def _hand(db: Database, run) -> list[dict]:
 # 지도
 # =====================================================================
 def game_map(db: Database, run, *, available: set[int] | None = None) -> list[dict]:
+    """지도 한 장.
+
+    `available` 을 넘기지 않으면 지금 갈 수 있는 칸을 직접 구한다. 예전에는
+    아무도 넘기지 않아 **모든 칸이 "지나온 칸" 색으로 그려졌다** — 버튼은
+    갈 곳을 알려 주는데 그림은 지도 전체가 이미 끝난 것처럼 보였다.
+    """
+
     def build() -> list[dict]:
+        from app.engine import map_gen
+
         nodes = [dict(row) for row in db.query(
-            "SELECT node_index, depth, node_type FROM run_nodes "
+            "SELECT node_index, depth, node_type, state FROM run_nodes "
             "WHERE run_id = ? ORDER BY node_index", (run["run_id"],))]
         if not nodes:
             return []
         edges = [(row["from_node_index"], row["to_node_index"]) for row in db.query(
             "SELECT from_node_index, to_node_index FROM run_edges WHERE run_id = ?",
             (run["run_id"],))]
+        options = available
+        if options is None:
+            options = {entry["node_index"] for entry in
+                       map_gen.available_next_nodes(db, run["run_id"],
+                                                    run["current_node_index"])}
+        visited = {node["node_index"] for node in nodes
+                   if node.get("state") == map_gen.NODE_VISITED}
         return attach(panels.render_map(
             nodes, edges, current_node_index=run["current_node_index"],
-            available=available, world_id=run["world_id"]))
+            available=options, visited=visited, world_id=run["world_id"]))
 
     return safely(build)
 

@@ -129,7 +129,12 @@ class Session:
                 options = component.get("options") or []
                 if not options:
                     raise AssertionError("선택지가 비어 있는 선택 컴포넌트입니다")
-                values = [_strongest(options)["value"]]
+                # 준비 화면의 파티 선택처럼 여러 개를 요구하는 컴포넌트가 있다.
+                # 하나만 골라 보내면 화면이 요구한 것과 다른 제출이 된다.
+                wanted = max(1, int(component.get("min_values", 1)))
+                values = [option["value"] for option in options[:wanted]]
+                if wanted == 1:
+                    values = [_strongest(options)["value"]]
 
             event = ev.InteractionEvent(
                 event_id=f"press-{self.presses}", user_id=self.user_id,
@@ -137,6 +142,12 @@ class Session:
                 values=values)
             self.presses += 1
             reply = handlers.handle_interaction(self.ctx, event)
+            # `/event` 는 명령이든 컴포넌트든 **모든** 응답에 대해 스레드 요청을
+            # 실행한다. 준비 화면의 마지막 단계가 컴포넌트이므로, 여기서
+            # 빠뜨리면 런이 스레드 없이 만들어진다 (§1.3.5).
+            reply = surfaces.fulfil_thread_request(
+                self.ctx.db, self.ctx.central, reply,
+                parent_channel_id=PARENT_CHANNEL)
             self.log.append(f"{self.state()}: {reply.get('content', '')[:40]}")
             if reply.get("action") != "reply_ephemeral":
                 self.screen = reply
@@ -347,3 +358,94 @@ def test_stock_you_cannot_afford_is_not_offered(ctx, db, user_id):
         {"item_index": 0, "price": 999, "purchased": 0, "item_ref": "{}"}])
     assert all(entry["type"] != "string_select" for entry in components)
     assert components, "나가기까지 사라지면 상점에서 못 나온다"
+
+
+# =====================================================================
+# 본편 한 판 — 준비 화면부터
+# =====================================================================
+def graduate(db, user_id: int, content_version_id: int) -> None:
+    """튜토리얼을 마친 계정으로 만든다 (§3.4.3 이 하는 일과 같은 결과).
+
+    본편은 파티 2명부터이고(§4.1), 그 두 번째 자리는 §5.10의 첫 뽑기 보장으로
+    채워진다. 여기서는 그 결과 상태를 바로 만든다 — 확인하려는 것은 뽑기가
+    아니라 **본편 런이 화면으로 돌아가는가** 이기 때문이다.
+    """
+    from app.db.connection import utcnow
+
+    db.execute("UPDATE accounts SET tutorial_completed_at = ?, party_slots = 2, "
+               "carta = 5000 WHERE user_id = ?", (utcnow(), user_id))
+    db.execute("DELETE FROM world_unlocks WHERE user_id = ?", (user_id,))
+    db.execute("INSERT INTO world_unlocks (user_id, world_id, unlocked_at) "
+               "VALUES (?, 'world_1', ?)", (user_id, utcnow()))
+    db.execute("INSERT OR IGNORE INTO owned_characters (user_id, character_id, "
+               "star_rank, acquired_at) VALUES (?, 'char_ignis', 2, ?)",
+               (user_id, utcnow()))
+    # 보상 칸이 제안할 수 있으려면 계정이 해금한 카드가 있어야 한다 (§3.2).
+    for card_id in ("card_화_강타", "card_수_치유", "card_풍_질풍"):
+        db.execute("INSERT OR IGNORE INTO unlocked_cards (user_id, card_id, "
+                   "upgrade_tier, unlocked_at) VALUES (?, ?, 0, ?)",
+                   (user_id, card_id, utcnow()))
+
+
+def test_the_preparing_flow_can_be_completed_by_pressing(ctx, db, user_id):
+    """§16.2.2 [1]~[6] — 월드·파티·덱·패시브를 화면에서 골라 런을 만든다.
+
+    튜토리얼은 이 단계를 전부 건너뛰므로(월드도 파티도 정해져 있다), 준비
+    화면이 실제로 눌러서 통과되는지는 본편에서만 확인할 수 있다.
+    """
+    session = Session(ctx, user_id)
+    session.command()
+    graduate(db, user_id, ctx.content_version_id)
+
+    session.command("시작")
+    assert session.components(), "준비 화면에 누를 것이 없습니다"
+
+    # 런 행이 생길 때까지 준비 화면을 눌러 나아간다 ([5] MATERIALIZE).
+    for _ in range(20):
+        if lc.active_run_for(db, user_id) is not None:
+            break
+        session.press_first()
+    else:
+        pytest.fail(f"준비 화면을 빠져나오지 못했습니다: {session.log[-4:]}")
+
+    run = lc.active_run_for(db, user_id)
+    assert run["world_id"] == "world_1"
+    assert run["is_tutorial"] == 0
+
+    party = db.query("SELECT party_slot, character_id FROM run_characters "
+                     "WHERE run_id = ? ORDER BY party_slot", (run["run_id"],))
+    assert len(party) == 2, "본편인데 파티가 2명이 아닙니다 (§4.1)"
+
+    # 자리마다 §4.6.2의 덱이 서 있어야 한다.
+    for member in party:
+        count = db.one("SELECT COUNT(*) AS n FROM run_deck_cards WHERE run_id = ? "
+                       "AND party_slot = ?",
+                       (run["run_id"], member["party_slot"]))["n"]
+        assert count > 0, f"자리 {member['party_slot']} 의 덱이 비어 있습니다"
+
+
+def test_a_main_campaign_run_never_gets_stuck(ctx, db, user_id):
+    """본편은 파티 2명이라 라운드마다 두 번 고르고, 보상도 받을 자리를 고른다 —
+    튜토리얼이 한 번도 지나지 않는 길이다."""
+    session = Session(ctx, user_id)
+    session.command()
+    graduate(db, user_id, ctx.content_version_id)
+    session.command("시작")
+
+    for _ in range(20):
+        if lc.active_run_for(db, user_id) is not None:
+            break
+        session.press_first()
+    run_id = session.run_id()
+
+    # 스레드가 열렸고 지도에 서 있다.
+    assert db.one("SELECT thread_id FROM runs WHERE run_id = ?",
+                  (run_id,))["thread_id"] is not None
+    assert session.state() == lc.MAP_NAVIGATION
+
+    final = session.play()
+    assert final in TERMINAL
+    battles = db.one("SELECT COUNT(*) AS n FROM battles WHERE run_id = ?",
+                     (run_id,))["n"]
+    assert battles >= 1, "전투 한 번 없이 본편 런이 끝났습니다"
+    assert lc.active_run_for(db, user_id) is None
