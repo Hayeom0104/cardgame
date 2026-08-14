@@ -240,6 +240,51 @@ def close_run_surface(db: Database, central, run_id: int, *,
     return push_frame(db, central, run_id, content=summary, components=[])
 
 
+def retry_surface(db: Database, central, run_id: int, *,
+                  parent_channel_id: int) -> int | None:
+    """§16.8 — 스레드를 얻지 못한 런의 화면을 **같은 세대로** 다시 만든다.
+
+    `reopen_thread` 와 다른 점은 세대를 올리지 않는다는 것이다. 세대를 올리는
+    것은 스레드가 실제로 사라졌을 때(§16.8의 재생성)이고, 여기는 애초에
+    만들어지지 않았거나 결과를 받지 못한 경우다. 같은 세대의 생성은 멱등하므로
+    (§1.3.5) 실제로는 열려 있었더라도 스레드가 둘이 되지 않는다.
+    """
+    run = db.one("SELECT * FROM runs WHERE run_id = ?", (run_id,))
+    if run is None or run["thread_id"]:
+        return None
+    if central is None or not parent_channel_id:
+        logger.error("런 %s 의 스레드를 다시 시도할 수 없습니다 "
+                     "(중앙봇 클라이언트 또는 채널 설정 없음)", run_id)
+        return None
+
+    generation = int(run["surface_generation"])
+    request_id = delivery.mint_request_id("thread")
+    delivery.record_intent(
+        db, request_id=request_id, run_id=run_id, purpose="canonical",
+        surface_generation=generation,
+        presentation_revision=int(run["presentation_revision"]),
+    )
+    try:
+        result = central.create_thread(
+            logical_session_id=run["logical_session_id"],
+            surface_generation=generation,
+            parent_channel_id=parent_channel_id,
+            owner_user_id=int(run["user_id"]),
+            thread_name=f"덱아웃 - {run['user_id']}",
+            content="런을 이어서 시작합니다.",
+        )
+    except Exception:                                        # noqa: BLE001
+        logger.exception("런 %s 의 스레드 재시도가 실패했습니다", run_id)
+        return None
+
+    if not _bind(db, request_id, result, run_id=run_id,
+                 surface_generation=generation):
+        return None
+    _leave_preparing(db, run_id)
+    row = db.one("SELECT thread_id FROM runs WHERE run_id = ?", (run_id,))
+    return int(row["thread_id"]) if row and row["thread_id"] else None
+
+
 def reopen_thread(db: Database, central, run_id: int, *,
                   parent_channel_id: int) -> int | None:
     """§16.8 — 스레드가 사라진 런의 화면을 새 세대로 다시 연다.

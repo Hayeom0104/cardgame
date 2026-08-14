@@ -74,6 +74,13 @@ async def lifespan(app: FastAPI):
         # 그리는 일이라 §16.6 단일 기록자 큐를 통해야 하므로 계획으로 남긴다.
         state["expired_settled"] = _settle_expired(
             db, state["balance"], plan, state.get("central"))
+        # 계획을 세워 놓고 실행하지 않으면 그 계획은 없는 것과 같다. 나머지
+        # 항목(전투·상점 화면 다시 그리기)은 런이 그대로 살아 있어 플레이어가
+        # 이어서 누를 수 있지만, 아래 둘은 **플레이어가 스스로 풀 수 없다.**
+        state["settlements_resumed"] = _resume_settlements(
+            db, state["balance"], plan, state.get("central"))
+        state["surfaces_retried"] = _retry_surfaces(
+            db, plan, state.get("central"))
     if state["central"] is not None:
         from app.central.transactions import resume_pending
         from app.engine.progression import local_handlers
@@ -121,6 +128,90 @@ def _settle_expired(db: Database, balance, plan: list[dict], central=None) -> in
     if settled:
         logger.info("기동 시 만료된 런 %d개를 정산했습니다", settled)
     return settled
+
+
+def _resume_settlements(db: Database, balance, plan: list[dict],
+                        central=None) -> int:
+    """정산 도중에 죽은 런을 이어서 끝낸다 (§16.2.1).
+
+    `run_settlement` 은 **활성 상태다.** 거기 멈춰 있는 런은 §16.3의 계정당
+    하나 규칙으로 계정을 붙들고 있는데, 정산 화면에는 누를 것이 없어서
+    플레이어가 스스로 풀 방법이 없다 — 30분 만료를 기다리는 수밖에 없었다.
+
+    `recover_runs` 는 처음부터 이 런들을 `resume_settlement` 로 분류하고
+    있었다. 그 계획을 아무도 실행하지 않았을 뿐이다.
+
+    정산 단계는 receipt(§17.6)와 저널 키(§16.4)로 멱등하므로, 어디서 멈췄든
+    다시 들어가 이어서 끝낼 수 있다.
+    """
+    from app.central.transactions import GRANT, create_transaction, run_transaction
+    from app.engine import settlement as sl
+    from app.engine.rng import JournaledRng
+
+    def grant_coin(user_id: int, amount: int, tx_id: str):
+        if central is None:
+            return None
+        create_transaction(db, tx_id=tx_id, user_id=user_id,
+                           operation="settlement", direction=GRANT,
+                           expected_coin_delta=amount, local_required=False)
+        return run_transaction(db, central, tx_id=tx_id, kind="settlement")
+
+    resumed = 0
+    for entry in plan:
+        if entry.get("action") != "resume_settlement":
+            continue
+        run = db.one("SELECT * FROM runs WHERE run_id = ?", (entry["run_id"],))
+        if run is None or run["state"] != lifecycle.RUN_SETTLEMENT:
+            continue
+        try:
+            report = sl.advance_settlement(
+                db, balance, JournaledRng(db, run["run_id"], run["rng_seed"]),
+                run_id=run["run_id"],
+                content_version_id=run["content_version_id"],
+                grant_coin=grant_coin)
+            resumed += 1
+        except Exception:                                    # noqa: BLE001
+            logger.exception("run %s 정산 재개에 실패했습니다", entry["run_id"])
+            continue
+        kept = len(report.get("inventory", {}).get("kept", []))
+        try:
+            surfaces.close_run_surface(
+                db, central, entry["run_id"],
+                summary=f"런을 마무리했습니다. 보관 {kept}개.")
+        except Exception:                                    # noqa: BLE001
+            logger.exception("run %s 의 마지막 화면을 보내지 못했습니다",
+                             entry["run_id"])
+    if resumed:
+        logger.info("기동 시 정산이 멈춰 있던 런 %d개를 이어서 끝냈습니다", resumed)
+    return resumed
+
+
+def _retry_surfaces(db: Database, plan: list[dict], central=None) -> int:
+    """스레드를 얻지 못한 채 준비 상태로 남은 런의 화면을 다시 연다 (§16.8).
+
+    §16.8이 요구하는 대로 **같은 `surface_generation`** 으로 다시 만든다 —
+    같은 세대의 생성은 멱등하므로, 실제로는 열렸는데 우리가 결과를 못 받은
+    경우에도 스레드가 두 개 생기지 않는다.
+
+    플레이어가 `!덱아웃` 을 치면 허브가 알아서 열어 주기는 한다. 다만 화면이
+    없는 런이 계정을 붙들고 있다는 사실을 플레이어가 알 방법이 없으므로,
+    기동할 때 우리가 먼저 푼다.
+    """
+    retried = 0
+    for entry in plan:
+        if entry.get("action") != "retry_surface":
+            continue
+        try:
+            if surfaces.retry_surface(
+                    db, central, entry["run_id"],
+                    parent_channel_id=settings.parent_channel_id):
+                retried += 1
+        except Exception:                                    # noqa: BLE001
+            logger.exception("run %s 의 스레드 재시도에 실패했습니다",
+                             entry["run_id"])
+    if retried:
+        logger.info("기동 시 화면이 없던 런 %d개의 스레드를 열었습니다", retried)
+    return retried
 
 
 app = FastAPI(title="Deckout", lifespan=lifespan)
