@@ -295,9 +295,9 @@ def test_timed_effects_render_as_visible_labels():
            "timed_effects": [{"effect_kind": "invulnerable"},
                              {"effect_kind": "stat_modifier", "stat": "atk",
                               "delta": 20, "is_percent": True}]}
-    line = panels._status_line(unit)
-    assert "무적" in line
-    assert "atk+20%" in line
+    chips = panels._status_chips(unit)
+    assert "무적" in chips
+    assert "atk+20%" in chips
 
 
 def test_the_enemy_panel_now_draws_its_statuses():

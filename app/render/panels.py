@@ -380,14 +380,6 @@ def _status_chips(unit: dict) -> list[str]:
     return [chip for chip in chips if chip]
 
 
-def _status_line(unit: dict) -> str:
-    statuses = " ".join(f"{entry['status_id']}×{entry['stacks']}"
-                        for entry in unit.get("statuses", []))
-    timed = " ".join(_timed_effect_label(entry)
-                     for entry in unit.get("timed_effects", []))
-    return " ".join(part for part in (statuses, timed) if part)
-
-
 def render_ally_panel(units: list[dict], *, resource: int, round_no: int,
                       canvas: Canvas | None = None) -> Image.Image:
     """아군 패널 — 배치, 체력, 방어막, 상태이상 (§11).
