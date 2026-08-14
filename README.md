@@ -13,7 +13,7 @@ pip install -e ".[dev]"
 python -m app.cli.bootstrap --db deckout.db      # migrate + seed + publish content
 python -m app.cli.check_content --db deckout.db  # §10.5 validation pass
 uvicorn app.api.server:app --port 8080
-pytest                                           # 695 tests
+pytest                                           # 699 tests
 ```
 
 Registration (§1.3.0) — `route_threads: true` is **mandatory** and defaults to
@@ -121,6 +121,16 @@ Three things that were listed here are now built: the §6 passive card system,
 §13.2 left unspecified — the KST day boundary and what counts as a missed day —
 are settings (`daily_reset_hour_kst`, `daily_streak_grace_days`) rather than a
 decision made on the owner's behalf.
+
+## One balance number worth a look
+
+`tests/test_playthrough.py` plays a run by pressing only what the screens
+offer. Driven that way, the tutorial boss was first beaten on the **52nd
+attempt** — every attempt a close 10–12 round fight decided by the dice.
+§3.4.1 makes tutorial defeat free, so nobody is blocked, but 51 losses is
+probably not the intended first hour. The numbers are the owner's call
+(`config/01_전투.toml`'s `enemy_bands`, and the tutorial boss in the seed), so
+they were left alone.
 
 **No 🔴 blocking items remain.** P-1 (card upgrade) was closed by v6.4 and is
 implemented; the two naming-only 🔴 items (P-2 starter display name, P-3

@@ -248,6 +248,9 @@ def test_the_shop_always_offers_a_way_out(db, run_id):
 def test_the_shop_lists_what_is_still_for_sale(db, run_id):
     import json
 
+    # 살 수 있는 것만 진열되므로 (탐험 자금은 로컬 재화라 여기서 판단해도
+    # 틀리지 않는다) 지갑을 채워 두고 본다.
+    db.execute("UPDATE runs SET run_currency = 500 WHERE run_id = ?", (run_id,))
     items = [
         {"item_index": 0, "price": 40, "purchased": 0,
          "item_ref": json.dumps({"kind": "card", "name": "평타"})},

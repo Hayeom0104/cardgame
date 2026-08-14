@@ -753,19 +753,31 @@ def _screen_controls(ctx: HandlerContext, run, result: dict,
 
     전투가 끝나 정산으로 넘어간 경우에는 누를 것이 없다 — 런이 끝났다.
     """
-    if conclusion is not None and conclusion.get("screen") == "settlement":
+    effective = _effective_screen(result, conclusion)
+    if effective.get("screen") == "settlement":
         return []
-    screen = result.get("screen")
-    if conclusion is not None and conclusion.get("screen") == "map":
-        # 전투가 승리로 끝나 지도로 돌아갔다.
-        return controls.game_map(ctx.db, run["run_id"])
-    if screen == "battle" and result.get("battle_id"):
+    if effective.get("screen") == "battle" and effective.get("battle_id"):
         engine = bt.build_engine(
-            ctx.db, ctx.balance, battle_id=result["battle_id"],
+            ctx.db, ctx.balance, battle_id=int(effective["battle_id"]),
             run_id=run["run_id"], content_version_id=run["content_version_id"],
             rng=_rng(ctx, run))
         return controls.battle(ctx.db, run["run_id"], engine)
-    return controls.for_screen(ctx.db, run["run_id"], result)
+    return controls.for_screen(ctx.db, run["run_id"], effective)
+
+
+def _effective_screen(result: dict, conclusion: dict | None) -> dict:
+    """지금 플레이어 앞에 있는 화면.
+
+    전투가 끝나면 `conclude_battle` 이 다음 화면을 열어 준다 — 지도일 수도,
+    정산일 수도, §3.4.1 튜토리얼 재도전이 다시 연 전투나 이벤트일 수도 있다.
+    그때도 방금 끝난 전투(`result`)를 기준으로 화면을 그리면, 이미 끝난 판을
+    그리고 그 위에는 누를 것이 하나도 나오지 않는다 — 런이 그대로 굳는다.
+
+    결론이 화면을 열었으면 **그쪽이 지금 화면이다.**
+    """
+    if conclusion is not None and conclusion.get("screen"):
+        return conclusion
+    return result
 
 
 def _screen_art(ctx: HandlerContext, run, result: dict,
@@ -780,12 +792,13 @@ def _screen_art(ctx: HandlerContext, run, result: dict,
         return visuals.settlement(conclusion["report"])
     # 런 행은 전투가 진행되며 갱신되므로 다시 읽는다.
     fresh = ctx.db.one("SELECT * FROM runs WHERE run_id = ?", (run["run_id"],))
-    screen = result.get("screen")
-    if screen == "battle" and result.get("battle_id"):
+    effective = _effective_screen(result, conclusion)
+    screen = effective.get("screen")
+    if screen == "battle" and effective.get("battle_id"):
         return visuals.battle(ctx.db, ctx.balance,
-                              battle_id=result["battle_id"], run=fresh)
+                              battle_id=int(effective["battle_id"]), run=fresh)
     if screen == "shop":
-        return visuals.shop(ctx.db, fresh, result.get("items", []))
+        return visuals.shop(ctx.db, fresh, effective.get("items", []))
     if screen == "map":
         return visuals.game_map(ctx.db, fresh)
     return []
@@ -811,15 +824,25 @@ def _drive_battle(ctx: HandlerContext, run, battle_id: int) -> dict | None:
     routed here too. Leaving `runs.state = 'battle'` with no active battle row
     would soft-lock every later interaction.
     """
-    engine = bt.build_engine(
-        ctx.db, ctx.balance, battle_id=battle_id, run_id=run["run_id"],
-        content_version_id=run["content_version_id"], rng=_rng(ctx, run))
-    results = engine.advance()
-    if results and results[-1].battle_ended:
-        return nodes.conclude_battle(
+    conclusion = None
+    # §3.4.1 — 튜토리얼 패배는 같은 칸을 **다시 연다.** 그렇게 새로 열린 전투도
+    # 첫 플레이어 결정까지 몰아 주지 않으면 적이 턴을 잡은 채로 멈추고, 화면에는
+    # 낼 수 있는 카드가 없어 누를 것이 하나도 남지 않는다 — 런이 그대로 굳는다.
+    # 연달아 지는 경우가 있으므로 몇 번까지만 이어 간다.
+    for _ in range(5):
+        engine = bt.build_engine(
+            ctx.db, ctx.balance, battle_id=battle_id, run_id=run["run_id"],
+            content_version_id=run["content_version_id"], rng=_rng(ctx, run))
+        results = engine.advance()
+        if not (results and results[-1].battle_ended):
+            return conclusion
+        conclusion = nodes.conclude_battle(
             ctx.db, ctx.balance, _rng(ctx, run), run_id=run["run_id"],
             battle_id=battle_id)
-    return None
+        if conclusion.get("screen") != "battle" or not conclusion.get("battle_id"):
+            return conclusion
+        battle_id = conclusion["battle_id"]
+    return conclusion
 
 
 def _on_reward_pick(ctx: HandlerContext, event: ev.InteractionEvent,
@@ -859,7 +882,16 @@ def _on_shop_buy(ctx: HandlerContext, event: ev.InteractionEvent,
     """상점 화면 → item buttons. A purchase is a SELF-LOOP (§16.2)."""
     gate = check_gates(ctx.db, user_id=event.user_id, custom_id=parsed,
                        allowed_states={lc.SHOP})
-    item_index = int(parsed.payload)
+    # 진열이 4~6줄이라 버튼(5개 한도)보다 선택 컴포넌트가 맞고, 그러면 값은
+    # `values[0]` 로 온다. 카드 선택·보상 수령은 이미 둘 다 받는데 여기만
+    # payload 만 읽어서, 선택으로 산 물건이 ValueError 로 터졌다 — 그러면
+    # 이벤트가 기록되지 않아 중앙봇이 같은 조작을 무한히 재전송한다 (§16.7).
+    raw = event.values[0] if event.values else parsed.payload
+    try:
+        item_index = int(raw)
+    except (TypeError, ValueError) as error:
+        raise GateError(errors.ILLEGAL_STATE,
+                        reason=f"item index {raw!r}") from error
     with ctx.db.tx():
         lc.claim_mutation(ctx.db, parsed.run_id, parsed.revision)
         try:
@@ -1076,19 +1108,49 @@ def _resolve_card(ctx, run, engine, unit, card_instance_id, target_ids,
                 ctx.db, ctx.balance, _rng(ctx, run), run_id=parsed.run_id,
                 battle_id=engine.battle_id)
             lines.append(_conclusion_summary(conclusion))
+            conclusion = _drive_concluded_battle(ctx, run, conclusion, lines)
     run = ctx.db.one("SELECT * FROM runs WHERE run_id = ?", (parsed.run_id,))
+    # 결론이 새 전투를 열었으면(튜토리얼 재도전) 화면은 **그 전투** 를 가리켜야
+    # 한다. 방금 끝난 전투를 그리면 플레이어는 이미 끝난 판을 보게 된다.
+    effective = _effective_screen(
+        {"screen": "battle", "battle_id": engine.battle_id}, conclusion)
+    battle_id = (int(effective["battle_id"])
+                 if effective.get("screen") == "battle" and effective.get("battle_id")
+                 else engine.battle_id)
     art = (visuals.settlement(conclusion["report"])
            if conclusion is not None and conclusion.get("screen") == "settlement"
-           else visuals.battle(ctx.db, ctx.balance, battle_id=engine.battle_id,
-                               run=run))
+           else visuals.battle(ctx.db, ctx.balance, battle_id=battle_id, run=run))
     return {"action": "edit", "content": "\n".join(lines),
             "components": _screen_controls(
-                ctx, run, {"screen": "battle", "battle_id": engine.battle_id},
+                ctx, run, {"screen": "battle", "battle_id": battle_id},
                 conclusion),
             "attachments": art}
 
 
+def _drive_concluded_battle(ctx: HandlerContext, run, conclusion: dict,
+                            lines: list[str]) -> dict:
+    """결론이 새 전투를 열었으면 그것도 첫 플레이어 결정까지 몰아 준다.
+
+    §3.4.1의 튜토리얼 재도전이 이 경우다. 실제로 몰아 주는 일은 `_drive_battle`
+    이 하고(그쪽이 세 호출부에서 모두 쓰인다), 여기서는 그 결과를 플레이어가
+    읽을 줄로 옮긴다.
+    """
+    if conclusion.get("screen") != "battle" or not conclusion.get("battle_id"):
+        return conclusion
+    deeper = _drive_battle(ctx, run, conclusion["battle_id"])
+    if deeper is None:
+        return conclusion
+    lines.append(_conclusion_summary(deeper))
+    return deeper
+
+
 def _conclusion_summary(conclusion: dict) -> str:
+    # §3.4.1 — 튜토리얼 패배는 런을 끝내지 않고 같은 칸을 다시 연다. 그때
+    # `conclude_battle` 이 돌려주는 것은 다시 연 화면(대개 `battle`)이므로,
+    # 화면 이름으로 판별하면 **패배한 플레이어에게 "승리!" 라고 말하게 된다.**
+    # 실제로 그랬다.
+    if conclusion.get("tutorial_retry"):
+        return "패배했지만 튜토리얼은 계속됩니다. 다시 도전하세요."
     screen = conclusion["screen"]
     if screen == "settlement":
         report = conclusion["report"]
@@ -1098,9 +1160,6 @@ def _conclusion_summary(conclusion: dict) -> str:
             return (f"월드 클리어! 코인 {rewards.get('coin', 0)} · "
                     f"카르타 {rewards.get('carta', 0)} · 보관 {kept}개")
         return f"런 종료 — 보관 {kept}개"
-    if screen == "node_resolution" and conclusion.get("tutorial_retry"):
-        # §3.4.1 — defeat does not end the tutorial run.
-        return "패배했지만 튜토리얼은 계속됩니다. 다시 도전하세요."
     rewards = conclusion.get("rewards", {})
     drops = len(rewards.get("drops", []))
     return f"승리! 탐험 자금 +{rewards.get('run_currency', 0)} · 획득 {drops}개"

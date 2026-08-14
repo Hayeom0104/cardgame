@@ -171,11 +171,22 @@ def reward(db: Database, run_id: int, options: list[dict], *,
 # 상점 (§7.1)
 # =====================================================================
 def shop(db: Database, run_id: int, items: list[dict]) -> list[dict]:
-    """살 것 하나와 나가기. 나가기가 없으면 상점 칸에서 못 나온다."""
+    """살 것 하나와 나가기. 나가기가 없으면 상점 칸에서 못 나온다.
+
+    살 수 없는 것은 목록에서 뺀다. 탐험 자금은 **로컬 재화** 라 여기서 판단해도
+    틀릴 일이 없다 — 코인과 달리 다른 미니게임이 중간에 가져갈 수 없으므로,
+    §17.3이 코인 잔액으로 버튼을 막지 말라고 한 이유가 여기엔 없다. 걸러 내지
+    않으면 빈털터리 플레이어에게 눌러도 늘 거절되는 목록만 남는다.
+    """
     generation, revision = _surface(db, run_id)
     components: list[dict] = []
 
-    available = [item for item in items if not item.get("purchased")]
+    run = db.one("SELECT run_currency FROM runs WHERE run_id = ?", (run_id,))
+    purse = int(run["run_currency"]) if run else 0
+
+    available = [item for item in items
+                 if not item.get("purchased")
+                 and int(item.get("price", 0)) <= purse]
     if available:
         components.append({
             "type": "string_select",
