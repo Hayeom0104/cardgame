@@ -256,12 +256,13 @@ def test_a_tutorial_run_never_gets_stuck(ctx, db, user_id):
 def test_clearing_the_tutorial_opens_the_main_campaign(ctx, db, user_id):
     """§3.4.3 — 튜토리얼을 깨면 본편이 열려야 한다.
 
-    화면을 눌러 보스를 잡는 데까지 가는 것은 위 테스트가 확인한다. 여기서
-    보려는 것은 **클리어의 결과** 이므로, 보스 전투만 엔진에서 끝내고 그
-    뒤를 본다 — §15의 밸런싱에 따라 몇 번을 지느냐가 달라지는 것에 테스트가
-    좌우되지 않게 하기 위해서다.
+    화면을 눌러 보스까지 가는 길은 위 테스트가 확인한다. 여기서 보려는 것은
+    **클리어의 결과** 이므로 보스 칸을 바로 열고 끝낸다 — 지도를 걸어가면
+    몇 번을 지느냐가 §15 밸런싱과 시드에 달려 있어, 이 테스트가 확인하려는
+    것과 무관한 이유로 흔들린다.
     """
     from app.engine import battle as bt
+    from app.engine import map_gen
     from app.engine import nodes
     from app.engine import units as un
     from app.engine.rng import JournaledRng
@@ -271,46 +272,41 @@ def test_clearing_the_tutorial_opens_the_main_campaign(ctx, db, user_id):
     session.command("시작")
     run_id = session.run_id()
 
-    # 보스 칸까지 화면을 눌러 나아간다.
-    for _ in range(200):
-        if session.state() == lc.BOSS_BATTLE:
-            break
-        if session.state() in TERMINAL:
-            pytest.fail("보스에 닿기 전에 런이 끝났습니다")
-        if not session.components() and session.state() == lc.MAP_NAVIGATION:
-            session.screen = {"components": controls.game_map(db, run_id)}
-        session.press_first()
-    else:
-        pytest.fail("보스 칸에 닿지 못했습니다")
+    boss = db.one("SELECT node_index FROM run_nodes WHERE run_id = ? "
+                  "AND node_type = ? LIMIT 1", (run_id, map_gen.BOSS))
+    assert boss is not None, "지도에 보스 칸이 없습니다"
 
-    # 보스만 쓰러뜨린다.
-    battle = db.one("SELECT battle_id FROM battles WHERE run_id = ? "
-                    "AND state = 'active' ORDER BY battle_id DESC LIMIT 1",
-                    (run_id,))
-    for unit in un.load_units(db, battle["battle_id"], side=un.ENEMY):
+    run = db.one("SELECT * FROM runs WHERE run_id = ?", (run_id,))
+    rng = JournaledRng(db, run_id, run["rng_seed"])
+    db.execute("UPDATE runs SET state = ?, current_node_index = ? WHERE run_id = ?",
+               (lc.NODE_RESOLUTION, boss["node_index"], run_id))
+    opened = nodes.resolve_node(db, ctx.balance, rng, run_id=run_id,
+                                node_index=boss["node_index"])
+    assert opened["screen"] == "battle"
+
+    for unit in un.load_units(db, opened["battle_id"], side=un.ENEMY):
         db.execute("UPDATE battle_units SET hp_current = 0, is_alive = 0 "
                    "WHERE battle_unit_id = ?", (unit.battle_unit_id,))
 
     run = db.one("SELECT * FROM runs WHERE run_id = ?", (run_id,))
-    rng = JournaledRng(db, run_id, run["rng_seed"])
-    engine = bt.build_engine(db, ctx.balance, battle_id=battle["battle_id"],
+    engine = bt.build_engine(db, ctx.balance, battle_id=opened["battle_id"],
                              run_id=run_id,
                              content_version_id=run["content_version_id"], rng=rng)
-    # 전투 종료 판정은 라운드 경계에서 일어난다 (§2.12). 플레이어의 턴을
-    # 기다리는 중이므로 여기서 한 번 밟아 주어야 `won` 으로 확정된다.
+    # 전투 종료 판정은 라운드 경계에서 일어난다 (§2.12).
     engine.round_boundary()
     nodes.conclude_battle(db, ctx.balance, rng, run_id=run_id,
-                          battle_id=battle["battle_id"])
+                          battle_id=opened["battle_id"])
 
     assert db.one("SELECT state FROM runs WHERE run_id = ?",
                   (run_id,))["state"] == lc.RUN_COMPLETED
-    account = db.one("SELECT tutorial_completed_at FROM accounts WHERE user_id = ?",
-                     (user_id,))
-    assert account["tutorial_completed_at"] is not None
-    assert account is not None
 
-    # §3.4.3 — 완료하면 튜토리얼 월드는 **이용 불가가 되고** 본편 1세계가
-    # 열린다. 갯수가 아니라 어디가 열렸는지를 본다.
+    account = db.one("SELECT tutorial_completed_at, party_slots FROM accounts "
+                     "WHERE user_id = ?", (user_id,))
+    assert account["tutorial_completed_at"] is not None
+    # 파티 슬롯이 2가 아니면 본편에 들어갈 수 없다 (§4.1).
+    assert account["party_slots"] >= 2
+
+    # §3.4.3 — 튜토리얼 월드는 이용 불가가 되고 본편 1세계가 열린다.
     worlds = [row["world_id"] for row in db.query(
         "SELECT wu.world_id FROM world_unlocks wu JOIN worlds w "
         "ON w.world_id = wu.world_id AND w.content_version_id = ? "
@@ -318,10 +314,6 @@ def test_clearing_the_tutorial_opens_the_main_campaign(ctx, db, user_id):
         (ctx.content_version_id, user_id))]
     assert worlds, "튜토리얼을 깼는데 본편이 열리지 않았습니다"
     assert TUTORIAL_WORLD_ID not in worlds
-
-    # 파티 슬롯도 2로 올라야 본편에 들어갈 수 있다 (§4.1).
-    assert db.one("SELECT party_slots FROM accounts WHERE user_id = ?",
-                  (user_id,))["party_slots"] >= 2
 
 
 def test_a_shop_purchase_reaches_the_handler(ctx, db, user_id):
