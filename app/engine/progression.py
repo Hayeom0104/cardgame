@@ -205,6 +205,10 @@ def star_up(db: Database, balance: Balance, central, *, user_id: int,
             "from_rank": plan["current_rank"],
             "fragments": plan["cost"]["fragments"],
             "wildcards": plan["cost"]["wildcards"],
+            # 업적 훅이 어느 버전의 업적 목록을 보아야 하는지. 페이로드는
+            # §17.4 복구가 몇 시간 뒤에 다시 열 수도 있으므로, 그때 읽을 값이
+            # 여기 함께 얼려져 있어야 한다.
+            "content_version_id": content_version_id,
         },
     )
     return tx.run_transaction(db, central, tx_id=tx_id,
@@ -238,6 +242,22 @@ def _apply_star_up(db: Database, payload: dict) -> None:
     db.execute(
         "UPDATE owned_characters SET star_rank = star_rank + 1 WHERE user_id = ? "
         "AND character_id = ?", (uid, character_id))
+
+    # §20.2 엔진 훅. `character_starred` 카운터는 선언만 되어 있고 아무 데서도
+    # 오르지 않아서, 그 카운터를 쓰는 업적은 영원히 0이었다.
+    #
+    # 버전이 페이로드에 없으면 업적만 건너뛴다. 이 배포 **전에** 쓰인
+    # 트랜잭션 행에는 그 키가 없고(§17.4 복구가 몇 시간 뒤에 열 수 있다),
+    # 업적 하나 때문에 이미 코인을 낸 성급 상승을 통째로 실패시킬 수는 없다.
+    version = payload.get("content_version_id")
+    if version is not None:
+        ach.advance_counter(
+            db, uid, ach.CHARACTER_STARRED, 1,
+            mutation_id=f"starup:{uid}:{character_id}:{payload['from_rank']}",
+            content_version_id=int(version))
+    else:
+        logger.info("star_up payload predates the achievement hook; "
+                    "skipping the counter for %s", character_id)
 
 
 # =====================================================================

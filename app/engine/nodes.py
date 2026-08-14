@@ -628,6 +628,14 @@ def resume_pending_choice(db: Database, run_id: int, *,
         if owned is None:
             raise NodeError("that cursed card is not in this run's deck")
         deck.remove_card(db, selection)
+        # §20.2 엔진 훅. `curse_removed` 도 선언만 되어 있고 오르는 곳이
+        # 없었다 — 저주 제거 업적을 만들어도 진행되지 않는다는 뜻이었다.
+        run = db.one("SELECT user_id, content_version_id FROM runs WHERE run_id = ?",
+                     (run_id,))
+        ach.advance_counter(
+            db, run["user_id"], ach.CURSE_REMOVED, 1,
+            mutation_id=f"cleanse:{choice['choice_id']}",
+            content_version_id=run["content_version_id"])
 
     with db.tx() as conn:
         conn.execute(

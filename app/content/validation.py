@@ -36,6 +36,7 @@ def validate_version(db: Database, version_id: int) -> None:
     _validate_boss_phases(db, version_id)
     _validate_events(db, version_id)
     _validate_encounters(db, version_id)
+    _validate_world_coverage(db, version_id)
     _validate_research(db, version_id)
     _validate_card_upgrades(db, version_id)
     _validate_passives(db, version_id)
@@ -464,6 +465,34 @@ def _validate_events(db: Database, version_id: int) -> None:
             except ValidationError as error:
                 raise ValidationError(
                     f"{label} branch {branch.get('label')!r}: {error}") from error
+
+
+def _validate_world_coverage(db: Database, version_id: int) -> None:
+    """모든 월드가 전투 칸과 보스 칸에 쓸 조우를 갖고 있는가.
+
+    지도는 언제나 전투 칸과 보스 칸을 만들고(§15.7의 quota), 그 칸에 도달하면
+    `nodes._pick_encounter` 가 그 월드의 조우를 찾는다. 하나도 없으면 런이
+    그 자리에서 죽는다 — 그것도 플레이어가 몇 분을 들여 거기까지 간 뒤에.
+
+    엔진은 이 상황에서 "§10.5가 막았어야 한다"는 오류를 냈지만, §10.5에는
+    정작 그 검사가 없었다. 여기가 그 검사다.
+    """
+    worlds = db.query(
+        "SELECT world_id, name FROM worlds WHERE content_version_id = ? "
+        "ORDER BY sequence_index", (version_id,))
+    authored: dict[tuple[str, str], int] = {}
+    for row in db.query(
+            "SELECT world_id, kind, COUNT(*) AS n FROM encounters "
+            "WHERE content_version_id = ? GROUP BY world_id, kind", (version_id,)):
+        authored[(row["world_id"], row["kind"])] = int(row["n"])
+
+    for world in worlds:
+        for kind in ("normal", "boss"):
+            if not authored.get((world["world_id"], kind)):
+                raise ValidationError(
+                    f"world {world['world_id']!r}({world['name']}) 에 {kind} "
+                    "조우가 하나도 없습니다 — 그 월드의 런은 해당 칸에서 "
+                    "멈춥니다 (§3.1)")
 
 
 def _validate_encounters(db: Database, version_id: int) -> None:

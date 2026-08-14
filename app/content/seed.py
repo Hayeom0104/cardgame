@@ -165,6 +165,43 @@ def _seed_cards(db: Database, version: int) -> None:
         ("card_광_각성", "빛의 각성", "광", 3, "버프디버프", "ally", 6,
          [{"operator": "apply_status",
            "params": {"status_id": st.ATTACK_UP, "stacks": 3}}]),
+        # 여기부터는 §5.6의 여섯 등급이 고르게 차도록, 그리고 일곱 원소가
+        # 전부 한 장 이상은 갖도록 채운 것들이다. 보상 칸과 상점이 등급별로
+        # 뽑아 가므로 어느 등급이 비면 그 칸이 늘 같은 카드를 내놓는다.
+        ("card_풍_질풍", "질풍베기", "풍", 1, "공격", "enemy", 2,
+         [{"operator": "deal_damage", "params": {"multiplier": 1.3}}]),
+        ("card_풍_가속", "순풍", "풍", 1, "버프디버프", "ally", 3,
+         [{"operator": "modify_stat",
+           "params": {"stat": "spd", "delta": 12, "duration_rounds": 2}}]),
+        ("card_수_보호막", "물의 장막", "수", 2, "방어", "ally", 3,
+         [{"operator": "grant_block", "params": {"mode": "multiplier", "value": 2.0}}]),
+        ("card_지_흔들기", "대지 가르기", "지", 2, "공격", "all", 4,
+         [{"operator": "deal_damage", "params": {"multiplier": 1.2}},
+          {"operator": "apply_status",
+           "params": {"status_id": st.SPEED_DOWN, "stacks": 1}}]),
+        ("card_암_출혈", "그림자 칼날", "암", 2, "공격", "enemy", 3,
+         [{"operator": "deal_damage", "params": {"multiplier": 1.5}},
+          {"operator": "apply_status", "params": {"status_id": st.BLEED, "stacks": 3}}]),
+        ("card_광_정화", "정화의 빛", "광", 2, "회복", "ally", 4,
+         [{"operator": "remove_status", "params": {"category": "debuff", "count": 2}},
+          {"operator": "heal", "params": {"mode": "percent_max_hp", "value": 0.15}}]),
+        ("card_무_재정비", "재정비", "무속성", 0, "버프디버프", "self", 4,
+         [{"operator": "draw_cards", "params": {"count": 1}},
+          {"operator": "modify_resource", "params": {"delta": 1}}]),
+        ("card_화_폭발", "연쇄 폭발", "화", 3, "공격", "all", 5,
+         [{"operator": "deal_damage", "params": {"multiplier": 1.6}},
+          {"operator": "apply_status", "params": {"status_id": st.BURN, "stacks": 2}}]),
+        ("card_수_해일", "해일", "수", 3, "공격", "all", 5,
+         [{"operator": "deal_damage", "params": {"multiplier": 1.7}},
+          {"operator": "apply_status",
+           "params": {"status_id": st.HEAL_DOWN, "stacks": 2}}]),
+        ("card_암_심연", "심연의 손아귀", "암", 3, "공격", "enemy", 6,
+         [{"operator": "deal_damage", "params": {"multiplier": 2.9}},
+          {"operator": "apply_status", "params": {"status_id": st.STUN}}]),
+        # 도발은 아군에게 거는 버프이므로 (§2.5.1) 대상은 시전자 자신이다.
+        ("card_지_성벽", "불괴의 성벽", "지", 3, "방어", "self", 6,
+         [{"operator": "grant_block", "params": {"mode": "multiplier", "value": 2.2}},
+          {"operator": "apply_status", "params": {"status_id": st.TAUNT}}]),
     ]
     for card_id, name, element, cost, category, target_side, tier, effects in cards:
         db.execute(
@@ -241,6 +278,11 @@ def _seed_characters(db: Database, version: int) -> None:
         ("char_aquel", "아쿠엘", "수", "서포터형", 3),
         ("char_terradon", "테라돈", "지", "방어형", 1),
         ("char_umbra", "움브라", "암", "디버퍼형", 1),
+        # §15.4의 등급별 성급(top 3 / mid 2 / base 1)에 셋 다 후보가 있어야
+        # 그 등급이 나왔을 때 같은 캐릭터만 반복해서 뽑히지 않는다.
+        ("char_ventus", "벤투스", "풍", "딜서포트형", 2),
+        ("char_lumen", "루멘", "광", "서포터형", 3),
+        ("char_silva", "실바", "지", "공격형", 1),
     ]:
         db.execute(
             "INSERT OR REPLACE INTO characters (content_version_id, character_id, "
@@ -323,6 +365,30 @@ def _seed_enemy_actions(db: Database, version: int) -> None:
         ("act_boss_기절", "각인의 일격", "공격", "enemy", 0,
          [{"operator": "deal_damage", "params": {"multiplier": 1.4}},
           {"operator": "apply_status", "params": {"status_id": st.STUN}}]),
+        # 2세계 이후의 적이 쓰는 것들. 새 상태를 만들지 않고 §2.5.1a의 기존
+        # 10개만 쓴다 — 상태를 늘리면 §10.5의 scope 판정이 함께 늘어난다.
+        ("act_방벽", "방벽", "방어", "self", 0,
+         [{"operator": "grant_block", "params": {"mode": "multiplier", "value": 2.0}}]),
+        ("act_출혈", "찢는 발톱", "공격", "enemy", 0,
+         [{"operator": "deal_damage", "params": {"multiplier": 1.1}},
+          {"operator": "apply_status", "params": {"status_id": st.BLEED, "stacks": 3}}]),
+        ("act_광역약화", "무력화의 안개", "버프디버프", "all", 0,
+         [{"operator": "apply_status",
+           "params": {"status_id": st.DEFENSE_DOWN, "stacks": 2}}]),
+        ("act_침묵", "봉인의 주문", "버프디버프", "enemy", 0,
+         [{"operator": "apply_status", "params": {"status_id": st.SILENCE}}]),
+        ("act_감속", "진흙 발목", "버프디버프", "enemy", 0,
+         [{"operator": "apply_status",
+           "params": {"status_id": st.SPEED_DOWN, "stacks": 2}}]),
+        ("act_회복저해", "썩은 숨결", "버프디버프", "all", 0,
+         [{"operator": "apply_status",
+           "params": {"status_id": st.HEAL_DOWN, "stacks": 2}}]),
+        ("act_boss_돌진", "짓밟기", "공격", "enemy", 0,
+         [{"operator": "deal_damage", "params": {"multiplier": 1.8}}]),
+        ("act_boss_포효", "포효", "버프디버프", "self", 0,
+         [{"operator": "apply_status",
+           "params": {"status_id": st.ATTACK_UP, "stacks": 2}},
+          {"operator": "grant_block", "params": {"mode": "multiplier", "value": 1.5}}]),
     ]
     for action_id, name, category, target_side, is_basic, effects in rows:
         db.execute(
@@ -354,6 +420,56 @@ def _seed_enemies(db: Database, version: int) -> None:
          common_rules + [
              {"priority": 5, "condition": {"op": "always"},
               "action_id": "act_화상부여", "weight": 1.0, "cooldown_turns": 2},
+         ]),
+        # 2세계 — 늪. 굳히고 늦추는 쪽으로 몰아간다.
+        ("enemy_w2_도롱뇽", "늪지 도롱뇽", "일반", "수", "공격형", 58, 10, 5, 88,
+         common_rules + [
+             {"priority": 5, "condition": {"op": "always"},
+              "action_id": "act_감속", "weight": 1.0, "cooldown_turns": 2},
+         ]),
+        ("enemy_w2_석상", "이끼 낀 석상", "일반", "지", "방어형", 70, 8, 6, 80,
+         common_rules + [
+             {"priority": 5, "condition": {"op": "self_hp_below", "value": 0.6},
+              "action_id": "act_방벽", "weight": 2.0, "cooldown_turns": 2},
+         ]),
+        ("enemy_w2_망령", "늪의 망령", "일반", "암", "서포터형", 46, 9, 3, 108,
+         common_rules + [
+             {"priority": 5, "condition": {"op": "always"},
+              "action_id": "act_회복저해", "weight": 1.0, "cooldown_turns": 3},
+         ]),
+        ("enemy_w2_거머리", "거대 거머리", "엘리트", "수", "공격형", 130, 16, 7, 100,
+         common_rules + [
+             {"priority": 5, "condition": {"op": "always"},
+              "action_id": "act_출혈", "weight": 2.0, "cooldown_turns": 2},
+         ]),
+        # 3세계 — 절벽. 빠르고 성가시다.
+        ("enemy_w3_하피", "절벽 하피", "일반", "풍", "공격형", 50, 12, 3, 110,
+         common_rules + [
+             {"priority": 5, "condition": {"op": "always"},
+              "action_id": "act_출혈", "weight": 1.0, "cooldown_turns": 2},
+         ]),
+        ("enemy_w3_주문사", "바람 주문사", "일반", "풍", "서포터형", 47, 9, 4, 106,
+         common_rules + [
+             {"priority": 5, "condition": {"op": "always"},
+              "action_id": "act_침묵", "weight": 1.0, "cooldown_turns": 3},
+         ]),
+        ("enemy_w3_수문장", "산정의 수문장", "엘리트", "지", "방어형", 148, 15, 10, 92,
+         common_rules + [
+             {"priority": 5, "condition": {"op": "self_hp_below", "value": 0.5},
+              "action_id": "act_방벽", "weight": 2.0, "cooldown_turns": 1},
+         ]),
+        # 4세계 — 심연. 광역과 디버프가 겹친다.
+        ("enemy_w4_그림자", "그림자 병사", "일반", "암", "공격형", 62, 12, 5, 98,
+         common_rules),
+        ("enemy_w4_봉인관", "봉인의 관", "일반", "암", "서포터형", 52, 8, 5, 84,
+         common_rules + [
+             {"priority": 5, "condition": {"op": "always"},
+              "action_id": "act_광역약화", "weight": 1.0, "cooldown_turns": 3},
+         ]),
+        ("enemy_w4_집행자", "심연의 집행자", "엘리트", "암", "공격형", 145, 18, 8, 112,
+         common_rules + [
+             {"priority": 5, "condition": {"op": "always"},
+              "action_id": "act_boss_돌진", "weight": 1.5, "cooldown_turns": 2},
          ]),
     ]
     for enemy_id, name, tier, element, role, hp, atk, defense, spd, rules in rows:
@@ -389,6 +505,41 @@ def _seed_enemies(db: Database, version: int) -> None:
         (version, _json(["trans_무적"])),
     )
 
+    # 본편 보스 넷. 능력치는 §15의 보스 밴드 안이고, 2페이즈에서 각자 다른
+    # 무기를 꺼낸다 — 같은 보스를 네 번 만나는 것처럼 느껴지지 않도록.
+    campaign_bosses = [
+        ("enemy_w1_boss", "고블린 대족장", "지", "공격형", "act_boss_돌진"),
+        ("enemy_w2_boss", "늪의 군주", "수", "방어형", "act_회복저해"),
+        ("enemy_w3_boss", "폭풍의 종자", "풍", "공격형", "act_침묵"),
+        ("enemy_w4_boss", "심연의 군주", "암", "공격형", "act_boss_광역"),
+    ]
+    for enemy_id, name, element, role, signature in campaign_bosses:
+        rules = [
+            {"priority": 10, "condition": None, "action_id": "act_기본공격",
+             "weight": 3.0, "cooldown_turns": 0},
+            {"priority": 8, "condition": None, "action_id": "act_강타",
+             "weight": 1.5, "cooldown_turns": 1},
+            # 2페이즈에 들어가야 열리는 수. 그전에는 고르지 않는다.
+            {"priority": 5, "condition": {"op": "always"},
+             "action_id": signature, "weight": 2.0, "cooldown_turns": 2,
+             "min_phase": 2},
+            {"priority": 6, "condition": {"op": "self_hp_below", "value": 0.35},
+             "action_id": "act_boss_포효", "weight": 1.0, "cooldown_turns": 3},
+        ]
+        db.execute(
+            "INSERT OR REPLACE INTO enemies (content_version_id, enemy_id, name, "
+            "tier, element, role, hp, atk, def, spd, strategy_override, "
+            "action_rules_json, art_asset, is_retired) "
+            "VALUES (?, ?, ?, '보스', ?, ?, 450, 22, 10, 100, NULL, ?, NULL, 0)",
+            (version, enemy_id, name, element, role, _json(rules)),
+        )
+        db.execute(
+            "INSERT OR REPLACE INTO boss_phases (content_version_id, boss_phase_id, "
+            "enemy_id, phase_index, hp_threshold_pct, effect_ids_json) "
+            "VALUES (?, ?, ?, 2, 0.50, ?)",
+            (version, f"phase_{enemy_id}_2", enemy_id, _json(["trans_무적"])),
+        )
+
 
 def _seed_encounters(db: Database, version: int) -> None:
     rows = [
@@ -403,6 +554,52 @@ def _seed_encounters(db: Database, version: int) -> None:
          [{"enemy_id": "enemy_w1_고블린", "slot": 0},
           {"enemy_id": "enemy_w1_방패병", "slot": 1},
           {"enemy_id": "enemy_w1_주술사", "slot": 2}]),
+        # 월드마다 전투 조우를 둘 이상 두는 것은 다양성 때문만이 아니다 —
+        # 하나뿐이면 일곱 개의 전투 칸이 전부 같은 싸움이 된다.
+        ("enc_w1_normal_2", WORLD_1_ID, "normal",
+         [{"enemy_id": "enemy_w1_고블린", "slot": 0},
+          {"enemy_id": "enemy_w1_고블린", "slot": 1}]),
+        ("enc_w1_boss", WORLD_1_ID, "boss",
+         [{"enemy_id": "enemy_w1_boss", "slot": 0}]),
+
+        ("enc_w2_normal", "world_2", "normal",
+         [{"enemy_id": "enemy_w2_도롱뇽", "slot": 0},
+          {"enemy_id": "enemy_w2_석상", "slot": 1}]),
+        ("enc_w2_normal_2", "world_2", "normal",
+         [{"enemy_id": "enemy_w2_도롱뇽", "slot": 0},
+          {"enemy_id": "enemy_w2_망령", "slot": 1},
+          {"enemy_id": "enemy_w2_망령", "slot": 2}]),
+        ("enc_w2_elite", "world_2", "elite",
+         [{"enemy_id": "enemy_w2_거머리", "slot": 0}]),
+        ("enc_w2_boss", "world_2", "boss",
+         [{"enemy_id": "enemy_w2_boss", "slot": 0}]),
+
+        ("enc_w3_normal", "world_3", "normal",
+         [{"enemy_id": "enemy_w3_하피", "slot": 0},
+          {"enemy_id": "enemy_w3_하피", "slot": 1},
+          {"enemy_id": "enemy_w3_주문사", "slot": 2}]),
+        ("enc_w3_normal_2", "world_3", "normal",
+         [{"enemy_id": "enemy_w3_주문사", "slot": 0},
+          {"enemy_id": "enemy_w2_석상", "slot": 1}]),
+        ("enc_w3_elite", "world_3", "elite",
+         [{"enemy_id": "enemy_w3_수문장", "slot": 0},
+          {"enemy_id": "enemy_w3_하피", "slot": 1}]),
+        ("enc_w3_boss", "world_3", "boss",
+         [{"enemy_id": "enemy_w3_boss", "slot": 0}]),
+
+        ("enc_w4_normal", "world_4", "normal",
+         [{"enemy_id": "enemy_w4_그림자", "slot": 0},
+          {"enemy_id": "enemy_w4_그림자", "slot": 1},
+          {"enemy_id": "enemy_w4_봉인관", "slot": 2}]),
+        ("enc_w4_normal_2", "world_4", "normal",
+         [{"enemy_id": "enemy_w4_그림자", "slot": 0},
+          {"enemy_id": "enemy_w3_주문사", "slot": 1},
+          {"enemy_id": "enemy_w4_봉인관", "slot": 2}]),
+        ("enc_w4_elite", "world_4", "elite",
+         [{"enemy_id": "enemy_w4_집행자", "slot": 0},
+          {"enemy_id": "enemy_w4_봉인관", "slot": 1}]),
+        ("enc_w4_boss", "world_4", "boss",
+         [{"enemy_id": "enemy_w4_boss", "slot": 0}]),
     ]
     for encounter_id, world_id, kind, units in rows:
         db.execute(
@@ -417,9 +614,9 @@ def _seed_worlds(db: Database, version: int) -> None:
     rows = [
         (TUTORIAL_WORLD_ID, "튜토리얼", 0, 1, 0, 0),
         (WORLD_1_ID, "1세계 - 고블린 굴", 1, 0, 0, 0),
-        ("world_2", "2세계", 2, 0, 0, 1),
-        ("world_3", "3세계", 3, 0, 1, 2),
-        ("world_4", "4세계", 4, 0, 2, 3),
+        ("world_2", "2세계 - 잠긴 늪", 2, 0, 0, 1),
+        ("world_3", "3세계 - 바람의 절벽", 3, 0, 1, 2),
+        ("world_4", "4세계 - 심연의 문", 4, 0, 2, 3),
     ]
     for world_id, name, sequence, is_tutorial, tier_min, tier_max in rows:
         db.execute(
@@ -485,6 +682,40 @@ def _seed_events(db: Database, version: int) -> None:
             {"label": "수색",
              "effects": [{"operator": "grant_equipment",
                           "params": {"rarity_band": "low"}}]},
+        ]),
+        # 여기부터 넷은 "고른 만큼 잃는" 쪽이다. 앞의 여덟 개가 대체로
+        # 이득이라 이벤트 칸이 그냥 공짜 보상 칸처럼 굳어 있었다.
+        ("event_피의계약", "피의 계약", "choice", "none", [
+            {"label": "거절한다", "effects": []},
+            {"label": "손을 벤다",
+             "effects": [{"operator": "modify_hp",
+                          "params": {"mode": "percent_max_hp", "delta": -0.20}},
+                         {"operator": "grant_equipment",
+                          "params": {"rarity_band": "high"}}]},
+        ]),
+        ("event_뒤틀린제단", "뒤틀린 제단", "choice", "none", [
+            {"label": "물러선다", "effects": []},
+            {"label": "제물을 바친다",
+             "effects": [{"operator": "insert_cursed_card",
+                          "params": {"cursed_card_id": "curse_무거운사슬"}},
+                         {"operator": "grant_currency",
+                          "params": {"currency": "run_currency", "amount": 120}}]},
+        ]),
+        ("event_대장간", "잊힌 대장간", "choice", "none", [
+            {"label": "장비를 손본다",
+             "effects": [{"operator": "grant_enhancement_stone",
+                          "params": {"tier": 1, "amount": 3}}]},
+            {"label": "재료만 챙긴다",
+             "effects": [{"operator": "grant_currency",
+                          "params": {"currency": "run_currency", "amount": 60}}]},
+        ]),
+        ("event_길잃은학자", "길 잃은 학자", "choice", "none", [
+            {"label": "길을 알려준다",
+             "effects": [{"operator": "grant_currency",
+                          "params": {"currency": "carta", "amount": 120}}]},
+            {"label": "책을 빌린다",
+             "effects": [{"operator": "grant_card_fragments",
+                          "params": {"card_id": "card_광_정화", "amount": 80}}]},
         ]),
     ]
     for event_id, name, kind, combat_link, branches in rows:
@@ -568,6 +799,16 @@ def _seed_achievements(db: Database, version: int) -> None:
         ("ach_첫보스처치", "첫 보스 처치", "boss_defeated", 1, 100),
         ("ach_보스3회처치", "보스 3회 처치", "boss_defeated", 3, 150),
         ("ach_보스10회처치", "보스 10회 처치", "boss_defeated", 10, 200),
+        # 나머지 다섯 카운터에도 목표를 하나씩 준다. 카운터는 이미 엔진이
+        # 올리고 있었는데 그것을 보는 업적이 없어서, 진행도가 아무 데도
+        # 표시되지 않고 있었다.
+        ("ach_런1회클리어", "첫 완주", "run_cleared", 1, 80),
+        ("ach_런10회클리어", "열 번의 완주", "run_cleared", 10, 200),
+        ("ach_적100처치", "적 100 처치", "enemy_killed", 100, 120),
+        ("ach_적500처치", "적 500 처치", "enemy_killed", 500, 250),
+        ("ach_장비강화5", "장비 5회 강화", "equipment_tiered", 5, 100),
+        ("ach_성급상승3", "성급 3회 상승", "character_starred", 3, 150),
+        ("ach_저주정화5", "저주 5회 정화", "curse_removed", 5, 120),
     ]
     for achievement_id, name, counter_key, target, carta in rows:
         db.execute(
@@ -618,6 +859,15 @@ def _seed_equipment(db: Database, version: int) -> None:
         ("eq_수련검", "수련용 검", "무기", "수련자", 0, 4, 0, 0, 3000),
         ("eq_수련갑", "수련용 갑옷", "방어구", "수련자", 12, 0, 3, 0, 3500),
         ("eq_수련부적", "수련용 부적", "악세서리", "수련자", 6, 1, 1, 3, 4000),
+        # §8.2의 세트 보너스는 세 부위를 같은 세트로 채웠을 때만 붙는다. 그래서
+        # 세트는 언제나 무기/방어구/악세서리 세 줄이 함께 들어온다 — 두 부위만
+        # 있는 세트는 영원히 보너스가 붙지 않는 죽은 장비가 된다.
+        ("eq_늪검", "늪지 만도", "무기", "늪지기", 0, 7, 0, 0, 7000),
+        ("eq_늪갑", "늪지 비늘갑", "방어구", "늪지기", 24, 0, 5, 0, 8000),
+        ("eq_늪부적", "늪지 부적", "악세서리", "늪지기", 10, 2, 2, 5, 9000),
+        ("eq_심연검", "심연의 검", "무기", "심연", 0, 12, 0, 0, 14000),
+        ("eq_심연갑", "심연의 갑옷", "방어구", "심연", 40, 0, 9, 0, 15000),
+        ("eq_심연부적", "심연의 인장", "악세서리", "심연", 18, 4, 3, 8, 15000),
     ]
     for def_id, name, slot, set_name, hp, atk, defense, spd, price in rows:
         db.execute(
@@ -627,11 +877,15 @@ def _seed_equipment(db: Database, version: int) -> None:
             (version, def_id, name, slot, set_name, hp, atk, defense, spd, price),
         )
     # §8.2 full-set only — all 3 slots from the same named set, no 2-piece tier.
-    db.execute(
-        "INSERT OR REPLACE INTO equipment_sets (content_version_id, set_name, "
-        "bonus_json) VALUES (?, '수련자', ?)",
-        (version, _json({"atk_flat": 3, "def_flat": 3})),
-    )
+    for set_name, bonus in [
+        ("수련자", {"atk_flat": 3, "def_flat": 3}),
+        ("늪지기", {"hp_flat": 30, "def_flat": 6}),
+        ("심연", {"atk_flat": 10, "spd_flat": 6}),
+    ]:
+        db.execute(
+            "INSERT OR REPLACE INTO equipment_sets (content_version_id, set_name, "
+            "bonus_json) VALUES (?, ?, ?)", (version, set_name, _json(bonus)),
+        )
 
 
 # =====================================================================
