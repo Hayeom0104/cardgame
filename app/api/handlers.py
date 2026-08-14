@@ -220,6 +220,7 @@ def _run_deck_screen(ctx: HandlerContext, run) -> dict:
     계정에서 카드를 강화해도 이 런에는 반영되지 않는다.
     """
     lines = ["**덱** — 진행 중인 런"]
+    render_rows: list[dict] = []
     for row in ctx.db.query(
         "SELECT rc.party_slot, rc.character_id, c.name FROM run_characters rc "
         "JOIN characters c ON c.character_id = rc.character_id "
@@ -233,15 +234,19 @@ def _run_deck_screen(ctx: HandlerContext, run) -> dict:
             "SELECT COUNT(*) AS n FROM run_deck_cards WHERE run_id = ? "
             "AND party_slot = ? AND is_cursed = 1",
             (run["run_id"], row["party_slot"]))
+        cursed_n = cursed["n"] if cursed else 0
         line = (f"{row['name']} — 뽑을 더미 {piles.get('draw', 0)} · "
                 f"버린 더미 {piles.get('discard', 0)} · "
                 f"손패 {piles.get('in_hand', 0)}")
-        if cursed and cursed["n"]:
-            line += f" · 저주 {cursed['n']}"
+        if cursed_n:
+            line += f" · 저주 {cursed_n}"
         lines.append(line)
+        render_rows.append({"name": row["name"], "draw": piles.get("draw", 0),
+                           "discard": piles.get("discard", 0),
+                           "hand": piles.get("in_hand", 0), "cursed": cursed_n})
     lines.append("이 런의 덱은 시작할 때 고정됩니다. "
                  "계정에서 카드를 강화해도 다음 런부터 반영됩니다. (§16.2.3)")
-    return _reply("\n".join(lines))
+    return {**_reply("\n".join(lines)), "attachments": visuals.run_deck(render_rows)}
 
 
 def _expire_and_close(ctx: HandlerContext, user_id: int) -> dict | None:
@@ -327,11 +332,15 @@ def characters_screen(ctx: HandlerContext, user_id: int) -> dict:
     #: 재화가 실제로 충분한 것만 버튼에 올린다. 눌러도 거절되는 선택지를
     #: 늘어놓으면 목록만 길어진다.
     ready: list[tuple] = []
+    render_rows: list[dict] = []
     for row in rows:
         cap = pg.star_cap(ctx.balance, bool(row["special_cap"]))
         stars = "★" * int(row["star_rank"])
         line = (f"{row['name']} {stars} ({row['star_rank']}/{cap}) · "
                 f"{row['element']} · {row['job_role']}")
+        render_row = {"character_id": row["character_id"], "name": row["name"],
+                     "element": row["element"], "job_role": row["job_role"],
+                     "star_rank": row["star_rank"]}
         try:
             plan = pg.check_star_up(ctx.db, ctx.balance, user_id=user_id,
                                     character_id=row["character_id"],
@@ -340,12 +349,16 @@ def characters_screen(ctx: HandlerContext, user_id: int) -> dict:
             line += (f"\n　다음 성급: 조각 {plan['have_fragments']}/{cost['fragments']} "
                      f"· 와일드카드 {plan['have_wildcards']}/{cost['wildcards']} "
                      f"· 코인 {cost['coin']}")
+            render_row["status"] = f"다음 성급: 코인 {cost['coin']}"
+            render_row["status_ready"] = bool(plan["affordable_locally"])
         except pg.ProgressionError as reason:
             line += f"\n　{reason}"
+            render_row["status"] = str(reason)
         else:
             if plan["affordable_locally"]:
                 ready.append((row["character_id"], row["name"], plan))
         lines.append(line)
+        render_rows.append(render_row)
 
     components = []
     if ready:
@@ -357,20 +370,22 @@ def characters_screen(ctx: HandlerContext, user_id: int) -> dict:
                  "description": f"코인 {plan['cost']['coin']}", "value": cid_}
                 for cid_, name, plan in ready[:25]],
         })
-    return _reply("\n".join(lines), components)
+    return {**_reply("\n".join(lines), components),
+            "attachments": visuals.characters(render_rows)}
 
 
 def equipment_screen(ctx: HandlerContext, user_id: int) -> dict:
     """`!덱아웃 장비` — 보유 장비, 티어, 다음 강화 비용 (§8.4)."""
     rows = ctx.db.query(
-        "SELECT oe.equipment_instance_id, oe.tier, oe.equipped_character_id, "
-        "ed.name, ed.slot, ed.set_name FROM owned_equipment oe "
+        "SELECT oe.equipment_instance_id, oe.equipment_def_id, oe.tier, "
+        "oe.equipped_character_id, ed.name, ed.slot, ed.set_name FROM owned_equipment oe "
         "JOIN equipment_defs ed ON ed.equipment_def_id = oe.equipment_def_id "
         "AND ed.content_version_id = ? WHERE oe.user_id = ? "
         "ORDER BY oe.equipment_instance_id", (ctx.content_version_id, user_id))
     stones = ctx.db.query(
         "SELECT tier, amount FROM enhancement_stones WHERE user_id = ? "
         "AND amount > 0 ORDER BY tier", (user_id,))
+    stone_rows = [dict(row) for row in stones]
 
     lines = [f"**장비** — {_coin_line(ctx, user_id)}"]
     if stones:
@@ -384,18 +399,24 @@ def equipment_screen(ctx: HandlerContext, user_id: int) -> dict:
     #: 강화석이 있는지는 엔진이 판단한다. 여기서는 아직 최고 티어가 아닌
     #: 장비만 올린다.
     upgradable: list[tuple] = []
+    render_rows: list[dict] = []
     for row in rows:
         equipped = f" [{row['equipped_character_id']}]" if row["equipped_character_id"] else ""
         line = f"{row['name']} T{row['tier']} · {row['slot']}{equipped}"
+        render_row = {"equipment_def_id": row["equipment_def_id"], "name": row["name"],
+                     "tier": row["tier"], "slot": row["slot"],
+                     "equipped_character_id": row["equipped_character_id"]}
         if int(row["tier"]) < max_tier:
             cost = pg.enhancement_cost(ctx.balance, int(row["tier"]) + 1)
             need = f"T{int(row['tier']) + 1}×{cost['current_tier_stones']}"
             if cost["previous_tier_stones"]:
                 need += f" + T{row['tier']}×{cost['previous_tier_stones']}"
             line += f"\n　다음 강화: {need}"
+            render_row["next_enhance"] = f"다음 강화: {need}"
             upgradable.append((row["equipment_instance_id"], row["name"],
                                int(row["tier"]) + 1))
         lines.append(line)
+        render_rows.append(render_row)
 
     components = []
     if upgradable:
@@ -412,7 +433,8 @@ def equipment_screen(ctx: HandlerContext, user_id: int) -> dict:
                      "value": str(row["equipment_instance_id"])}
                     for row in rows[:25]],
     })
-    return _reply("\n".join(lines), components)
+    return {**_reply("\n".join(lines), components),
+            "attachments": visuals.equipment(render_rows, stones=stone_rows)}
 
 
 def research_screen(ctx: HandlerContext, user_id: int) -> dict:
@@ -424,10 +446,12 @@ def research_screen(ctx: HandlerContext, user_id: int) -> dict:
     lines = [f"**연구** — {_coin_line(ctx, user_id)} · "
              f"와일드카드 {account['wildcards']}"]
     available: list[dict] = []
+    render_rows: list[dict] = []
     for entry in listing:
         completed = entry["steps_taken"] >= entry["max_steps"]
         step = (f" [{entry['steps_taken']}/{entry['max_steps']}]"
                 if entry["max_steps"] > 1 else "")
+        render_rows.append({**entry, "completed": completed})
         if completed:
             # 다 끝난 노드에 다음 단계 가격이나 선행 조건을 붙이지 않는다.
             lines.append(f"✅ {entry['name']}{step}")
@@ -457,7 +481,8 @@ def research_screen(ctx: HandlerContext, user_id: int) -> dict:
                  "value": entry["node_id"]}
                 for entry in available[:25]],
         })
-    return _reply("\n".join(lines), components)
+    return {**_reply("\n".join(lines), components),
+            "attachments": visuals.research(render_rows)}
 
 
 def hub_shop_screen(ctx: HandlerContext, user_id: int) -> dict:
@@ -486,7 +511,10 @@ def hub_shop_screen(ctx: HandlerContext, user_id: int) -> dict:
                       "value": str(entry["tier"])}
                      for entry in listing["stones"][:25]]},
     ]
-    return _reply("\n".join(lines), components)
+    return {**_reply("\n".join(lines), components),
+            "attachments": visuals.hub_shop(
+                listing["equipment"], listing["stones"],
+                currency=coin_balance(ctx, user_id))}
 
 
 def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
@@ -513,10 +541,12 @@ def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
                 "content": errors.RUN_ALREADY_ACTIVE}
 
     account = ctx.db.one("SELECT * FROM accounts WHERE user_id = ?", (user_id,))
+    note = None
     lines = []
     if expired is not None:
         kept = len(expired.get("inventory", {}).get("kept", []))
-        lines.append(f"오래 조작이 없어 이전 런을 정리했습니다. 보관 {kept}개.")
+        note = f"오래 조작이 없어 이전 런을 정리했습니다. 보관 {kept}개."
+        lines.append(note)
     lines += [
         "**덱아웃**",
         f"{_coin_line(ctx, user_id)} · 카르타 {account['carta']} · "
@@ -543,6 +573,8 @@ def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
     screen = _reply("\n".join(lines))
     if components:
         screen["components"] = components
+    screen["attachments"] = visuals.hub(
+        dict(account), coin=coin_balance(ctx, user_id), daily=daily, note=note)
     return screen
 
 
@@ -653,7 +685,7 @@ def achievements_screen(ctx: HandlerContext, user_id: int) -> dict:
         lines.append(
             f"{mark} {entry['name']} — {entry['current_value']}/{entry['target_value']}"
         )
-    return _reply("\n".join(lines))
+    return {**_reply("\n".join(lines)), "attachments": visuals.achievements(listing)}
 
 
 # =====================================================================

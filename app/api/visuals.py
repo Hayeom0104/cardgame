@@ -344,6 +344,43 @@ def collection(db: Database, *, user_id: int,
 
 
 # =====================================================================
+# 허브 — 요약, 캐릭터, 장비, 연구, 업적
+# =====================================================================
+def hub(account: dict, *, coin: int | None, daily: dict,
+       note: str | None = None) -> list[dict]:
+    return safely(lambda: attach(panels.render_hub(
+        account, coin=coin, daily=daily, note=note)))
+
+
+def characters(rows: list[dict]) -> list[dict]:
+    return safely(lambda: attach(panels.render_characters(rows)) if rows else [])
+
+
+def equipment(rows: list[dict], *, stones: list[dict] | None = None) -> list[dict]:
+    return safely(lambda: attach(panels.render_equipment(rows, stones=stones))
+                 if rows else [])
+
+
+def hub_shop(equipment_listing: list[dict], stones: list[dict], *,
+            currency: int | None) -> list[dict]:
+    return safely(lambda: attach(panels.render_hub_shop(
+        equipment_listing, stones, currency=currency)))
+
+
+def research(listing: list[dict]) -> list[dict]:
+    return safely(lambda: attach(panels.render_research(listing)) if listing else [])
+
+
+def achievements(listing: list[dict]) -> list[dict]:
+    return safely(lambda: attach(panels.render_achievements(listing))
+                 if listing else [])
+
+
+def run_deck(rows: list[dict]) -> list[dict]:
+    return safely(lambda: attach(panels.render_run_deck(rows)) if rows else [])
+
+
+# =====================================================================
 # 정산
 # =====================================================================
 def settlement(report: dict) -> list[dict]:

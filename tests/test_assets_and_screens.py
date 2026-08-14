@@ -133,6 +133,32 @@ def test_every_screen_renders_within_the_attachment_limits():
                                       "name": "카드", "rarity_tier": 4}] * 10),
         panels.render_prep(party, world="세계 1", deck=cards),
         panels.render_settlement({"inventory": {}, "rewards": {}}),
+        panels.render_hub({"carta": 100, "wildcards": 3, "party_slots": 2,
+                          "passive_slots": 1}, coin=500,
+                          daily={"claimable": True, "streak": 3,
+                                "reward": {"coin": 100, "carta": 20}}),
+        panels.render_characters([
+            {"character_id": "char_ignis", "name": "이그니스", "element": "화",
+             "job_role": "공격형", "star_rank": 3, "status": "다음 성급: 코인 800",
+             "status_ready": True}]),
+        panels.render_equipment(
+            [{"equipment_def_id": "eq_수련검", "name": "수련검", "tier": 1,
+              "slot": "무기", "next_enhance": "다음 강화: T2×2"}],
+            stones=[{"tier": 1, "amount": 5}]),
+        panels.render_hub_shop(
+            [{"equipment_def_id": "eq_수련검", "name": "수련검", "slot": "무기",
+              "price_coin": 500}],
+            [{"tier": 1, "price_coin": 100}], currency=500),
+        panels.render_research([
+            {"name": "스탯 강화", "completed": True, "coin_cost": 0, "wildcard_cost": 0,
+             "achievement_progress": None, "available": True},
+            {"name": "파티 슬롯 3", "completed": False, "available": False,
+             "coin_cost": 3000, "wildcard_cost": 2,
+             "achievement_progress": {"name": "전투 승리", "current": 4, "target": 10}}]),
+        panels.render_achievements([
+            {"name": "첫 승리", "completed": True, "current_value": 1, "target_value": 1}]),
+        panels.render_run_deck([
+            {"name": "이그니스", "draw": 5, "discard": 2, "hand": 5, "cursed": 1}]),
     ]
     for attachment in screens:
         attachment.validate()
@@ -260,6 +286,74 @@ def test_a_real_battle_response_carries_the_panels(db, balance, version, user_id
                                                         "deckout_enemy.png"]
     for entry in art:
         assert base64.b64decode(entry["data_b64"])[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_the_hub_and_roster_screens_now_carry_a_panel(db, balance, version, user_id):
+    """허브·캐릭터·장비·연구·업적·허브상점 — 전부 글자만 있던 화면들.
+
+    렌더 함수가 있는 것과 핸들러가 실제로 그것을 붙이는 것은 다르다 — 이
+    세션 내내 반복된 그 구멍이다."""
+    from app.api import handlers
+
+    ctx = handlers.HandlerContext(db=db, balance=balance, central=None,
+                                  content_version_id=version)
+
+    hub = handlers.hub_screen(ctx, user_id)
+    assert hub["attachments"] and hub["attachments"][0]["filename"] == "deckout_hub.png"
+
+    characters = handlers.characters_screen(ctx, user_id)
+    assert characters["attachments"][0]["filename"] == "deckout_characters.png"
+
+    achievements = handlers.achievements_screen(ctx, user_id)
+    # 계정에 아직 진행도가 없으면 목록 자체가 비어 "업적이 없습니다"로 짧게
+    # 끝날 수 있다 — 그 경우엔 컴포넌트/첨부 키가 없는 순수 텍스트 응답이다.
+    if achievements.get("attachments"):
+        assert achievements["attachments"][0]["filename"] == "deckout_achievements.png"
+
+    research = handlers.research_screen(ctx, user_id)
+    assert research["attachments"][0]["filename"] == "deckout_research.png"
+
+    shop = handlers.hub_shop_screen(ctx, user_id)
+    assert shop["attachments"][0]["filename"] == "deckout_hub_shop.png"
+
+    for entry in (hub["attachments"] + characters["attachments"]
+                 + research["attachments"] + shop["attachments"]):
+        assert base64.b64decode(entry["data_b64"])[:8] == b"\x89PNG\r\n\x1a\n"
+        assert entry["content_type"] == "image/png"
+
+
+def test_equipment_screen_carries_a_panel_once_something_is_owned(db, balance,
+                                                                   version, user_id):
+    from app.api import handlers
+
+    ctx = handlers.HandlerContext(db=db, balance=balance, central=None,
+                                  content_version_id=version)
+    row = db.one("SELECT equipment_def_id FROM equipment_defs "
+                 "WHERE content_version_id = ? LIMIT 1", (version,))
+    if row is None:
+        pytest.skip("이 시드에 장비 정의가 없습니다")
+    db.execute("INSERT INTO owned_equipment (user_id, equipment_def_id, tier) "
+              "VALUES (?, ?, 0)", (user_id, row["equipment_def_id"]))
+
+    screen = handlers.equipment_screen(ctx, user_id)
+    assert screen["attachments"][0]["filename"] == "deckout_equipment.png"
+
+
+def test_a_run_in_progress_shows_its_deck_as_a_panel(db, balance, version, user_id):
+    from app.api import handlers
+    from app.content.seed import STARTER_CHARACTER_ID, TUTORIAL_WORLD_ID
+    from app.engine import lifecycle as lc
+
+    ctx = handlers.HandlerContext(db=db, balance=balance, central=None,
+                                  content_version_id=version)
+    lc.create_run(
+        db, balance,
+        lc.RunBuildRequest(user_id=user_id, world_id=TUTORIAL_WORLD_ID,
+                           party_character_ids=[STARTER_CHARACTER_ID],
+                           is_tutorial=True),
+        version)
+    screen = handlers.deck_screen(ctx, user_id)
+    assert screen["attachments"][0]["filename"] == "deckout_run_deck.png"
 
 
 def test_the_map_response_carries_the_map(db, balance, version, user_id):

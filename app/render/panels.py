@@ -732,6 +732,248 @@ def render_collection(cards: list[dict], *, title: str) -> Attachment:
 
 
 # =====================================================================
+# 허브 — 요약, 캐릭터, 장비, 연구, 업적
+# =====================================================================
+def render_hub(account: dict, *, coin: int | None, daily: dict,
+               note: str | None = None) -> Attachment:
+    """허브 요약 — 재화, 슬롯, 출석 (§4.6).
+
+    허브 화면은 글자만 있었다. 다른 화면은 전부 그림 한 장을 붙이는데
+    여기만 빠져 있었던 이유는 그릴 만한 '내용물'(카드·캐릭터·지도)이 없기
+    때문이었다 — 그래서 숫자 자체를 패널로 그린다.
+    """
+    canvas = Canvas(theme_module.load().size("panel_size"))
+    canvas.title("덱아웃")
+
+    top = 56
+    if note:
+        canvas.label((canvas.pad, top), note[:60], role="small", color=canvas.muted)
+        top += 22
+
+    coin_text = f"코인 {coin}" if coin is not None else "코인 —"
+    canvas.label((canvas.pad, top), coin_text, color=canvas.accent)
+    canvas.label((canvas.pad, top + 26),
+                 f"카르타 {account.get('carta', 0)} · "
+                 f"와일드카드 {account.get('wildcards', 0)}")
+    canvas.label((canvas.pad, top + 50),
+                 f"파티 슬롯 {account.get('party_slots', 0)} · "
+                 f"패시브 슬롯 {account.get('passive_slots', 0)}", role="small",
+                 color=canvas.muted)
+
+    daily_top = top + 86
+    if daily.get("claimable"):
+        reward = daily.get("reward", {})
+        canvas.label((canvas.pad, daily_top),
+                     f"출석 {daily.get('streak', 0)}일째 — 받을 것: "
+                     f"코인 {reward.get('coin', 0)} · "
+                     f"카르타 {reward.get('carta', 0)}", color=canvas.accent)
+    else:
+        canvas.label((canvas.pad, daily_top),
+                     f"출석 {daily.get('streak', 0)}일째 — 오늘 것은 받았습니다.",
+                     role="small", color=canvas.muted)
+    return canvas.finish("deckout_hub.png")
+
+
+def render_characters(rows: list[dict]) -> Attachment:
+    """보유 캐릭터 명단 — 성급과 다음 성급 비용 (§4.4)."""
+    canvas = Canvas(theme_module.load().size("prep_size"))
+    canvas.title("캐릭터", right=f"보유 {len(rows)}")
+
+    portrait = (64, 64)
+    item_width, row_height = 420, 80
+    columns = max(1, (canvas.width - canvas.pad * 2 + canvas.gap)
+                  // (item_width + canvas.gap))
+    capacity_rows = max(1, (canvas.height - 56 - canvas.pad + canvas.gap)
+                        // (row_height + canvas.gap))
+    capacity = columns * capacity_rows
+
+    for index, entry in enumerate(rows[:capacity]):
+        column, slot = index % columns, index // columns
+        left = canvas.pad + column * (item_width + canvas.gap)
+        top = 56 + slot * (row_height + canvas.gap)
+        art = canvas.assets.art("character", str(entry.get("character_id", "")),
+                                label=str(entry.get("name", "")),
+                                rarity=entry.get("star_rank"), size=portrait)
+        canvas.paste(art, (left, top))
+
+        text_left = left + portrait[0] + 10
+        star = "★" * int(entry.get("star_rank", 1))
+        canvas.label((text_left, top), f"{entry.get('name', '')} {star}"[:20])
+        canvas.label((text_left, top + 22),
+                     f"{entry.get('element', '')} · {entry.get('job_role', '')}",
+                     role="small", color=canvas.muted)
+        status = entry.get("status")
+        if status:
+            canvas.label((text_left, top + 44), str(status)[:28], role="small",
+                         color=canvas.accent if entry.get("status_ready")
+                         else canvas.muted)
+
+    hidden = len(rows) - capacity
+    if hidden > 0:
+        canvas.label((canvas.pad, canvas.height - 24), f"그 외 {hidden}명",
+                     role="small", color=canvas.muted)
+    return canvas.finish("deckout_characters.png")
+
+
+def render_equipment(rows: list[dict], *, stones: list[dict] | None = None) -> Attachment:
+    """보유 장비 명단 — 티어, 장착 대상, 다음 강화 비용 (§8.4)."""
+    canvas = Canvas(theme_module.load().size("shop_size"))
+    canvas.title("장비", right=f"보유 {len(rows)}")
+
+    top0 = 56
+    if stones:
+        canvas.label((canvas.pad, top0), "강화석  " + " · ".join(
+            f"T{row['tier']}×{row['amount']}" for row in stones), role="small",
+            color=canvas.accent)
+        top0 += 26
+
+    icon = (56, 56)
+    item_width, row_height = 420, 72
+    columns = max(1, (canvas.width - canvas.pad * 2 + canvas.gap)
+                  // (item_width + canvas.gap))
+    capacity_rows = max(1, (canvas.height - top0 - canvas.pad + canvas.gap)
+                        // (row_height + canvas.gap))
+    capacity = columns * capacity_rows
+
+    for index, entry in enumerate(rows[:capacity]):
+        column, slot = index % columns, index // columns
+        left = canvas.pad + column * (item_width + canvas.gap)
+        top = top0 + slot * (row_height + canvas.gap)
+        art = canvas.assets.art("equipment", str(entry.get("equipment_def_id", "")),
+                                label=str(entry.get("name", "")), size=icon)
+        canvas.paste(art, (left, top))
+
+        text_left = left + icon[0] + 10
+        canvas.label((text_left, top),
+                     f"{entry.get('name', '')} T{entry.get('tier', 1)}"[:22])
+        equipped = entry.get("equipped_character_id")
+        sub = str(entry.get("slot", "")) + (f" · 장착: {equipped}" if equipped else "")
+        canvas.label((text_left, top + 22), sub[:32], role="small", color=canvas.muted)
+        need = entry.get("next_enhance")
+        if need:
+            canvas.label((text_left, top + 44), str(need)[:32], role="small",
+                         color=canvas.accent)
+
+    hidden = len(rows) - capacity
+    if hidden > 0:
+        canvas.label((canvas.pad, canvas.height - 24), f"그 외 {hidden}개",
+                     role="small", color=canvas.muted)
+    return canvas.finish("deckout_equipment.png")
+
+
+def render_hub_shop(equipment: list[dict], stones: list[dict], *,
+                    currency: int | None) -> Attachment:
+    """허브 상점 진열 — 장비와 강화석 (§7.2)."""
+    canvas = Canvas(theme_module.load().size("shop_size"))
+    canvas.title("허브 상점", right=f"코인 {currency}" if currency is not None else "")
+
+    icon = (56, 56)
+    item_width, row_height = 420, 72
+    columns = max(1, (canvas.width - canvas.pad * 2 + canvas.gap)
+                  // (item_width + canvas.gap))
+    for index, entry in enumerate(equipment):
+        column, slot = index % columns, index // columns
+        left = canvas.pad + column * (item_width + canvas.gap)
+        top = 56 + slot * (row_height + canvas.gap)
+        if top + row_height > canvas.height - 60:
+            break
+        art = canvas.assets.art("equipment", str(entry.get("equipment_def_id", "")),
+                                label=str(entry.get("name", "")), size=icon)
+        canvas.paste(art, (left, top))
+        text_left = left + icon[0] + 10
+        canvas.label((text_left, top), str(entry.get("name", ""))[:22])
+        canvas.label((text_left, top + 22),
+                     f"{entry.get('slot', '')} · 코인 {entry.get('price_coin', 0)}",
+                     role="small", color=canvas.accent)
+
+    stones_top = canvas.height - 46
+    canvas.label((canvas.pad, stones_top), "강화석", role="small", color=canvas.muted)
+    canvas.label((canvas.pad, stones_top + 20), " · ".join(
+        f"T{entry.get('tier')} {entry.get('price_coin', 0)}" for entry in stones)[:80],
+        role="small", color=canvas.accent)
+    return canvas.finish("deckout_hub_shop.png")
+
+
+def render_research(listing: list[dict]) -> Attachment:
+    """연구 목록 — 잠김·해금 가능·완료와 다음 비용 (§20.5)."""
+    canvas = Canvas(theme_module.load().size("prep_size"))
+    canvas.title("연구")
+
+    row_height = 44
+    capacity = max(1, (canvas.height - 56 - canvas.pad + canvas.gap) // row_height)
+    for index, entry in enumerate(listing[:capacity]):
+        top = 56 + index * row_height
+        completed = bool(entry.get("completed"))
+        available = bool(entry.get("available"))
+        locked = not completed and not available
+        name_color = (canvas.theme.color("color_hp_full") if completed
+                     else canvas.muted if locked else canvas.text)
+        canvas.label((canvas.pad, top), str(entry.get("name", ""))[:32],
+                     color=name_color)
+
+        if completed:
+            mark = "완료"
+            width = canvas.draw.textlength(mark, font=canvas.font("small"))
+            canvas.label((canvas.width - canvas.pad - width, top), mark,
+                         role="small", color=canvas.theme.color("color_hp_full"))
+        elif available:
+            canvas.label((canvas.pad, top + 20),
+                         f"코인 {entry.get('coin_cost', 0)} · "
+                         f"와일드카드 {entry.get('wildcard_cost', 0)}",
+                         role="small", color=canvas.accent)
+        else:
+            progress = entry.get("achievement_progress")
+            if progress:
+                canvas.bar(canvas.pad, top + 24, 200, 8,
+                          int(progress.get("current", 0)),
+                          int(progress.get("target", 1) or 1))
+    return canvas.finish("deckout_research.png")
+
+
+def render_achievements(listing: list[dict]) -> Attachment:
+    """업적 목록 — 진행도 막대 (§20.5)."""
+    canvas = Canvas(theme_module.load().size("prep_size"))
+    canvas.title("업적")
+
+    row_height = 40
+    capacity = max(1, (canvas.height - 56 - canvas.pad + canvas.gap) // row_height)
+    for index, entry in enumerate(listing[:capacity]):
+        top = 56 + index * row_height
+        completed = bool(entry.get("completed"))
+        canvas.label((canvas.pad, top), str(entry.get("name", ""))[:36],
+                     color=canvas.theme.color("color_hp_full") if completed
+                     else canvas.text)
+        canvas.bar(canvas.pad, top + 20, 240, 8,
+                  int(entry.get("current_value", 0)),
+                  int(entry.get("target_value", 1) or 1))
+
+    hidden = len(listing) - capacity
+    if hidden > 0:
+        canvas.label((canvas.pad, canvas.height - 24), f"그 외 {hidden}개",
+                     role="small", color=canvas.muted)
+    return canvas.finish("deckout_achievements.png")
+
+
+def render_run_deck(rows: list[dict]) -> Attachment:
+    """런 중 덱 — 캐릭터별 뽑을 더미·버린 더미·손패·저주 (§16.2.3)."""
+    canvas = Canvas(theme_module.load().size("panel_size"))
+    canvas.title("덱 — 진행 중인 런")
+
+    row_height = 48
+    for index, entry in enumerate(rows[:6]):
+        top = 56 + index * row_height
+        canvas.label((canvas.pad, top), str(entry.get("name", ""))[:20])
+        line = (f"뽑을 더미 {entry.get('draw', 0)} · "
+               f"버린 더미 {entry.get('discard', 0)} · "
+               f"손패 {entry.get('hand', 0)}")
+        cursed = int(entry.get("cursed", 0))
+        if cursed:
+            line += f" · 저주 {cursed}"
+        canvas.label((canvas.pad, top + 22), line, role="small", color=canvas.muted)
+    return canvas.finish("deckout_run_deck.png")
+
+
+# =====================================================================
 # 정산
 # =====================================================================
 def render_settlement(report: dict) -> Attachment:
