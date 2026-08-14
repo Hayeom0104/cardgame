@@ -13,7 +13,7 @@ pip install -e ".[dev]"
 python -m app.cli.bootstrap --db deckout.db      # migrate + seed + publish content
 python -m app.cli.check_content --db deckout.db  # §10.5 validation pass
 uvicorn app.api.server:app --port 8080
-pytest                                           # 567 tests
+pytest                                           # 636 tests
 ```
 
 Registration (§1.3.0) — `route_threads: true` is **mandatory** and defaults to
@@ -81,6 +81,8 @@ double-crediting is forbidden. A registered bot name **cannot be re-registered**
 | `app/engine/map_gen.py` | §3.5.3 canonical generation, retry bound, fallback |
 | `app/engine/nodes.py` | §3 node resolution and the §16.2 run loop |
 | `app/engine/gacha.py` | §5 pity curve, redistribution, first-pull guarantee |
+| `app/engine/passives.py` | §6 passive cards — slots, run-scoped equip, battle triggers |
+| `app/engine/attendance.py` | §13.2 daily claims — KST boundary, streak, missed days |
 | `app/engine/card_upgrades.py` | §5.8 five-tier upgrades, overlay resolution, §2.5.1a scope |
 | `app/engine/settlement.py` | §8.6.3 settlement, §15.10 retention, §16.2.1 step machine |
 | `app/engine/lifecycle.py` | §16 states, `preparing` flow, build snapshot, CAS |
@@ -93,6 +95,7 @@ double-crediting is forbidden. A registered bot name **cannot be re-registered**
 | `app/api/events.py` | §1.2 per-type parsing (five shapes, not a shared model) |
 | `app/api/custom_id.py`, `gates.py`, `errors.py` | §19.2 `custom_id`, §1.3.10 five gates, §19.4 strings |
 | `app/render/panels.py` | §11 two-panel battle screen, map, settlement |
+| `app/render/artgen.py` | placeholder art derived from the content id |
 
 ## Decision markers
 
@@ -104,9 +107,14 @@ were not invented**.
 
 | Item | Why |
 |---|---|
-| **Art assets** | The *pipeline* is built: drop a PNG into `assets/<kind>/<id>.png` and it is used on the next screen (`python -m app.cli.assets` lists what is wanted). The launch art itself is unauthored, and §11's fallback renders the name on a rarity-coloured field so the game never fails to render. |
-| **Content beyond the launch set** | §13.2's authoring list: full character/card/enemy rosters, passive effects, equipment sets, events beyond the 8 seed, achievements beyond the 3 research-gating ones. |
-| **Daily/attendance claim rules** | §13.2 — the `daily_claims` table exists; the KST boundary and missed-day rules are unspecified. |
+| **Final art** | Every content id ships with a generated placeholder (`python -m app.cli.make_art`) — distinct per id, in the §10 palette, so screens are readable and things are told apart. It is a marker, not a drawing. Drop a real PNG at `assets/<kind>/<id>.png` and it wins from the next screen; `make_art` never overwrites what is already there. |
+| **Content past the launch set** | §13.2's roster is filled to the point where all four worlds are playable end to end and no gacha band, rarity tier or element is empty. It is a launch set, not a full game's worth of content. Everything past this is dashboard work, not code. |
+
+Three things that were listed here are now built: the §6 passive card system,
+§13.2's daily/attendance claims, and art for every content id. The two rules
+§13.2 left unspecified — the KST day boundary and what counts as a missed day —
+are settings (`daily_reset_hour_kst`, `daily_streak_grace_days`) rather than a
+decision made on the owner's behalf.
 
 **No 🔴 blocking items remain.** P-1 (card upgrade) was closed by v6.4 and is
 implemented; the two naming-only 🔴 items (P-2 starter display name, P-3

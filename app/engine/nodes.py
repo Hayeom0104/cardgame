@@ -100,7 +100,7 @@ def _start_battle(db: Database, balance: Balance, rng: JournaledRng, run, node,
     A tutorial retry re-enters here, and `create_battle` inserts a NEW row at
     attempt_no + 1 (§3.4.2) — the previous row is retained for telemetry.
     """
-    encounter_id = _pick_encounter(db, rng, run, node["node_index"], kind)
+    encounter_id = _pick_encounter(db, balance, rng, run, node["node_index"], kind)
     battle_id = enc.create_battle(
         db, balance, run_id=run["run_id"], node_index=node["node_index"],
         encounter_id=encounter_id, content_version_id=run["content_version_id"],
@@ -117,8 +117,34 @@ def _start_battle(db: Database, balance: Balance, rng: JournaledRng, run, node,
             "encounter_id": encounter_id, "is_boss": kind == "boss"}
 
 
-def _pick_encounter(db: Database, rng: JournaledRng, run, node_index: int,
-                    kind: str) -> str:
+def _elite_encounters(db: Database, run) -> list[str]:
+    return [row["encounter_id"] for row in db.query(
+        "SELECT encounter_id FROM encounters WHERE content_version_id = ? "
+        "AND world_id = ? AND kind = 'elite' ORDER BY encounter_id",
+        (run["content_version_id"], run["world_id"]))]
+
+
+def _pick_encounter(db: Database, balance: Balance, rng: JournaledRng, run,
+                    node_index: int, kind: str) -> str:
+    # 엘리트 조우는 §3.1에 자기 칸이 없다. 대신 전투 칸이 깊은 곳에서 가끔
+    # 엘리트로 바뀔 수 있게 열어 둔다 — 보상 계산(`_post_battle_rewards`)은
+    # 이미 `elite_clear` 를 따로 갖고 있어서, 엘리트 조우를 만들어 두어도
+    # 고를 방법이 없으면 그 콘텐츠도 그 보상 줄도 영영 쓰이지 않는다.
+    #
+    # 확률의 기본값은 0이다. 문서가 이 규칙을 정해 두지 않았으므로 켜고 끄는
+    # 것은 오너의 몫이고, 0이면 동작이 종전과 정확히 같다.
+    if kind == "normal":
+        chance = float(balance.get("elite_encounter_chance"))
+        depth_from = int(balance.get("elite_encounter_from_depth"))
+        node = db.one(
+            "SELECT depth FROM run_nodes WHERE run_id = ? AND node_index = ?",
+            (run["run_id"], node_index))
+        deep_enough = node is not None and int(node["depth"]) >= depth_from
+        if chance > 0 and deep_enough:
+            elites = _elite_encounters(db, run)
+            if elites and rng.chance(f"node:{node_index}:elite", chance):
+                return rng.choice(f"node:{node_index}:elite_pick", elites)
+
     candidates = [
         row["encounter_id"]
         for row in db.query(

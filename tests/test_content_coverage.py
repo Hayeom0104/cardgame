@@ -87,8 +87,8 @@ def test_a_run_in_the_second_world_can_actually_start_a_battle(
         "SELECT * FROM run_nodes WHERE run_id = ? AND node_type = ? "
         "ORDER BY node_index LIMIT 1", (run_id, map_gen.COMBAT))
     assert combat is not None
-    encounter_id = nodes._pick_encounter(db, rng, run, combat["node_index"],
-                                         "normal")
+    encounter_id = nodes._pick_encounter(db, balance, rng, run,
+                                         combat["node_index"], "normal")
     battle_id = enc.create_battle(
         db, balance, run_id=run_id, node_index=combat["node_index"],
         encounter_id=encounter_id, content_version_id=version)
@@ -110,7 +110,7 @@ def test_every_world_can_pick_a_boss_encounter(db, balance, version, user_id):
         )
         run = db.one("SELECT * FROM runs WHERE run_id = ?", (run_id,))
         rng = JournaledRng(db, run_id, run["rng_seed"])
-        assert nodes._pick_encounter(db, rng, run, 0, "boss")
+        assert nodes._pick_encounter(db, balance, rng, run, 0, "boss")
         # 다음 월드를 시작하려면 이 런을 끝내야 한다 (§16.3).
         db.execute("UPDATE runs SET state = 'run_completed' WHERE run_id = ?",
                    (run_id,))
@@ -214,3 +214,92 @@ def test_an_old_payload_without_the_version_still_stars_up(db, version, user_id)
     })
     assert db.one("SELECT star_rank FROM owned_characters WHERE user_id = ? "
                   "AND character_id = 'char_terradon'", (user_id,))["star_rank"] == 2
+
+
+# =====================================================================
+# 엘리트 조우
+# =====================================================================
+def test_elite_encounters_are_off_by_default(db, balance, version, user_id):
+    """기본값 0 은 동작이 종전과 정확히 같다는 뜻이다."""
+    assert float(balance.get("elite_encounter_chance")) == 0.0
+
+    party = graduate(db, user_id, "world_2")
+    run_id = lc.create_run(
+        db, balance,
+        lc.RunBuildRequest(user_id=user_id, world_id="world_2",
+                           party_character_ids=party),
+        version,
+    )
+    run = db.one("SELECT * FROM runs WHERE run_id = ?", (run_id,))
+    rng = JournaledRng(db, run_id, run["rng_seed"])
+
+    picked = {
+        nodes._pick_encounter(db, balance, rng, run, node["node_index"], "normal")
+        for node in db.query(
+            "SELECT node_index FROM run_nodes WHERE run_id = ? AND node_type = ?",
+            (run_id, map_gen.COMBAT))
+    }
+    kinds = {db.one("SELECT kind FROM encounters WHERE content_version_id = ? "
+                    "AND encounter_id = ?", (version, encounter_id))["kind"]
+             for encounter_id in picked}
+    assert kinds == {"normal"}
+
+
+def test_turning_the_elite_chance_up_makes_them_appear(db, balance, version,
+                                                       user_id):
+    db.execute("UPDATE balancing_constants SET value_json = '1.0' "
+               "WHERE content_version_id = ? AND key = 'elite_encounter_chance'",
+               (version,))
+    fresh = type(balance)(db, version)
+
+    party = graduate(db, user_id, "world_2")
+    run_id = lc.create_run(
+        db, fresh,
+        lc.RunBuildRequest(user_id=user_id, world_id="world_2",
+                           party_character_ids=party),
+        version,
+    )
+    run = db.one("SELECT * FROM runs WHERE run_id = ?", (run_id,))
+    rng = JournaledRng(db, run_id, run["rng_seed"])
+    depth_from = int(fresh.get("elite_encounter_from_depth"))
+
+    deep = db.one(
+        "SELECT node_index FROM run_nodes WHERE run_id = ? AND node_type = ? "
+        "AND depth >= ? ORDER BY node_index LIMIT 1",
+        (run_id, map_gen.COMBAT, depth_from))
+    assert deep is not None
+    encounter_id = nodes._pick_encounter(db, fresh, rng, run,
+                                         deep["node_index"], "normal")
+    kind = db.one("SELECT kind FROM encounters WHERE content_version_id = ? "
+                  "AND encounter_id = ?", (version, encounter_id))["kind"]
+    assert kind == "elite"
+
+
+def test_shallow_nodes_stay_normal_even_at_full_chance(db, balance, version,
+                                                       user_id):
+    """초반 전투 칸이 갑자기 엘리트가 되지 않는다."""
+    db.execute("UPDATE balancing_constants SET value_json = '1.0' "
+               "WHERE content_version_id = ? AND key = 'elite_encounter_chance'",
+               (version,))
+    fresh = type(balance)(db, version)
+
+    party = graduate(db, user_id, "world_2")
+    run_id = lc.create_run(
+        db, fresh,
+        lc.RunBuildRequest(user_id=user_id, world_id="world_2",
+                           party_character_ids=party),
+        version,
+    )
+    run = db.one("SELECT * FROM runs WHERE run_id = ?", (run_id,))
+    rng = JournaledRng(db, run_id, run["rng_seed"])
+
+    shallow = db.one(
+        "SELECT node_index FROM run_nodes WHERE run_id = ? AND node_type = ? "
+        "AND depth = 1 ORDER BY node_index LIMIT 1", (run_id, map_gen.COMBAT))
+    if shallow is None:
+        pytest.skip("이 지도에는 깊이 1의 전투 칸이 없다")
+    encounter_id = nodes._pick_encounter(db, fresh, rng, run,
+                                         shallow["node_index"], "normal")
+    kind = db.one("SELECT kind FROM encounters WHERE content_version_id = ? "
+                  "AND encounter_id = ?", (version, encounter_id))["kind"]
+    assert kind == "normal"
