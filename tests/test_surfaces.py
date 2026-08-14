@@ -280,3 +280,142 @@ def test_the_event_endpoint_opens_the_thread(tmp_path, monkeypatch):
             "SELECT thread_id FROM runs WHERE user_id = 4242")
         assert run["thread_id"] is not None
         assert "thread_request" not in reply.json()
+
+
+# =====================================================================
+# §1.3.6 / §16.6 — 끝난 런의 화면을 마지막 상태로
+# =====================================================================
+class EditingCentral(FakeCentral):
+    """스레드에 더해 메시지 편집까지 흉내 낸다."""
+
+    def __init__(self, *, edit_fails: bool = False):
+        super().__init__()
+        self.edit_fails = edit_fails
+        self.edits: list[dict] = []
+
+    def edit_message(self, **kwargs):
+        if kwargs["new_presentation_revision"] != \
+                kwargs["expected_presentation_revision"] + 1:
+            raise AssertionError("§1.3.6 — new는 expected + 1 이어야 합니다")
+        self.edits.append(kwargs)
+        if self.edit_fails:
+            raise RuntimeError("중앙봇이 응답하지 않습니다")
+        return {"status": "edited"}
+
+
+def surfaced_run(ctx, db, central, user_id) -> int:
+    response = start_tutorial(ctx, user_id)
+    run_id = response["run_id"]
+    surfaces.fulfil_thread_request(db, central, response,
+                                   parent_channel_id=PARENT_CHANNEL)
+    return run_id
+
+
+def test_a_finished_run_gets_its_screen_rewritten(db, balance, version, user_id):
+    central = EditingCentral()
+    ctx = handlers.HandlerContext(db=db, balance=balance, central=central,
+                                  content_version_id=version)
+    run_id = surfaced_run(ctx, db, central, user_id)
+
+    assert surfaces.close_run_surface(db, central, run_id, summary="끝났습니다")
+    assert len(central.edits) == 1
+    assert central.edits[0]["content"] == "끝났습니다"
+
+
+def test_the_finished_screen_has_no_buttons_left(db, balance, version, user_id):
+    """게이트가 막아 주더라도, 눌리는데 안 되는 버튼을 남겨 둘 이유는 없다."""
+    central = EditingCentral()
+    ctx = handlers.HandlerContext(db=db, balance=balance, central=central,
+                                  content_version_id=version)
+    run_id = surfaced_run(ctx, db, central, user_id)
+
+    surfaces.close_run_surface(db, central, run_id, summary="끝났습니다")
+    assert central.edits[0]["components"] == []
+
+
+def test_the_revision_moves_only_after_the_edit_succeeds(db, balance, version,
+                                                         user_id):
+    """실패했는데 번호만 올라가면 그 뒤의 조작이 전부 STALE_REVISION 이 된다."""
+    central = EditingCentral(edit_fails=True)
+    ctx = handlers.HandlerContext(db=db, balance=balance, central=central,
+                                  content_version_id=version)
+    run_id = surfaced_run(ctx, db, central, user_id)
+    before = db.one("SELECT presentation_revision FROM runs WHERE run_id = ?",
+                    (run_id,))["presentation_revision"]
+
+    assert surfaces.close_run_surface(db, central, run_id, summary="끝") is False
+    after = db.one("SELECT presentation_revision FROM runs WHERE run_id = ?",
+                   (run_id,))["presentation_revision"]
+    assert after == before
+
+    queued = db.one("SELECT status FROM delivery_queue WHERE run_id = ?", (run_id,))
+    assert queued["status"] == "failed"
+
+
+def test_a_successful_edit_advances_the_revision_by_one(db, balance, version,
+                                                        user_id):
+    central = EditingCentral()
+    ctx = handlers.HandlerContext(db=db, balance=balance, central=central,
+                                  content_version_id=version)
+    run_id = surfaced_run(ctx, db, central, user_id)
+    before = db.one("SELECT presentation_revision FROM runs WHERE run_id = ?",
+                    (run_id,))["presentation_revision"]
+
+    surfaces.close_run_surface(db, central, run_id, summary="끝")
+    after = db.one("SELECT presentation_revision FROM runs WHERE run_id = ?",
+                   (run_id,))["presentation_revision"]
+    assert after == before + 1
+    assert db.one("SELECT status FROM delivery_queue WHERE run_id = ?",
+                  (run_id,))["status"] == "sent"
+
+
+def test_a_run_with_no_thread_is_skipped_quietly(db, balance, version, user_id):
+    central = EditingCentral()
+    ctx = handlers.HandlerContext(db=db, balance=balance, central=central,
+                                  content_version_id=version)
+    response = start_tutorial(ctx, user_id)          # 스레드를 열지 않는다
+    run_id = response["run_id"]
+
+    assert surfaces.close_run_surface(db, central, run_id, summary="끝") is False
+    assert central.edits == []
+
+
+def test_abandoning_from_the_channel_closes_the_thread_screen(db, balance,
+                                                              version, user_id):
+    """포기는 채널에서 하고 화면은 스레드에 있다."""
+    central = EditingCentral()
+    ctx = handlers.HandlerContext(db=db, balance=balance, central=central,
+                                  content_version_id=version)
+    surfaced_run(ctx, db, central, user_id)
+
+    reply = handlers.abandon_run(ctx, user_id)
+    assert "포기" in reply["content"]
+    assert len(central.edits) == 1, "스레드에 지도가 그대로 남았습니다"
+    assert central.edits[0]["components"] == []
+
+
+def test_an_expired_run_closes_its_thread_screen(db, balance, version, user_id):
+    central = EditingCentral()
+    ctx = handlers.HandlerContext(db=db, balance=balance, central=central,
+                                  content_version_id=version)
+    run_id = surfaced_run(ctx, db, central, user_id)
+
+    # 방치 시간을 넘긴 것으로 만든다 (§16.3).
+    db.execute("UPDATE runs SET last_activity_at = '2020-01-01T00:00:00+00:00' "
+               "WHERE run_id = ?", (run_id,))
+    handlers.hub_screen(ctx, user_id)
+
+    assert len(central.edits) == 1
+    assert "정리했습니다" in central.edits[0]["content"]
+
+
+def test_a_live_run_screen_is_not_touched(db, balance, version, user_id):
+    """진행 중인 런의 화면은 인터랙션 응답이 고친다. 두 기록자가 생기면
+    §16.6이 막으려던 경합이 된다."""
+    central = EditingCentral()
+    ctx = handlers.HandlerContext(db=db, balance=balance, central=central,
+                                  content_version_id=version)
+    surfaced_run(ctx, db, central, user_id)
+
+    handlers.hub_screen(ctx, user_id)          # 만료되지 않은 런
+    assert central.edits == []

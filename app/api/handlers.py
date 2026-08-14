@@ -201,6 +201,23 @@ def _run_deck_screen(ctx: HandlerContext, run) -> dict:
     return _reply("\n".join(lines))
 
 
+def _expire_and_close(ctx: HandlerContext, user_id: int) -> dict | None:
+    """방치된 런을 정산하고, 그 런의 스레드 화면도 마지막 상태로 바꾼다.
+
+    정산만 하고 화면을 그대로 두면 플레이어의 스레드에는 지도와 살아 있는
+    버튼이 남는다. 그 버튼은 게이트가 막아 주지만, 왜 안 되는지는 아무 데도
+    쓰여 있지 않다.
+    """
+    expired = lc.expire_if_stale(ctx.db, ctx.balance, user_id)
+    if expired is None:
+        return None
+    kept = len(expired.get("inventory", {}).get("kept", []))
+    surfaces.close_run_surface(
+        ctx.db, ctx.central, expired["run_id"],
+        summary=f"오래 조작이 없어 이 런을 정리했습니다. 보관 {kept}개. (§16.3)")
+    return expired
+
+
 def passives_screen(ctx: HandlerContext, user_id: int) -> dict:
     """`!덱아웃 패시브` — 보유 패시브와 그것이 실제로 하는 일 (§6).
 
@@ -434,7 +451,7 @@ def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
     Re-issuing it while a run is active re-renders the current screen (§16.3);
     if the thread was deleted it is recreated at surface_generation + 1 (§16.8).
     """
-    expired = lc.expire_if_stale(ctx.db, ctx.balance, user_id)
+    expired = _expire_and_close(ctx, user_id)
 
     run = lc.active_run_for(ctx.db, user_id)
     if run is not None:
@@ -492,7 +509,7 @@ def start_run(ctx: HandlerContext, user_id: int) -> dict:
     """
     # 방치된 런이 §16.3 규칙으로 계정을 막고 있을 수 있다. 새 런을 거절하기
     # **전에** 확인한다 — 그러지 않으면 만료 규칙이 있으나 마나가 된다.
-    lc.expire_if_stale(ctx.db, ctx.balance, user_id)
+    _expire_and_close(ctx, user_id)
     if lc.active_run_for(ctx.db, user_id) is not None:
         return _ephemeral(errors.RUN_ALREADY_ACTIVE)
 
@@ -572,7 +589,12 @@ def abandon_run(ctx: HandlerContext, user_id: int) -> dict:
     )
     kept = len(report.get("inventory", {}).get("kept", []))
     lost = len(report.get("inventory", {}).get("lost", []))
-    return _reply(f"런을 포기했습니다. 보관 {kept}개 · 소실 {lost}개")
+    summary = f"런을 포기했습니다. 보관 {kept}개 · 소실 {lost}개"
+    # 포기는 채널에서 하고 화면은 스레드에 있다. 여기서 고쳐 쓰지 않으면
+    # 스레드에는 지도와 살아 있는 버튼이 그대로 남는다 (§1.3.6).
+    surfaces.close_run_surface(ctx.db, ctx.central, run["run_id"],
+                               summary=summary)
+    return _reply(summary)
 
 
 def achievements_screen(ctx: HandlerContext, user_id: int) -> dict:

@@ -537,7 +537,9 @@ def expire_if_stale(db: Database, balance: Balance, user_id: int) -> dict | None
     if run is None or not is_expired(db, balance, run):
         return None
     logger.info("run %s expired after inactivity; settling", run["run_id"])
-    return expire_run(db, balance, run)
+    # 어느 런이 끝났는지 호출자가 알아야 그 스레드의 화면을 마지막 상태로
+    # 고쳐 쓸 수 있다 (§1.3.6). 보고서에는 run_id 가 들어 있지 않다.
+    return {**expire_run(db, balance, run), "run_id": run["run_id"]}
 
 
 # =====================================================================

@@ -136,6 +136,84 @@ def _bind(db: Database, request_id: str | None, result: dict, *,
     })
 
 
+def push_frame(db: Database, central, run_id: int, *, content: str,
+               components: list | None = None) -> bool:
+    """§1.3.6 — 플레이어의 조작 없이 런의 화면을 고쳐 쓴다.
+
+    §16.6의 큐(`delivery.enqueue_frame`)와 `CentralClient.edit_message` 는
+    둘 다 구현되어 있으면서 부르는 곳이 없었다. 그래서 런이 방치로 만료되거나
+    채널에서 포기되면 **스레드에는 지도와 살아 있는 버튼이 그대로 남았다.**
+    누르면 게이트가 막아 주므로 망가지지는 않지만, 플레이어는 무슨 일이
+    벌어졌는지 알 방법이 없었다.
+
+    호출 순서가 중요하다: `presentation_revision` 은 §16.7 CAS 가 유일한
+    주인이므로, 여기서도 보내기 **전에** 올리지 않는다. 중앙봇이 성공을
+    돌려준 뒤에야 올린다 — 실패했는데 번호만 올라가면 그 뒤의 플레이어 조작이
+    전부 STALE_REVISION 으로 거절된다.
+
+    끝난 런에만 쓴다. 진행 중인 런의 화면은 인터랙션 응답이 고치므로 두 기록자가
+    생기면 §16.6이 막으려던 바로 그 경합이 된다.
+    """
+    run = db.one("SELECT * FROM runs WHERE run_id = ?", (run_id,))
+    if run is None:
+        return False
+    if not run["thread_id"] or not run["canonical_message_id"]:
+        # 스레드를 열지 못했거나 지워진 런. 고쳐 쓸 메시지가 없다.
+        return False
+    if central is None:
+        logger.warning("중앙봇 클라이언트가 없어 런 %s 의 마지막 화면을 "
+                       "보내지 못했습니다", run_id)
+        return False
+
+    current = int(run["presentation_revision"])
+    target = current + 1
+    request_id = delivery.frame_request_id(
+        run_id, int(run["surface_generation"]), target)
+    payload = {"content": content, "components": components or []}
+    delivery.enqueue_frame(db, run_id=run_id, target_revision=target,
+                           delivery_request_id=request_id, payload=payload)
+
+    frame = delivery.next_frame(db, run_id)
+    if frame is None:
+        return False
+
+    try:
+        central.edit_message(
+            delivery_request_id=request_id,
+            logical_session_id=run["logical_session_id"],
+            expected_thread_id=int(run["thread_id"]),
+            expected_message_id=int(run["canonical_message_id"]),
+            expected_surface_generation=int(run["surface_generation"]),
+            expected_presentation_revision=current,
+            new_presentation_revision=target,
+            content=content,
+            components=components or [],
+        )
+    except Exception:                                        # noqa: BLE001
+        logger.exception("런 %s 의 마지막 화면 전송이 실패했습니다", run_id)
+        delivery.mark_frame(db, int(frame["queue_id"]), "failed")
+        return False
+
+    with db.tx() as conn:
+        conn.execute(
+            "UPDATE runs SET presentation_revision = ? WHERE run_id = ?",
+            (target, run_id))
+        conn.execute(
+            "UPDATE delivery_queue SET status = 'sent', attempts = attempts + 1 "
+            "WHERE queue_id = ?", (int(frame["queue_id"]),))
+    return True
+
+
+def close_run_surface(db: Database, central, run_id: int, *,
+                      summary: str) -> bool:
+    """끝난 런의 화면을 마지막 상태로 바꾸고 버튼을 걷어낸다.
+
+    버튼을 남겨 두면 §1.3.10 게이트가 거절하기는 하지만, 플레이어에게는
+    "눌리는데 안 되는 버튼" 으로 보인다. 끝난 화면에는 누를 것이 없어야 한다.
+    """
+    return push_frame(db, central, run_id, content=summary, components=[])
+
+
 def reopen_thread(db: Database, central, run_id: int, *,
                   parent_channel_id: int) -> int | None:
     """§16.8 — 스레드가 사라진 런의 화면을 새 세대로 다시 연다.

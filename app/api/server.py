@@ -72,7 +72,8 @@ async def lifespan(app: FastAPI):
         # 계획을 세워 놓고 아무것도 하지 않으면 §16.3의 만료 규칙은 없는 것과
         # 같다. 만료된 런은 여기서 바로 정산한다 — 나머지 항목은 화면을 다시
         # 그리는 일이라 §16.6 단일 기록자 큐를 통해야 하므로 계획으로 남긴다.
-        state["expired_settled"] = _settle_expired(db, state["balance"], plan)
+        state["expired_settled"] = _settle_expired(
+            db, state["balance"], plan, state.get("central"))
     if state["central"] is not None:
         from app.central.transactions import resume_pending
         from app.engine.progression import local_handlers
@@ -86,7 +87,7 @@ async def lifespan(app: FastAPI):
     db.close()
 
 
-def _settle_expired(db: Database, balance, plan: list[dict]) -> int:
+def _settle_expired(db: Database, balance, plan: list[dict], central=None) -> int:
     """기동 시 이미 만료된 런을 정산한다 (§16.3).
 
     하나가 실패해도 나머지를 계속 처리한다. 만료 정산에 걸려 서비스가 아예
@@ -100,10 +101,23 @@ def _settle_expired(db: Database, balance, plan: list[dict]) -> int:
         if run is None:
             continue
         try:
-            lifecycle.expire_run(db, balance, run)
+            report = lifecycle.expire_run(db, balance, run)
             settled += 1
         except Exception:                                    # noqa: BLE001
             logger.exception("run %s 만료 정산에 실패했습니다", entry["run_id"])
+            continue
+        # 서비스가 내려가 있는 동안 만료된 런이다. 플레이어는 여기 없고,
+        # 스레드에는 지도가 그대로 남아 있다 (§1.3.6).
+        kept = len(report.get("inventory", {}).get("kept", []))
+        try:
+            surfaces.close_run_surface(
+                db, central, entry["run_id"],
+                summary=f"오래 조작이 없어 이 런을 정리했습니다. "
+                        f"보관 {kept}개. (§16.3)")
+        except Exception:                                    # noqa: BLE001
+            # 화면을 못 고쳤다고 정산을 되돌리지 않는다. 정산은 이미 끝났다.
+            logger.exception("run %s 의 마지막 화면을 보내지 못했습니다",
+                             entry["run_id"])
     if settled:
         logger.info("기동 시 만료된 런 %d개를 정산했습니다", settled)
     return settled
