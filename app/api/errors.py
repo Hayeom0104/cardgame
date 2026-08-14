@@ -14,6 +14,8 @@ PAYMENT_FAILED = "결제에 실패했습니다. 차감된 금액은 환불됩니
 TUTORIAL_NOT_CLEARED = "튜토리얼을 먼저 완료해 주세요."
 ACHIEVEMENT_LOCKED = "선행 업적을 먼저 달성해 주세요."
 PARTY_TOO_SMALL = "본편은 파티원 2명부터 입장할 수 있습니다."
+SURFACE_UNAVAILABLE = ("런 스레드를 만들지 못했습니다. 잠시 뒤 `!덱아웃` 으로 "
+                       "다시 시도해 주세요. 진행 상황은 그대로 남아 있습니다.")
 
 # §19.3 flow labels named as fixed in the doc.
 LABEL_SKIP = "안 받기"

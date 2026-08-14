@@ -19,7 +19,8 @@ from app.api import errors, hub, visuals
 from app.api import events as ev
 from app.api.gates import GateError, check_gates
 from app.api import screens
-from app.central import delivery
+from app.central import delivery, surfaces
+from app.config import settings
 from app.content.balance import Balance
 from app.content.seed import TUTORIAL_WORLD_ID, create_account
 from app.db.connection import Database
@@ -384,9 +385,14 @@ def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
     run = lc.active_run_for(ctx.db, user_id)
     if run is not None:
         if run["thread_id"] is None:
-            generation = lc.recreate_surface(ctx.db, run["run_id"])
-            return {"action": "reply_ephemeral",
-                    "content": f"런 스레드를 다시 만듭니다. (generation {generation})"}
+            # §16.8 — 세대만 올리고 끝내면 스레드는 영영 돌아오지 않는다.
+            thread_id = surfaces.reopen_thread(
+                ctx.db, ctx.central, run["run_id"],
+                parent_channel_id=settings.parent_channel_id)
+            if thread_id is None:
+                return _ephemeral(errors.SURFACE_UNAVAILABLE)
+            return {"action": "redirect", "thread_id": thread_id,
+                    "content": "런 스레드를 다시 만들었습니다."}
         # §16.3 second start attempt → redirect to the existing run's thread.
         return {"action": "redirect", "thread_id": run["thread_id"],
                 "content": errors.RUN_ALREADY_ACTIVE}

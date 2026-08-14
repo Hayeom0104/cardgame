@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 
 from app.api import events as ev
 from app.api import handlers
-from app.central import delivery
+from app.central import delivery, surfaces
 from app.central.client import CapabilityError, CentralClient
 from app.config import settings
 from app.content.balance import Balance
@@ -54,6 +54,16 @@ async def lifespan(app: FastAPI):
             raise CapabilityError(
                 "no Central API key configured; refusing to start (§1.3.4)"
             )
+
+    # 부모 채널이 없으면 스레드를 만들 수 없고, 스레드가 없으면 런은 화면
+    # 없이 계정만 점유한다 (§16.3). 그 상태로 서비스를 여는 것보다 안 여는
+    # 편이 낫다 — 플레이어가 먼저 알게 되는 것이 아니라 운영자가 먼저 알아야
+    # 하는 문제다.
+    if not settings.parent_channel_id and not settings.skip_capability_check:
+        raise CapabilityError(
+            "DECKOUT_CHANNEL_ID is not set; runs could not open their private "
+            "thread and would occupy the account with no surface (§1.3.5)"
+        )
 
     # §16.8 startup scan; §17.4 transaction resume.
     if state["balance"] is not None:
@@ -159,6 +169,12 @@ async def event(request: Request) -> JSONResponse:
         response = handlers.handle_interaction(context, parsed)
     else:
         response = handlers.handle_modal_submit(context, parsed)
+
+    # §1.3.5 — 핸들러는 "스레드가 필요하다"고 응답에 적기만 하고, 실제 호출은
+    # 여기 한 곳에서 한다. 이 줄이 없으면 런은 스레드 없이 계정만 점유한다.
+    response = surfaces.fulfil_thread_request(
+        db, state.get("central"), response,
+        parent_channel_id=settings.parent_channel_id)
 
     # Recorded only after the handler returns. Marking it up front would make a
     # handler exception permanently swallow Central's redelivery of an event

@@ -13,7 +13,7 @@ pip install -e ".[dev]"
 python -m app.cli.bootstrap --db deckout.db      # migrate + seed + publish content
 python -m app.cli.check_content --db deckout.db  # §10.5 validation pass
 uvicorn app.api.server:app --port 8080
-pytest                                           # 636 tests
+pytest                                           # 649 tests
 ```
 
 Registration (§1.3.0) — `route_threads: true` is **mandatory** and defaults to
@@ -33,6 +33,10 @@ API-key registration is run on the **Central Bot** side, not here (§1.3.9):
 ```bash
 python -m app.cli.register_bot --name deckout --scopes read,currency:grant,currency:deduct
 ```
+
+`DECKOUT_CHANNEL_ID` must name the parent channel. Startup fails without it:
+every run opens a private thread under that channel (§1.3.5), and a run that
+cannot open one occupies the account with no screen to play on (§16.3).
 
 ## Admin dashboard (§10.1–10.3)
 
@@ -91,6 +95,7 @@ double-crediting is forbidden. A registered bot name **cannot be re-registered**
 | `app/central/client.py` | §1.3 capabilities, threads, edits, applied-delta economy |
 | `app/central/transactions.py` | §17 direction-aware transaction machine, receipts |
 | `app/central/delivery.py` | §1.3.3 delivery intents, §16.6 ordering queue |
+| `app/central/surfaces.py` | §1.3.5 private thread creation and §16.8 recreation |
 | `app/api/server.py` | §1.3.1 `/event`, `/shutdown`, `/healthz` |
 | `app/api/events.py` | §1.2 per-type parsing (five shapes, not a shared model) |
 | `app/api/custom_id.py`, `gates.py`, `errors.py` | §19.2 `custom_id`, §1.3.10 five gates, §19.4 strings |
