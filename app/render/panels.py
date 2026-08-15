@@ -274,12 +274,21 @@ def render_card(card: dict, canvas: Canvas, *, size: tuple[int, int] | None = No
               radius=radius, border=border_color, border_width=2, shadow=False)
 
     draw = ImageDraw.Draw(image)
-    body = theme.font(role="body")
-    small = theme.font(role="small")
+
+    # 손패가 다섯 장, 여섯 장으로 늘면 render_hand 가 카드를 통째로 줄여
+    # 그린다 — 그런데 글자·배지는 원래 크기 그대로면, 카드가 작아질수록
+    # 이름 넣을 자리가 먼저 사라진다(배지 두 개가 폭 대부분을 먹는다).
+    # 그래서 실제로 그리는 크기를 기준 card_size 와 비교한 배율로 글자와
+    # 배지 크기도 함께 줄인다.
+    scale = min(1.3, max(0.4, width / theme.size("card_size")[0]))
+    body = theme.font(max(9, round(theme.int_("font_size_body") * scale)))
+    small = theme.font(max(8, round(theme.int_("font_size_small") * scale)))
+    pad = max(4, round(10 * scale))
+    badge_r = max(9, round(14 * scale))
 
     # 그림 — 카드 안쪽을 거의 꽉 채운다. 이름·배지는 그림 위에 얹고, 위아래
     # 가장자리만 어둡게 깔아(fade) 글자가 묻히지 않게 한다.
-    inset = 5
+    inset = max(2, round(5 * scale))
     # label 을 비워 둔다 — 이름은 이 함수가 위쪽에 직접 얹으므로, 그림에마저
     # 이름이 있으면 카드 아래쪽에서 글자가 겹친다.
     art = canvas.assets.art("card", str(card.get("card_id", "")), label="",
@@ -289,53 +298,66 @@ def render_card(card: dict, canvas: Canvas, *, size: tuple[int, int] | None = No
                    radius=max(1, radius - 2), grayscale=dimmed,
                    fade_top=True, fade_bottom=True)
 
+    # 배지 한 칸의 세로 자리 — 비용·번호가 같은 줄에 나란히 앉는다.
+    badge_top = max(3, round(6 * scale))
+    badge_bottom = badge_top + badge_r * 2
+
     # 이름 — 비용 원·번호표와 겹치지 않게 시작점과 폭을 미리 뺀다
     cost = card.get("cost")
-    name_left = 36 if index_badge else 10
-    name_width = width - name_left - 10 - (30 if cost is not None else 0)
-    draw.text((name_left, 9), kit.truncate(draw, str(card.get("name", "")), body, name_width),
-              font=body, fill=theme.color("color_muted") if dimmed else theme.color("color_text"))
+    name_left = (badge_r * 2 + pad + 4) if index_badge else pad
+    name_width = width - name_left - pad - (badge_r * 2 + 6 if cost is not None else 0)
+    if name_width > 0:
+        draw.text((name_left, badge_top - 3),
+                  kit.truncate(draw, str(card.get("name", "")), body, name_width),
+                  font=body, fill=theme.color("color_muted") if dimmed else theme.color("color_text"))
 
     if cost is not None:
         # 비용은 오른쪽 위 원 안에 — 카드를 부채꼴로 겹쳐도 보이는 자리다.
-        cx = width - 22
-        draw.ellipse((cx - 14, 6, cx + 14, 34),
+        cx = width - badge_r - pad
+        draw.ellipse((cx - badge_r, badge_top, cx + badge_r, badge_bottom),
                      fill=theme.color("color_background"),
                      outline=theme.color("color_disabled_border") if dimmed
-                     else theme.color("color_accent"), width=2)
+                     else theme.color("color_accent"), width=max(1, round(2 * scale)))
         text = str(cost)
-        draw.text((cx - draw.textlength(text, font=body) / 2, 11), text, font=body,
+        text_h = kit.text_size(draw, text, body)[1]
+        draw.text((cx - draw.textlength(text, font=body) / 2,
+                  (badge_top + badge_bottom) / 2 - text_h / 2), text, font=body,
                   fill=theme.color("color_muted") if dimmed else theme.color("color_accent"))
 
     if index_badge:
         # 왼쪽 위 — 비용 원이 이미 오른쪽 위를 쓰고 있다.
-        ix = 22
-        draw.ellipse((ix - 14, 6, ix + 14, 34),
+        ix = badge_r + pad
+        draw.ellipse((ix - badge_r, badge_top, ix + badge_r, badge_bottom),
                      fill=theme.color("color_background"),
                      outline=theme.color("color_disabled_border") if dimmed
-                     else theme.color("color_border"), width=2)
-        draw.text((ix - draw.textlength(index_badge, font=body) / 2, 11), index_badge,
+                     else theme.color("color_border"), width=max(1, round(2 * scale)))
+        badge_h = kit.text_size(draw, index_badge, body)[1]
+        draw.text((ix - draw.textlength(index_badge, font=body) / 2,
+                  (badge_top + badge_bottom) / 2 - badge_h / 2), index_badge,
                   font=body, fill=theme.color("color_muted") if dimmed else theme.color("color_text"))
 
     # 종류 배지 — 그림 위에 얹어 세로 공간을 아낀다
     if category:
         badge_color = theme.color("color_disabled_border") if dimmed else kind_color
-        kit.pill(image, (14, height - 48), category[:6], small,
+        kit.pill(image, (pad, height - round(48 * scale)), category[:6], small,
                  fg=theme.color("color_muted") if dimmed else theme.color("color_text"),
                  bg=kit.with_alpha(badge_color, 235))
 
     line = footer or ""
     if line:
-        draw.text((10, height - 22), kit.truncate(draw, line, small, width - 60),
+        draw.text((pad, height - round(22 * scale)),
+                  kit.truncate(draw, line, small, width - round(60 * scale)),
                   font=small, fill=theme.color("color_text"))
 
     # 등급 보석 — 아래쪽 왼쪽. 숫자보다 개수가 빨리 읽힌다. footer 가 그
     # 자리를 이미 쓰면 그 옆으로 붙인다.
-    gem_y = height - 16
-    gem_x0 = 10 + (kit.text_size(draw, line, small)[0] + 10 if line else 0)
+    gem_size = max(4, round(7 * scale))
+    gem_step = gem_size + 4
+    gem_y = height - round(16 * scale)
+    gem_x0 = pad + (kit.text_size(draw, line, small)[0] + pad if line else 0)
     for index in range(min(rarity, 6) if graded else 0):
-        gem_x = gem_x0 + index * 11
-        draw.ellipse((gem_x, gem_y, gem_x + 7, gem_y + 7),
+        gem_x = gem_x0 + index * gem_step
+        draw.ellipse((gem_x, gem_y, gem_x + gem_size, gem_y + gem_size),
                      fill=theme.color("color_disabled_border") if dimmed else border_color)
 
     upgrade = int(card.get("upgrade_tier") or 0)
@@ -343,7 +365,7 @@ def render_card(card: dict, canvas: Canvas, *, size: tuple[int, int] | None = No
         # 아래 오른쪽. 그림 위(왼쪽 위)에 쓰면 카드를 작게 그렸을 때 이름과
         # 겹치고, 오른쪽 위는 덱 화면의 장수 뱃지 자리다.
         text = f"+{upgrade}"
-        draw.text((width - draw.textlength(text, font=small) - 10, height - 20),
+        draw.text((width - draw.textlength(text, font=small) - pad, height - round(20 * scale)),
                   text, font=small, fill=theme.color("color_accent"))
 
     return image
