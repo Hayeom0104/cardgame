@@ -233,7 +233,8 @@ def to_attachment(image: Image.Image, filename: str) -> Attachment:
 # 카드 한 장
 # =====================================================================
 def render_card(card: dict, canvas: Canvas, *, size: tuple[int, int] | None = None,
-                footer: str = "", dimmed: bool = False) -> Image.Image:
+                footer: str = "", dimmed: bool = False,
+                index_badge: str | None = None) -> Image.Image:
     """카드 한 장. 손패·상점·보상·덱 화면이 모두 이걸 쓴다.
 
     `card` 에서 읽는 것: card_id, name, cost, element, rarity_tier,
@@ -242,6 +243,10 @@ def render_card(card: dict, canvas: Canvas, *, size: tuple[int, int] | None = No
     두 축을 색으로 나눠 보여준다 — **테두리는 등급**(가챠에서 얼마나 안
     나오는가), **안쪽 바탕은 종류**(공격/방어/버프/디버프/회복)다. 둘을 한
     색으로 합치면 "귀한 카드"와 "센 카드"가 구분되지 않는다.
+
+    `index_badge` 는 왼쪽 위에 다는 작은 번호표다. 클릭 자리가 아니라
+    참고용이다 — 실제 선택은 여전히 드롭다운으로 하지만, 드롭다운 항목
+    앞에 같은 번호를 붙여 두면 그림 속 카드와 목록 줄을 서로 잇는다.
     """
     theme = canvas.theme
     size = size or theme.size("card_size")
@@ -284,10 +289,11 @@ def render_card(card: dict, canvas: Canvas, *, size: tuple[int, int] | None = No
                    radius=max(1, radius - 2), grayscale=dimmed,
                    fade_top=True, fade_bottom=True)
 
-    # 이름 — 비용 원과 겹치지 않게 폭을 미리 뺀다
+    # 이름 — 비용 원·번호표와 겹치지 않게 시작점과 폭을 미리 뺀다
     cost = card.get("cost")
-    name_width = width - 20 - (30 if cost is not None else 0)
-    draw.text((10, 9), kit.truncate(draw, str(card.get("name", "")), body, name_width),
+    name_left = 36 if index_badge else 10
+    name_width = width - name_left - 10 - (30 if cost is not None else 0)
+    draw.text((name_left, 9), kit.truncate(draw, str(card.get("name", "")), body, name_width),
               font=body, fill=theme.color("color_muted") if dimmed else theme.color("color_text"))
 
     if cost is not None:
@@ -300,6 +306,16 @@ def render_card(card: dict, canvas: Canvas, *, size: tuple[int, int] | None = No
         text = str(cost)
         draw.text((cx - draw.textlength(text, font=body) / 2, 11), text, font=body,
                   fill=theme.color("color_muted") if dimmed else theme.color("color_accent"))
+
+    if index_badge:
+        # 왼쪽 위 — 비용 원이 이미 오른쪽 위를 쓰고 있다.
+        ix = 22
+        draw.ellipse((ix - 14, 6, ix + 14, 34),
+                     fill=theme.color("color_background"),
+                     outline=theme.color("color_disabled_border") if dimmed
+                     else theme.color("color_border"), width=2)
+        draw.text((ix - draw.textlength(index_badge, font=body) / 2, 11), index_badge,
+                  font=body, fill=theme.color("color_muted") if dimmed else theme.color("color_text"))
 
     # 종류 배지 — 그림 위에 얹어 세로 공간을 아낀다
     if category:
@@ -535,12 +551,14 @@ def render_enemy_panel(units: list[dict], telegraphs: dict[int, dict],
                         art, grayscale=not alive, fade_top=True, fade_bottom=True,
                         outline=theme.color("color_disabled_border") if not alive else enemy_dark)
 
-        # 대상 번호 — 카드를 낼 때 이 번호로 적을 고른다.
+        # 대상 번호 — 대상 선택 드롭다운이 쓰는 visible_slot 을 그대로
+        # 쓴다. 여기서 목록 순서를 다시 세면(1,2,3…) 죽은 유닛이 섞였을 때
+        # 그림의 번호와 드롭다운의 "슬롯 N"이 서로 다른 유닛을 가리킨다.
         canvas.draw.ellipse((left + 4, top + 4, left + 24, top + 24),
                             fill=theme.color("color_disabled_border") if not alive else enemy_dark,
                             outline=theme.color("color_disabled_border") if not alive else enemy,
                             width=2)
-        number = str(index + 1)
+        number = str(unit.get("visible_slot", index + 1))
         canvas.draw.text((left + 14 - canvas.draw.textlength(number, font=small) / 2,
                           top + 8), number, font=small, fill=canvas.text)
 
@@ -701,7 +719,9 @@ def render_hand(hand: list[dict], *, resource: int,
     start = max(canvas.pad, (canvas.width - total) // 2)
     for index, card in enumerate(hand):
         affordable = int(card.get("cost", 0)) <= resource
-        art = render_card(card, canvas, size=size, dimmed=not affordable)
+        badge = str(card["hand_index"]) if "hand_index" in card else str(index + 1)
+        art = render_card(card, canvas, size=size, dimmed=not affordable,
+                          index_badge=badge)
         canvas.paste(art, (start + index * (size[0] + canvas.gap), hand_top))
     return canvas.image
 

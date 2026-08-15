@@ -380,13 +380,18 @@ class BattleEngine:
         silenced = st.has_status(self.db, unit.battle_unit_id, st.SILENCE)
 
         playable = []
-        for row in self.db.query(
+        # pile_position 순서로 읽는다 — 손패 화면(§11)이 그 순서로 카드를
+        # 그리므로, 여기가 다른 순서를 쓰면 화면의 몇 번째 카드가 드롭다운의
+        # 몇 번째 항목인지 서로 안 맞는다. hand_index 는 걸러지기 전, 뽑힌
+        # 카드 전부를 센 자리다 — 화면은 못 내는 카드도 어둡게 그려서 보여
+        # 주므로(§11), 손패의 3번째 카드는 그게 걸러지든 말든 항상 3번이다.
+        for hand_index, row in enumerate(self.db.query(
             "SELECT rdc.* FROM battle_draw bd JOIN run_deck_cards rdc "
             "ON rdc.card_instance_id = bd.card_instance_id "
             "WHERE bd.battle_id = ? AND bd.battle_unit_id = ? "
-            "ORDER BY rdc.card_instance_id",
+            "ORDER BY rdc.pile_position",
             (self.battle_id, unit.battle_unit_id),
-        ):
+        ), start=1):
             if row["is_cursed"]:
                 continue
             card = self.card_def(row["card_id"], unit.party_slot)
@@ -397,7 +402,7 @@ class BattleEngine:
             if (card["element"] != stats.NEUTRAL_ELEMENT
                     and card["element"] != unit.element):
                 continue
-            playable.append({**dict(row), "card": dict(card)})
+            playable.append({**dict(row), "card": dict(card), "hand_index": hand_index})
         return playable
 
     def _no_play_reason(self, unit: Unit, drawn: list[dict]) -> str:

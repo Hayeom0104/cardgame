@@ -106,6 +106,12 @@ def _unit_view(db: Database, unit: un.Unit, run) -> dict:
         "battle_unit_id": unit.battle_unit_id,
         "name": row["name"] if row else unit.unit_def_id,
         "tier": tier,
+        # 대상 선택 드롭다운(§11)이 이 번호로 대상을 고른다 — 그림 위 번호
+        # 배지가 이걸 그대로 써야 "몇 번"이 그림과 드롭다운에서 같은 뜻이
+        # 된다. 그 전에는 그림이 목록 순서를 다시 세어(1,2,3…) 매겨서, 죽은
+        # 유닛이 섞이면 드롭다운의 "슬롯 3"과 그림의 "③"이 서로 다른
+        # 유닛일 수 있었다.
+        "visible_slot": unit.visible_slot,
         "hp_current": unit.hp_current,
         "hp_max": unit.hp_max,
         "block": unit.block,
@@ -130,13 +136,13 @@ def _hand(db: Database, run) -> list[dict]:
     tiers = json.loads(snapshot["card_upgrade_json"]) if snapshot else {}
 
     hand = []
-    for row in db.query(
+    for index, row in enumerate(db.query(
         "SELECT rdc.card_id, rdc.is_cursed, c.name, c.cost, c.element, "
         "c.rarity_tier, c.category, c.effects_json FROM run_deck_cards rdc "
         "JOIN cards c ON c.card_id = rdc.card_id AND c.content_version_id = ? "
         "WHERE rdc.run_id = ? AND rdc.pile = 'in_hand' ORDER BY rdc.pile_position",
         (run["content_version_id"], run["run_id"]),
-    ):
+    ), start=1):
         tier = int(tiers.get(row["card_id"], 0))
         card = cu.effective_card(db, run["content_version_id"], row, tier)
         hand.append({
@@ -144,6 +150,9 @@ def _hand(db: Database, run) -> list[dict]:
             "cost": card["cost"], "element": row["element"],
             "rarity_tier": row["rarity_tier"], "category": row["category"],
             "upgrade_tier": tier,
+            # 손패 드롭다운(§11)이 매기는 것과 같은 번호 — playable_cards()
+            # 도 이 카드의 pile_position 을 똑같이 세어 매긴다.
+            "hand_index": index,
         })
     return hand
 

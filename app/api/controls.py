@@ -113,8 +113,11 @@ def battle(db: Database, run_id: int, engine) -> list[dict]:
         "custom_id": cid.build(cid.ACTION_CARD_SELECT, run_id, generation,
                                revision),
         "placeholder": "낼 카드를 고르세요",
+        # 번호는 손패 그림(§11)의 카드 왼쪽 위 번호표와 같은 hand_index다 —
+        # 그림에서 "3번 카드"를 봤다면 여기서도 "3."을 찾으면 된다.
         "options": [{
-            "label": f"{entry['card']['name']} ({entry['card']['cost']})"[:100],
+            "label": f"{entry['hand_index']}. {entry['card']['name']} "
+                     f"({entry['card']['cost']})"[:100],
             "description": f"{entry['card']['element']} · "
                            f"{entry['card']['category']}"[:100],
             "value": str(entry["card_instance_id"]),
