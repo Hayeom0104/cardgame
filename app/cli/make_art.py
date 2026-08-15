@@ -38,6 +38,11 @@ SOURCES = (
     ("banner", "banners", "banner_id", "banner_id", None, None),
 )
 
+#: 이 종류는 화면 쪽(카드·아군·적 패널)이 이름을 그림 위에 직접 얹으므로,
+#: 그림에마저 이름 띠를 구우면 글자가 겹친다. 나머지 종류는 이름을 따로
+#: 그리지 않는 화면에서도 쓰이므로 그림에 이름을 남겨 둔다.
+_NO_BAKED_LABEL = {"card", "character", "enemy"}
+
 
 def rows_for(db: Database, version: int, source) -> list[dict]:
     kind, table, id_column, name_column, rarity_column, element_column = source
@@ -86,8 +91,9 @@ def main(argv: list[str] | None = None) -> int:
 
         print(f"\n── {kind}  ({library.directory(kind)})")
         for row in rows:
+            label = "" if kind in _NO_BAKED_LABEL else (row["name"] or row["id"])
             path = artgen.write(
-                library, kind, row["id"], label=row["name"] or row["id"],
+                library, kind, row["id"], label=label,
                 rarity=row["rarity"], element=row["element"],
                 overwrite=overwrite)
             if path is None:

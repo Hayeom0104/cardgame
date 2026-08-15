@@ -322,8 +322,13 @@ def cover(image: Image.Image, size: tuple[int, int]) -> Image.Image:
 
 def framed_art(target: Image.Image, box: tuple[int, int, int, int],
                art: Image.Image | None, *, radius: int,
-               grayscale: bool = False, fade_bottom: bool = False) -> None:
-    """그림을 둥근 틀에 넣어 합성한다."""
+               grayscale: bool = False, fade_bottom: bool = False,
+               fade_top: bool = False) -> None:
+    """그림을 둥근 틀에 넣어 합성한다.
+
+    `fade_top`/`fade_bottom` 은 그림 위에 바로 글자를 얹을 때 쓴다 — 카드
+    안을 그림으로 꽉 채우면 이름표나 배지를 놓을 단색 자리가 따로 없어서,
+    글자가 앉는 쪽 가장자리만 어둡게 깔아 대신한다."""
     x0, y0, x1, y1 = box
     size = (max(1, x1 - x0), max(1, y1 - y0))
     if art is None:
@@ -335,15 +340,20 @@ def framed_art(target: Image.Image, box: tuple[int, int, int, int],
     mask = rounded_mask(size, radius)
     art.putalpha(mask)
 
-    if fade_bottom:
-        # 아래쪽을 어둡게 깔아 그 위 글자가 읽히게 한다.
+    if fade_bottom or fade_top:
         fade = Image.new("RGBA", size, (0, 0, 0, 0))
         fade_draw = ImageDraw.Draw(fade)
         span = max(1, size[1] // 2)
         for index in range(span):
-            alpha = int(190 * (index / span) ** 1.6)
-            fade_draw.line((0, size[1] - index - 1, size[0], size[1] - index - 1),
-                           fill=(0, 0, 0, alpha))
+            # 가장자리(index=0)에도 최소한의 어둠을 깐다 — 순수 제곱 곡선은
+            # 가장자리에서 거의 0이라, 글자를 그 자리에 바로 얹으면(예: 카드
+            # 맨 위 이름) 그림이 밝을 때 안 읽힌다.
+            alpha = int(55 + 135 * (index / span) ** 1.6)
+            if fade_bottom:
+                fade_draw.line((0, size[1] - index - 1, size[0], size[1] - index - 1),
+                               fill=(0, 0, 0, alpha))
+            if fade_top:
+                fade_draw.line((0, index, size[0], index), fill=(0, 0, 0, alpha))
         fade.putalpha(Image.composite(fade.getchannel("A"),
                                       Image.new("L", size, 0), mask))
         art.alpha_composite(fade)

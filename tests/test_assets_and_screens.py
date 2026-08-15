@@ -194,13 +194,24 @@ def test_a_sold_out_item_stays_on_the_shelf():
 
 
 def test_an_unaffordable_card_is_dimmed_not_hidden():
-    """살 수 없는 카드도 보여야 한다 — 무엇을 놓치는지 알아야 하기 때문이다."""
+    """살 수 없는 카드도 보여야 한다 — 무엇을 놓치는지 알아야 하기 때문이다.
+
+    카드 안을 그림으로 꽉 채운 뒤로는 그림이 거의 전체를 덮어, 고정된 픽셀
+    하나만 비교하면 그 자리가 하필 그림 위인지 여백 위인지에 따라 결과가
+    흔들린다(예: 회색조로 바뀐 그림 한 점이 우연히 원래 색보다 밝게 나올 수
+    있다). 카드 전체의 평균 밝기를 비교하면 이 흔들림 없이 "덮인 카드가
+    전반적으로 더 어둡다"를 그대로 검증한다."""
     theme = theme_module.load()
     canvas = panels.Canvas(theme.size("card_size"), theme)
     bright = panels.render_card(CARD, canvas)
     dim = panels.render_card(CARD, canvas, dimmed=True)
     assert bright.size == dim.size
-    assert sum(bright.getpixel((90, 20))[:3]) > sum(dim.getpixel((90, 20))[:3])
+
+    def _average_brightness(image):
+        pixels = list(image.convert("RGB").getdata())
+        return sum(sum(pixel) for pixel in pixels) / len(pixels)
+
+    assert _average_brightness(bright) > _average_brightness(dim)
 
 
 def test_the_screen_sizes_come_from_the_config(monkeypatch):
@@ -342,8 +353,8 @@ def test_a_real_battle_response_carries_the_panels(db, balance, version, user_id
     engine.advance()
 
     art = visuals.battle(db, balance, battle_id=battle_id, run=run)
-    assert [entry["filename"] for entry in art][:2] == ["deckout_ally.png",
-                                                        "deckout_enemy.png"]
+    assert [entry["filename"] for entry in art][:2] == ["deckout_combatants.png",
+                                                        "deckout_hand.png"]
     for entry in art:
         assert base64.b64decode(entry["data_b64"])[:8] == b"\x89PNG\r\n\x1a\n"
 

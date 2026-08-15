@@ -132,15 +132,20 @@ class AssetLibrary:
         self._cache[key] = image
         return image
 
-    def art(self, kind: str, entity_id: str, *, label: str = "",
+    def art(self, kind: str, entity_id: str, *, label: str | None = None,
             rarity: int | None = None, element: str | None = None,
             size: tuple[int, int] | None = None) -> Image.Image:
-        """언제나 그림을 돌려준다. 넣은 파일이 없으면 대신 그린다."""
+        """언제나 그림을 돌려준다. 넣은 파일이 없으면 대신 그린다.
+
+        `label` 을 생략하면 id 로 대신 채운다 — 그림이 없어도 뭔가는
+        보여야 한다(§11). 부르는 쪽이 이름을 이미 다른 자리에 따로 그리고
+        있어 그림에는 글자가 필요 없다면, `label=""` 로 명시해 끈다."""
         image = self.load(kind, entity_id, size)
         if image is not None:
             return image
         rule = self.kind(kind)
-        return self.placeholder(size or rule.size, label=label or entity_id,
+        resolved_label = entity_id if label is None else label
+        return self.placeholder(size or rule.size, label=resolved_label,
                                 rarity=rarity, element=element)
 
     def placeholder(self, size: tuple[int, int], *, label: str,

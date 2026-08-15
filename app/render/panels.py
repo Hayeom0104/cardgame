@@ -153,10 +153,10 @@ class Canvas:
 
     def art_tile(self, box: tuple[int, int, int, int], art: Image.Image | None, *,
                  grayscale: bool = False, fade_bottom: bool = False,
-                 outline=None) -> None:
+                 fade_top: bool = False, outline=None) -> None:
         """그림을 둥근 틀에 넣어 붙이고 테두리를 두른다."""
         kit.framed_art(self.image, box, art, radius=max(1, self.radius - 2),
-                       grayscale=grayscale, fade_bottom=fade_bottom)
+                       grayscale=grayscale, fade_bottom=fade_bottom, fade_top=fade_top)
         if outline:
             self.draw.rounded_rectangle(box, radius=max(1, self.radius - 2),
                                         outline=outline, width=2)
@@ -272,19 +272,17 @@ def render_card(card: dict, canvas: Canvas, *, size: tuple[int, int] | None = No
     body = theme.font(role="body")
     small = theme.font(role="small")
 
-    # 그림 — 이름 줄 아래, 카드의 가운데 띠
-    art_top = theme.int_("font_size_body") + 14
-    art_bottom = art_top + int(height * 0.46)
-    art = canvas.assets.art("card", str(card.get("card_id", "")),
-                            label=str(card.get("name", "")),
+    # 그림 — 카드 안쪽을 거의 꽉 채운다. 이름·배지는 그림 위에 얹고, 위아래
+    # 가장자리만 어둡게 깔아(fade) 글자가 묻히지 않게 한다.
+    inset = 5
+    # label 을 비워 둔다 — 이름은 이 함수가 위쪽에 직접 얹으므로, 그림에마저
+    # 이름이 있으면 카드 아래쪽에서 글자가 겹친다.
+    art = canvas.assets.art("card", str(card.get("card_id", "")), label="",
                             rarity=rarity, element=element,
-                            size=(width - 16, art_bottom - art_top))
-    kit.framed_art(image, (8, art_top, width - 8, art_bottom), art,
-                   radius=max(1, radius - 2), grayscale=dimmed, fade_bottom=True)
-    draw.rounded_rectangle((8, art_top, width - 8, art_bottom),
-                           radius=max(1, radius - 2),
-                           outline=kit.with_alpha(kit.shade(border_color, 0.7), 210),
-                           width=1)
+                            size=(width - inset * 2, height - inset * 2))
+    kit.framed_art(image, (inset, inset, width - inset, height - inset), art,
+                   radius=max(1, radius - 2), grayscale=dimmed,
+                   fade_top=True, fade_bottom=True)
 
     # 이름 — 비용 원과 겹치지 않게 폭을 미리 뺀다
     cost = card.get("cost")
@@ -305,18 +303,22 @@ def render_card(card: dict, canvas: Canvas, *, size: tuple[int, int] | None = No
 
     # 종류 배지 — 그림 위에 얹어 세로 공간을 아낀다
     if category:
-        kit.pill(image, (14, art_bottom - 24), category[:6], small,
-                 fg=theme.color("color_text"), bg=kit.with_alpha(kind_color, 235))
+        badge_color = theme.color("color_disabled_border") if dimmed else kind_color
+        kit.pill(image, (14, height - 48), category[:6], small,
+                 fg=theme.color("color_muted") if dimmed else theme.color("color_text"),
+                 bg=kit.with_alpha(badge_color, 235))
 
     line = footer or ""
     if line:
-        draw.text((10, art_bottom + 8), kit.truncate(draw, line, small, width - 20),
-                  font=small, fill=theme.color("color_muted"))
+        draw.text((10, height - 22), kit.truncate(draw, line, small, width - 60),
+                  font=small, fill=theme.color("color_text"))
 
-    # 등급 보석 — 아래쪽 왼쪽. 숫자보다 개수가 빨리 읽힌다.
+    # 등급 보석 — 아래쪽 왼쪽. 숫자보다 개수가 빨리 읽힌다. footer 가 그
+    # 자리를 이미 쓰면 그 옆으로 붙인다.
     gem_y = height - 16
+    gem_x0 = 10 + (kit.text_size(draw, line, small)[0] + 10 if line else 0)
     for index in range(min(rarity, 6) if graded else 0):
-        gem_x = 10 + index * 11
+        gem_x = gem_x0 + index * 11
         draw.ellipse((gem_x, gem_y, gem_x + 7, gem_y + 7),
                      fill=theme.color("color_disabled_border") if dimmed else border_color)
 
@@ -409,17 +411,17 @@ def render_ally_panel(units: list[dict], *, resource: int, round_no: int,
         canvas.tile(box, dimmed=not alive,
                     outline=None if alive else theme.color("color_disabled_border"))
 
-        art_height = int(slot_height * 0.5)
+        # 그림 — 칸 안쪽을 거의 꽉 채운다. 이름·체력은 그림 위에 얹고,
+        # 위아래만 어둡게 깔아(fade) 글자 자리를 대신한다.
         art = canvas.assets.art(
-            "character", str(unit.get("character_id", unit.get("name", ""))),
-            label=str(unit.get("name", "?")), rarity=unit.get("tier", 1),
-            size=(slot_width - 12, art_height))
-        canvas.art_tile((left + 6, head + 6, left + slot_width - 6, head + 6 + art_height),
-                        art, grayscale=not alive, fade_bottom=True,
+            "character", str(unit.get("character_id", unit.get("name", ""))), label="",
+            rarity=unit.get("tier", 1), size=(slot_width - 12, slot_height - 12))
+        canvas.art_tile((left + 6, head + 6, left + slot_width - 6, head + slot_height - 6),
+                        art, grayscale=not alive, fade_top=True, fade_bottom=True,
                         outline=theme.color("color_border"))
 
         text_left = left + 10
-        text_top = head + art_height + 14
+        text_top = head + 8
         canvas.label((text_left, text_top),
                      kit.truncate(canvas.draw, str(unit.get("name", "?")),
                                   canvas.font("body"), slot_width - 20),
@@ -433,12 +435,12 @@ def render_ally_panel(units: list[dict], *, resource: int, round_no: int,
                       dim=theme.color("color_disabled_border"))
 
         if not alive:
-            canvas.label((text_left, text_top + 48), "전투불능",
+            canvas.label((text_left, head + slot_height - 30), "전투불능",
                          color=theme.color("color_hp_crit"))
             continue
 
-        bar_top = text_top + 46
         bar_width = slot_width - 20
+        bar_top = head + slot_height - 58
         ratio = unit.get("hp_current", 0) / max(1, unit.get("hp_max", 1))
         high, low = canvas.hp_colors(ratio)
         kit.gauge(canvas.image, (text_left, bar_top, text_left + bar_width, bar_top + 14),
@@ -521,20 +523,16 @@ def render_enemy_panel(units: list[dict], telegraphs: dict[int, dict],
         canvas.tile((left, top, left + cell_width, top + cell_height),
                     dimmed=not alive, outline=None if not alive else enemy_dark)
 
-        # 그림 — 칸 위쪽 절반 가까이. 손패 카드와 같은 언어로, 작은 초상화
-        # 하나로는 무엇을 상대하는지 한눈에 들어오지 않는다.
-        #
-        # 적이 많아 두 줄로 접히면 칸 자체가 낮아진다 — 그림을 키운 만큼
-        # 아래 글자 자리가 줄므로, 상태이상 배지 한 줄을 뺄지는 칸 높이로
-        # 판단한다 (roomy).
-        art_height = max(40, int(cell_height * 0.42))
+        # 그림 — 칸 안쪽을 거의 꽉 채운다. 이름·체력·상태는 그림 위에 얹고,
+        # 위아래만 어둡게 깔아(fade) 글자 자리를 대신한다. 손패 카드와 같은
+        # 언어로, 작은 초상화 하나로는 무엇을 상대하는지 한눈에 들어오지
+        # 않는다.
         roomy = cell_height >= 160
         art = canvas.assets.art(
-            "enemy", str(unit.get("enemy_id", unit.get("name", ""))),
-            label=str(unit.get("name", "?")), rarity=unit.get("tier", 1),
-            size=(cell_width - 12, art_height))
-        canvas.art_tile((left + 6, top + 6, left + cell_width - 6, top + 6 + art_height),
-                        art, grayscale=not alive, fade_bottom=True,
+            "enemy", str(unit.get("enemy_id", unit.get("name", ""))), label="",
+            rarity=unit.get("tier", 1), size=(cell_width - 12, cell_height - 12))
+        canvas.art_tile((left + 6, top + 6, left + cell_width - 6, top + cell_height - 6),
+                        art, grayscale=not alive, fade_top=True, fade_bottom=True,
                         outline=theme.color("color_disabled_border") if not alive else enemy_dark)
 
         # 대상 번호 — 카드를 낼 때 이 번호로 적을 고른다.
@@ -546,33 +544,38 @@ def render_enemy_panel(units: list[dict], telegraphs: dict[int, dict],
         canvas.draw.text((left + 14 - canvas.draw.textlength(number, font=small) / 2,
                           top + 8), number, font=small, fill=canvas.text)
 
-        text_left = left + 10
-        text_top = top + art_height + 12
-        canvas.label((text_left, text_top),
+        text_left = left + 30
+        canvas.label((text_left, top + 8),
                      kit.truncate(canvas.draw, str(unit.get("name", "?")), small,
-                                  cell_width - 20),
+                                  cell_width - 40),
                      role="small",
                      color=theme.color("color_muted") if not alive else None)
 
+        # 아래쪽부터 쌓는다 — 그림이 칸을 꽉 채우므로 위쪽 여백 크기와
+        # 무관하게 체력·상태·행동 예고 자리를 늘 같은 높이에 둘 수 있다.
+        telegraph_top = top + cell_height - 26
+        chip_row_top = telegraph_top - 24
+        hp_text_top = (chip_row_top if roomy else telegraph_top) - 16
+        bar_top = hp_text_top - 14
+
         if alive:
-            bar_top = text_top + 14
             ratio = unit.get("hp_current", 0) / max(1, unit.get("hp_max", 1))
             high, low = canvas.hp_colors(ratio)
             kit.gauge(canvas.image,
-                      (text_left, bar_top, left + cell_width - 10, bar_top + 10),
+                      (left + 10, bar_top, left + cell_width - 10, bar_top + 10),
                       ratio, high=high, low=low, back=theme.color("color_gauge_back"))
             hp_text = f"{unit.get('hp_current', 0)}/{unit.get('hp_max', 1)}"
             if not roomy and unit.get("block"):
                 # 칸이 낮아 배지 줄을 뺄 때도 방어막만큼은 체력 옆에 남긴다 —
                 # 그 수치가 빠지면 다음 피해가 왜 그대로 들어갔는지 안 보인다.
                 hp_text += f" · 방어 {unit['block']}"
-            canvas.label((text_left, bar_top + 10), hp_text,
-                         role="small", color=theme.color("color_muted"))
+            canvas.label((left + 10, hp_text_top), hp_text,
+                         role="small", color=theme.color("color_text"))
 
             # 적 상태이상·시간제 효과 — 화상이나 방어력 감소가 화면에
             # 보이지 않으면 대미지가 왜 달라졌는지 알 수 없다 (§2.5.3).
             if roomy:
-                chip_x, chip_y = text_left, bar_top + 28
+                chip_x, chip_y = left + 10, chip_row_top
                 if unit.get("block"):
                     chip_x += kit.pill(canvas.image, (chip_x, chip_y),
                                        f"방어 {unit['block']}", small,
@@ -589,7 +592,7 @@ def render_enemy_panel(units: list[dict], telegraphs: dict[int, dict],
         telegraph = telegraphs.get(unit.get("battle_unit_id"), {})
         label = telegraph.get("label", "행동 완료")
         planned = telegraph.get("state") == "planned"
-        kit.pill(canvas.image, (left + 8, top + cell_height - 26),
+        kit.pill(canvas.image, (left + 8, telegraph_top),
                  kit.truncate(canvas.draw, f"→ {label}", small, cell_width - 24), small,
                  fg=canvas.text if planned else theme.color("color_muted"),
                  bg=enemy_dark if planned else theme.color("color_gauge_back"))
@@ -603,41 +606,45 @@ def render_enemy_panel(units: list[dict], telegraphs: dict[int, dict],
 
 def render_battle_screen(ally_units: list[dict], enemy_units: list[dict],
                          telegraphs: dict[int, dict], *, resource: int,
-                         round_no: int, hand: list[dict] | None = None
+                         round_no: int, hand: list[dict] | None = None,
+                         passives: list[dict] | None = None
                          ) -> list[Attachment]:
     """§1.3.7 — 중앙봇은 한 action 에 PNG 두 장까지만 받는다.
 
-    손패를 세 번째 첨부로 따로 보내면 실제 전투마다(손패가 항상 있으므로)
-    한도를 넘겨 거절당했다 — 상태는 이미 `battle` 로 넘어갔는데 화면은
-    지도에 멈춰 있던 원인 중 하나였다. 정보를 잃지 않도록 손패를 아군
-    패널 아래에 이어 붙여 한 장으로 만든다."""
+    한 장은 **전투 참가자**(적·아군), 다른 한 장은 **이번 턴에 쓸 것**
+    (손패·장착 패시브·자원)으로 나눈다 — "누가 싸우는가"와 "내가 뭘 낼 수
+    있는가"는 서로 다른 질문이라, 한 장에 아군과 손패를 섞어 두면 어느
+    쪽을 보려는지 매번 다시 찾아야 했다."""
     theme = theme_module.load()
     assets = AssetLibrary(theme)
     size = theme.size("panel_size")
 
+    enemy_image = render_enemy_panel(
+        enemy_units, telegraphs, canvas=Canvas(size, theme, assets))
     ally_image = render_ally_panel(
         ally_units, resource=resource, round_no=round_no,
         canvas=Canvas(size, theme, assets))
-    if hand:
-        hand_image = render_hand(
-            hand, resource=resource, canvas=Canvas(size, theme, assets))
-        combined = Image.new("RGB", (size[0], size[1] * 2),
-                             theme.color("color_background"))
-        combined.paste(ally_image, (0, 0))
-        combined.paste(hand_image, (0, size[1]))
-        ally_image = combined
+    combatants = Image.new("RGB", (size[0], size[1] * 2),
+                           theme.color("color_background"))
+    combatants.paste(enemy_image, (0, 0))
+    combatants.paste(ally_image, (0, size[1]))
+
+    hand_image = render_hand(
+        hand or [], resource=resource, passives=passives,
+        canvas=Canvas(size, theme, assets))
 
     return [
-        to_attachment(ally_image, "deckout_ally.png"),
-        to_attachment(render_enemy_panel(
-            enemy_units, telegraphs, canvas=Canvas(size, theme, assets)),
-            "deckout_enemy.png"),
+        to_attachment(combatants, "deckout_combatants.png"),
+        to_attachment(hand_image, "deckout_hand.png"),
     ]
 
 
 def render_hand(hand: list[dict], *, resource: int,
-                canvas: Canvas | None = None) -> Image.Image:
-    """손패 — 낼 수 없는 카드는 어둡게, 목록에서 빼지는 않는다.
+                canvas: Canvas | None = None,
+                passives: list[dict] | None = None) -> Image.Image:
+    """손패 · 장착 패시브 · 자원 — 이번 턴에 쓸 수 있는 것 전부 (§11).
+
+    낼 수 없는 카드는 어둡게, 목록에서 빼지는 않는다.
 
     턴당 뽑는 장수는 설정으로 바뀔 수 있으므로(§2.2), 폭이 모자라면 카드를
     잘라내지 않고 **줄여서** 전부 보여준다. 한 장이라도 화면 밖으로 밀리면
@@ -647,8 +654,12 @@ def render_hand(hand: list[dict], *, resource: int,
                               tint="color_tint_battle")
     canvas.title("손패", right=f"자원 {resource}")
 
+    hand_top = 56
+    if passives:
+        hand_top = _passives_row(canvas, passives, top=56)
+
     if not hand:
-        canvas.label((canvas.pad, 64), "낼 수 있는 카드가 없습니다",
+        canvas.label((canvas.pad, hand_top), "낼 수 있는 카드가 없습니다",
                      color=canvas.muted)
         return canvas.image
 
@@ -656,7 +667,7 @@ def render_hand(hand: list[dict], *, resource: int,
     count = len(hand)
     room = canvas.width - canvas.pad * 2 - canvas.gap * (count - 1)
     scale = min(1.0,
-                (canvas.height - 70) / card_height,
+                (canvas.height - hand_top - 14) / card_height,
                 (room / count) / card_width)
     size = (max(1, int(card_width * scale)), max(1, int(card_height * scale)))
 
@@ -665,8 +676,30 @@ def render_hand(hand: list[dict], *, resource: int,
     for index, card in enumerate(hand):
         affordable = int(card.get("cost", 0)) <= resource
         art = render_card(card, canvas, size=size, dimmed=not affordable)
-        canvas.paste(art, (start + index * (size[0] + canvas.gap), 56))
+        canvas.paste(art, (start + index * (size[0] + canvas.gap), hand_top))
     return canvas.image
+
+
+def _passives_row(canvas: Canvas, passives: list[dict], *, top: int) -> int:
+    """장착 패시브를 손패 위에 한 줄로. 돌려주는 값은 그 아래, 손패가 시작할
+    y 좌표다 — 패시브가 없으면 손패가 그 자리를 그대로 쓴다."""
+    theme = canvas.theme
+    canvas.label((canvas.pad, top), "장착 패시브", role="small", color=canvas.muted)
+
+    tile = 56
+    art_top = top + 18
+    x = canvas.pad
+    for entry in passives[:8]:
+        art = canvas.assets.art(
+            "passive", str(entry.get("passive_card_id", "")),
+            label=str(entry.get("name", "")), rarity=entry.get("rarity_tier"),
+            size=(tile, tile))
+        canvas.paste(art, (x, art_top))
+        canvas.draw.rounded_rectangle(
+            (x, art_top, x + tile - 1, art_top + tile - 1),
+            radius=max(1, canvas.radius - 4), outline=canvas.accent, width=2)
+        x += tile + canvas.gap
+    return art_top + tile + 12
 
 
 # =====================================================================

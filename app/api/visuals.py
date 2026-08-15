@@ -69,11 +69,14 @@ def battle(db: Database, balance, *, battle_id: int, run) -> list[dict]:
         telegraphs = {entry["enemy_unit_id"]: entry
                       for entry in engine.telegraphs()}
 
+        from app.engine import passives as pv
+
         return attach(*panels.render_battle_screen(
             allies, enemies, telegraphs,
             resource=int(row["party_resource_current"] or 0),
             round_no=int(row["round_no"] or 1),
-            hand=_hand(db, run)))
+            hand=_hand(db, run),
+            passives=pv.equipped(db, battle_id, run["content_version_id"])))
 
     return safely(build)
 

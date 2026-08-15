@@ -26,7 +26,7 @@ def _enemy(unit_id=1, name="고블린", hp=30, hp_max=55, alive=True):
 
 
 def test_the_battle_screen_is_two_pngs_in_one_action():
-    """§1.3.7 two-panel pattern: ally panel + enemy panel."""
+    """§1.3.7 two-panel pattern: combatants (enemy+ally) + hand (cards/passives/resource)."""
     attachments = panels.render_battle_screen(
         [_ally(), _ally("아쿠엘")],
         [_enemy(1), _enemy(2, "방패병")],
@@ -35,8 +35,8 @@ def test_the_battle_screen_is_two_pngs_in_one_action():
         resource=4, round_no=3,
     )
     assert len(attachments) == 2
-    assert [a.filename for a in attachments] == ["deckout_ally.png",
-                                                 "deckout_enemy.png"]
+    assert [a.filename for a in attachments] == ["deckout_combatants.png",
+                                                 "deckout_hand.png"]
     for attachment in attachments:
         attachment.validate()          # §1.3.7 limits
         assert not attachment.data_b64.startswith("data:")
