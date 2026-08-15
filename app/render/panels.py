@@ -382,10 +382,13 @@ def _status_chips(unit: dict) -> list[str]:
 
 def render_ally_panel(units: list[dict], *, resource: int, round_no: int,
                       canvas: Canvas | None = None) -> Image.Image:
-    """아군 패널 — 배치, 체력, 방어막, 상태이상 (§11).
+    """아군 패널 — 카드형 칸, 체력, 방어막, 상태이상 (§11).
 
     파티 공유 자원(§2.3)은 숫자 대신 구슬로 그린다. 몇 개 남았는지는 세는
     것보다 보는 편이 빠르다.
+
+    아군은 최대 3명뿐이라(§2.1) 옆으로 늘어놓고 그림을 크게 그린다 — 세로로
+    쌓아 작은 초상화만 보이면 손패의 카드보다도 정보가 적어진다.
     """
     canvas = canvas or Canvas(theme_module.load().size("panel_size"),
                               tint="color_tint_battle")
@@ -395,47 +398,65 @@ def render_ally_panel(units: list[dict], *, resource: int, round_no: int,
 
     small = canvas.font("small")
     head = 52
-    slot_height = (canvas.height - head - canvas.pad) // 3
+    count = max(1, min(len(units), 3))
+    slot_width = (canvas.width - canvas.pad * 2 - canvas.gap * (count - 1)) // count
+    slot_height = canvas.height - head - canvas.pad
+
     for index, unit in enumerate(units[:3]):
-        top = head + index * slot_height
-        box = (canvas.pad, top, canvas.width - canvas.pad, top + slot_height - canvas.gap)
+        left = canvas.pad + index * (slot_width + canvas.gap)
+        box = (left, head, left + slot_width, head + slot_height)
         alive = unit.get("is_alive", True)
         canvas.tile(box, dimmed=not alive,
                     outline=None if alive else theme.color("color_disabled_border"))
 
-        art_size = min(theme.size("portrait_size")[0], slot_height - canvas.gap - 16)
+        art_height = int(slot_height * 0.5)
         art = canvas.assets.art(
             "character", str(unit.get("character_id", unit.get("name", ""))),
             label=str(unit.get("name", "?")), rarity=unit.get("tier", 1),
-            size=(art_size, art_size))
-        art_box = (canvas.pad + 8, top + 8, canvas.pad + 8 + art_size, top + 8 + art_size)
-        canvas.art_tile(art_box, art, grayscale=not alive,
+            size=(slot_width - 12, art_height))
+        canvas.art_tile((left + 6, head + 6, left + slot_width - 6, head + 6 + art_height),
+                        art, grayscale=not alive, fade_bottom=True,
                         outline=theme.color("color_border"))
 
-        left = canvas.pad + art_size + 20
-        canvas.label((left, top + 8), str(unit.get("name", "?")),
+        text_left = left + 10
+        text_top = head + art_height + 14
+        canvas.label((text_left, text_top),
+                     kit.truncate(canvas.draw, str(unit.get("name", "?")),
+                                  canvas.font("body"), slot_width - 20),
                      color=theme.color("color_muted") if not alive else None)
 
         # 성급 — 등급과 다른 축이라 별로만 표시한다 (§4.4).
         star = int(unit.get("star") or unit.get("tier") or 0)
         if star:
-            kit.stars(canvas.draw, (left, top + 30), star, max(star, 3), small,
+            kit.stars(canvas.draw, (text_left, text_top + 24), star, max(star, 3), small,
                       color=theme.color("color_accent"),
                       dim=theme.color("color_disabled_border"))
 
         if not alive:
-            canvas.label((canvas.width - 100, top + 30), "전투불능",
+            canvas.label((text_left, text_top + 48), "전투불능",
                          color=theme.color("color_hp_crit"))
             continue
 
-        canvas.bar(left, top + 52, 260, 14, unit.get("hp_current", 0),
-                   unit.get("hp_max", 1), unit.get("block", 0))
+        bar_top = text_top + 46
+        bar_width = slot_width - 20
+        ratio = unit.get("hp_current", 0) / max(1, unit.get("hp_max", 1))
+        high, low = canvas.hp_colors(ratio)
+        kit.gauge(canvas.image, (text_left, bar_top, text_left + bar_width, bar_top + 14),
+                  ratio, high=high, low=low, back=theme.color("color_gauge_back"))
+        canvas.label((text_left, bar_top + 16),
+                     f"{unit.get('hp_current', 0)}/{unit.get('hp_max', 1)}", role="small")
 
-        cursor = left
-        row = top + 74
-        for text in _status_chips(unit)[:4]:
-            if cursor > canvas.width - 140:
-                break
+        cursor = text_left
+        row = bar_top + 36
+        if unit.get("block"):
+            cursor += kit.pill(canvas.image, (cursor, row), f"방어 {unit['block']}", small,
+                               fg=theme.color("color_block_text"),
+                               bg=theme.color("color_block_back"),
+                               border=theme.color("color_block")) + 5
+        for text in _status_chips(unit)[:3]:
+            if cursor > left + slot_width - 30:
+                cursor = text_left
+                row += 22
             cursor += canvas.pill((cursor, row), text, color=theme.color("color_text"),
                                   back=theme.color("color_gauge_back")) + 5
     return canvas.image
@@ -483,9 +504,15 @@ def render_enemy_panel(units: list[dict], telegraphs: dict[int, dict],
     enemy_dark = theme.color("color_enemy_dark")
     small = canvas.font("small")
 
-    columns = 4
+    shown = units[:8] or [None]
+    # 칸을 채우는 대신, 실제 마릿수만큼만 줄을 써서 그림 자리를 넓힌다 — 적이
+    # 한둘일 때도 8마리를 다 채운 것처럼 그림이 작아지지 않게 한다.
+    columns = min(4, len(shown))
+    rows = -(-len(shown) // columns)
+    available_height = canvas.height - 48 - canvas.pad
     cell_width = (canvas.width - canvas.pad * 2 - canvas.gap * (columns - 1)) // columns
-    cell_height = (canvas.height - 48 - canvas.pad - canvas.gap) // 2
+    cell_height = (available_height - canvas.gap * (rows - 1)) // rows
+
     for index, unit in enumerate(units[:8]):
         column, row = index % columns, index // columns
         left = canvas.pad + column * (cell_width + canvas.gap)
@@ -494,13 +521,20 @@ def render_enemy_panel(units: list[dict], telegraphs: dict[int, dict],
         canvas.tile((left, top, left + cell_width, top + cell_height),
                     dimmed=not alive, outline=None if not alive else enemy_dark)
 
-        art_size = min(56, cell_height - 62)
+        # 그림 — 칸 위쪽 절반 가까이. 손패 카드와 같은 언어로, 작은 초상화
+        # 하나로는 무엇을 상대하는지 한눈에 들어오지 않는다.
+        #
+        # 적이 많아 두 줄로 접히면 칸 자체가 낮아진다 — 그림을 키운 만큼
+        # 아래 글자 자리가 줄므로, 상태이상 배지 한 줄을 뺄지는 칸 높이로
+        # 판단한다 (roomy).
+        art_height = max(40, int(cell_height * 0.42))
+        roomy = cell_height >= 160
         art = canvas.assets.art(
             "enemy", str(unit.get("enemy_id", unit.get("name", ""))),
             label=str(unit.get("name", "?")), rarity=unit.get("tier", 1),
-            size=(art_size, art_size))
-        canvas.art_tile((left + 8, top + 8, left + 8 + art_size, top + 8 + art_size),
-                        art, grayscale=not alive,
+            size=(cell_width - 12, art_height))
+        canvas.art_tile((left + 6, top + 6, left + cell_width - 6, top + 6 + art_height),
+                        art, grayscale=not alive, fade_bottom=True,
                         outline=theme.color("color_disabled_border") if not alive else enemy_dark)
 
         # 대상 번호 — 카드를 낼 때 이 번호로 적을 고른다.
@@ -512,41 +546,45 @@ def render_enemy_panel(units: list[dict], telegraphs: dict[int, dict],
         canvas.draw.text((left + 14 - canvas.draw.textlength(number, font=small) / 2,
                           top + 8), number, font=small, fill=canvas.text)
 
-        text_left = left + art_size + 16
-        canvas.label((text_left, top + 8),
+        text_left = left + 10
+        text_top = top + art_height + 12
+        canvas.label((text_left, text_top),
                      kit.truncate(canvas.draw, str(unit.get("name", "?")), small,
-                                  cell_width - art_size - 26),
+                                  cell_width - 20),
                      role="small",
                      color=theme.color("color_muted") if not alive else None)
 
         if alive:
+            bar_top = text_top + 14
             ratio = unit.get("hp_current", 0) / max(1, unit.get("hp_max", 1))
             high, low = canvas.hp_colors(ratio)
             kit.gauge(canvas.image,
-                      (text_left, top + 28, left + cell_width - 10, top + 40),
+                      (text_left, bar_top, left + cell_width - 10, bar_top + 10),
                       ratio, high=high, low=low, back=theme.color("color_gauge_back"))
-            canvas.label((text_left, top + 42),
-                         f"{unit.get('hp_current', 0)}/{unit.get('hp_max', 1)}",
+            hp_text = f"{unit.get('hp_current', 0)}/{unit.get('hp_max', 1)}"
+            if not roomy and unit.get("block"):
+                # 칸이 낮아 배지 줄을 뺄 때도 방어막만큼은 체력 옆에 남긴다 —
+                # 그 수치가 빠지면 다음 피해가 왜 그대로 들어갔는지 안 보인다.
+                hp_text += f" · 방어 {unit['block']}"
+            canvas.label((text_left, bar_top + 10), hp_text,
                          role="small", color=theme.color("color_muted"))
-            if unit.get("block"):
-                kit.pill(canvas.image, (left + 8, top + art_size + 14),
-                         f"방어 {unit['block']}", small,
-                         fg=theme.color("color_block_text"),
-                         bg=theme.color("color_block_back"))
 
             # 적 상태이상·시간제 효과 — 화상이나 방어력 감소가 화면에
             # 보이지 않으면 대미지가 왜 달라졌는지 알 수 없다 (§2.5.3).
-            chip_x = left + 8
-            chip_y = top + art_size + 14
-            if unit.get("block"):
-                chip_x += 62
-            for text in _status_chips(unit)[:2]:
-                if chip_x > left + cell_width - 40:
-                    break
-                chip_x += kit.pill(canvas.image, (chip_x, chip_y),
-                                   kit.truncate(canvas.draw, text, small, 70), small,
-                                   fg=theme.color("color_text"),
-                                   bg=theme.color("color_gauge_back")) + 4
+            if roomy:
+                chip_x, chip_y = text_left, bar_top + 28
+                if unit.get("block"):
+                    chip_x += kit.pill(canvas.image, (chip_x, chip_y),
+                                       f"방어 {unit['block']}", small,
+                                       fg=theme.color("color_block_text"),
+                                       bg=theme.color("color_block_back")) + 4
+                for text in _status_chips(unit)[:2]:
+                    if chip_x > left + cell_width - 40:
+                        break
+                    chip_x += kit.pill(canvas.image, (chip_x, chip_y),
+                                       kit.truncate(canvas.draw, text, small, 70), small,
+                                       fg=theme.color("color_text"),
+                                       bg=theme.color("color_gauge_back")) + 4
 
         telegraph = telegraphs.get(unit.get("battle_unit_id"), {})
         label = telegraph.get("label", "행동 완료")
