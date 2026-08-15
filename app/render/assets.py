@@ -134,7 +134,6 @@ class AssetLibrary:
 
     def art(self, kind: str, entity_id: str, *, label: str = "",
             rarity: int | None = None, element: str | None = None,
-            category: str | None = None,
             size: tuple[int, int] | None = None) -> Image.Image:
         """언제나 그림을 돌려준다. 넣은 파일이 없으면 대신 그린다."""
         image = self.load(kind, entity_id, size)
@@ -142,22 +141,15 @@ class AssetLibrary:
             return image
         rule = self.kind(kind)
         return self.placeholder(size or rule.size, label=label or entity_id,
-                                rarity=rarity, element=element, category=category)
+                                rarity=rarity, element=element)
 
     def placeholder(self, size: tuple[int, int], *, label: str,
-                    rarity: int | None = None, element: str | None = None,
-                    category: str | None = None) -> Image.Image:
-        """그림이 없을 때 대신 그리는 것 — 빗금 무늬 바탕에 이름.
-
-        색은 종류(category) > 원소(element) > 희귀도(rarity) 순으로 고른다 —
-        카드는 종류가, 적·캐릭터는 원소나 희귀도가 더 뜻이 있는 구분이다."""
+                    rarity: int | None = None,
+                    element: str | None = None) -> Image.Image:
+        """그림이 없을 때 대신 그리는 것 — 빗금 무늬 바탕에 이름."""
         theme = self.theme
-        if category is not None:
-            base = theme.category_color(category)
-        elif element is not None:
-            base = theme.element_color(element)
-        else:
-            base = theme.rarity_color(rarity if rarity is not None else 1)
+        base = (theme.element_color(element) if element is not None
+                else theme.rarity_color(rarity if rarity is not None else 1))
         image = _hatched_panel(size, base)
         draw = ImageDraw.Draw(image)
 

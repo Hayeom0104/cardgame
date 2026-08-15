@@ -65,9 +65,6 @@ class Theme:
     def element_color(self, element: Any) -> Color:
         return self._from_table("color_by_element", element, "color_muted")
 
-    def category_color(self, category: Any) -> Color:
-        return self._from_table("color_by_category", category, "color_muted")
-
     def node_color(self, node_type: Any) -> Color:
         return self._from_table("color_by_node_type", node_type, "color_muted")
 
