@@ -134,6 +134,7 @@ class AssetLibrary:
 
     def art(self, kind: str, entity_id: str, *, label: str = "",
             rarity: int | None = None, element: str | None = None,
+            category: str | None = None,
             size: tuple[int, int] | None = None) -> Image.Image:
         """언제나 그림을 돌려준다. 넣은 파일이 없으면 대신 그린다."""
         image = self.load(kind, entity_id, size)
@@ -141,16 +142,23 @@ class AssetLibrary:
             return image
         rule = self.kind(kind)
         return self.placeholder(size or rule.size, label=label or entity_id,
-                                rarity=rarity, element=element)
+                                rarity=rarity, element=element, category=category)
 
     def placeholder(self, size: tuple[int, int], *, label: str,
-                    rarity: int | None = None,
-                    element: str | None = None) -> Image.Image:
-        """그림이 없을 때 대신 그리는 것 — 색 바탕에 이름."""
+                    rarity: int | None = None, element: str | None = None,
+                    category: str | None = None) -> Image.Image:
+        """그림이 없을 때 대신 그리는 것 — 빗금 무늬 바탕에 이름.
+
+        색은 종류(category) > 원소(element) > 희귀도(rarity) 순으로 고른다 —
+        카드는 종류가, 적·캐릭터는 원소나 희귀도가 더 뜻이 있는 구분이다."""
         theme = self.theme
-        fill = (theme.element_color(element) if element is not None
-                else theme.rarity_color(rarity if rarity is not None else 1))
-        image = Image.new("RGBA", size, (*fill, 255))
+        if category is not None:
+            base = theme.category_color(category)
+        elif element is not None:
+            base = theme.element_color(element)
+        else:
+            base = theme.rarity_color(rarity if rarity is not None else 1)
+        image = _hatched_panel(size, base)
         draw = ImageDraw.Draw(image)
 
         # 넣은 그림과 구별되도록 안쪽에 테두리를 하나 그린다.
@@ -182,6 +190,42 @@ class AssetLibrary:
                     "problem": _problem(path, self.max_bytes) if path else None,
                 })
         return report
+
+
+def _tint(base: tuple[int, int, int], amount: float) -> tuple[int, int, int]:
+    """밝기만 옮긴다. 색상은 그대로 두어야 팔레트에서 벗어나지 않는다."""
+    import colorsys
+
+    hue, lightness, saturation = colorsys.rgb_to_hls(*[value / 255 for value in base])
+    lightness = min(1.0, max(0.0, lightness + amount))
+    red, green, blue = colorsys.hls_to_rgb(hue, lightness, saturation)
+    return (int(red * 255), int(green * 255), int(blue * 255))
+
+
+def _hatched_panel(size: tuple[int, int], base: tuple[int, int, int]) -> Image.Image:
+    """빗금 무늬 바탕 — 카드류 화면 전체가 공유하는 기본 자리표시자 결.
+
+    한 판 단색 대신 위아래 그러데이션에 대각선 빗금을 얹는다. 그림이 없는
+    카드·초상화가 전부 같은 결로 보이도록, 이 하나만 카드가 실제로 무엇을
+    그리는지와 무관하게 색만 바꿔 재사용한다."""
+    width, height = size
+    top, bottom = _tint(base, 0.10), _tint(base, -0.24)
+    image = Image.new("RGBA", (1, height))
+    for y in range(height):
+        ratio = y / max(1, height - 1)
+        image.putpixel((0, y), (*tuple(
+            int(top[index] + (bottom[index] - top[index]) * ratio)
+            for index in range(3)), 255))
+    image = image.resize((width, height), Image.BILINEAR).convert("RGBA")
+
+    stripes = Image.new("RGBA", size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(stripes)
+    stripe_color = (*_tint(base, 0.24), 55)
+    step = max(9, width // 11)
+    for x in range(-height, width + height, step):
+        draw.line([(x, 0), (x + height, height)], fill=stripe_color,
+                  width=max(2, step // 3))
+    return Image.alpha_composite(image, stripes)
 
 
 def _problem(path: Path, max_bytes: int) -> str | None:

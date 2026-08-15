@@ -161,36 +161,55 @@ def to_attachment(image: Image.Image, filename: str) -> Attachment:
 # 카드 한 장
 # =====================================================================
 def render_card(card: dict, canvas: Canvas, *, size: tuple[int, int] | None = None,
-                footer: str = "", dimmed: bool = False) -> Image.Image:
-    """카드 한 장. 손패·상점·보상·덱 화면이 모두 이걸 쓴다.
+                footer: str = "", dimmed: bool = False,
+                index_badge: str | None = None, target_badge: str | None = None,
+                tag: str | None = None) -> Image.Image:
+    """카드 한 장. 손패·상점·보상·덱·가챠 결과 화면이 모두 이걸 쓴다.
 
     `card` 에서 읽는 것: card_id, name, cost, element, rarity_tier,
     upgrade_tier, category.
+
+    `index_badge`(왼쪽 위)·`target_badge`(오른쪽 위)는 그림과 드롭다운을
+    서로 잇는 참고 번호일 뿐이다 — 실제 선택은 여전히 버튼/드롭다운으로
+    한다. `tag`는 "NEW"/"PICKUP" 같은 짧은 표시.
     """
     theme = canvas.theme
     size = size or theme.size("card_size")
     width, height = size
-    element = card.get("element")
+    category = card.get("category") or ""
+    accent = theme.category_color(category) if category else theme.color("color_accent")
 
     image = Image.new("RGBA", size, (*theme.color("color_panel"), 255))
     draw = ImageDraw.Draw(image)
 
-    # 그림 자리 — 카드 위쪽 60%
-    art_height = int(height * 0.6)
+    # 그림 자리 — 카드 위쪽 58%. 종류(category) 색을 우선한다 — 캐릭터가
+    # 아니라 "이 카드가 무엇을 하는가"가 손패에서 가장 먼저 필요한 정보다.
+    art_height = int(height * 0.58)
     art = canvas.assets.art("card", str(card.get("card_id", "")),
                             label=str(card.get("name", "")),
-                            rarity=card.get("rarity_tier"), element=element,
-                            size=(width, art_height))
+                            rarity=card.get("rarity_tier"), element=card.get("element"),
+                            category=category, size=(width, art_height))
     image.paste(art, (0, 0), art)
 
-    # 속성 색 테두리 — 어느 캐릭터가 낼 수 있는 카드인지 한눈에 보이게
-    draw.rectangle([0, 0, width - 1, height - 1],
-                   outline=theme.element_color(element), width=2)
+    small = theme.font(role="small")
+    if category:
+        _pill(draw, (6, art_height - 22, 6 + draw.textlength(category, font=small) + 14,
+                     art_height - 6), category, small, fill=accent,
+              text_color=theme.color("color_background"))
+
+    draw.rectangle([0, 0, width - 1, height - 1], outline=accent, width=2)
 
     body = theme.font(role="body")
-    small = theme.font(role="small")
     name = str(card.get("name", ""))
     draw.text((8, art_height + 6), name[:10], font=body, fill=theme.color("color_text"))
+
+    rarity = int(card.get("rarity_tier") or 1)
+    _rarity_dots(draw, (8, height - 16), rarity, theme.rarity_color(rarity))
+
+    line = footer
+    if line:
+        draw.text((8, art_height + 24), line[:18], font=small,
+                  fill=theme.color("color_muted"))
 
     cost = card.get("cost")
     if cost is not None:
@@ -201,17 +220,25 @@ def render_card(card: dict, canvas: Canvas, *, size: tuple[int, int] | None = No
         draw.text((20 - draw.textlength(text, font=body) / 2, 11), text,
                   font=body, fill=theme.color("color_accent"))
 
-    line = footer or str(card.get("category", ""))
-    if line:
-        draw.text((8, height - 22), line[:16], font=small,
-                  fill=theme.color("color_muted"))
+    if index_badge:
+        _round_badge(draw, (width - 24, 6), index_badge, small,
+                    fill=theme.color("color_background"), outline=accent,
+                    text_color=accent)
+    if target_badge:
+        # 왼쪽 위는 비용이 이미 쓰고 있으므로, 손패가 아니라 대상 번호는
+        # 오른쪽 아래로 — 카드 두 개가 나란히 있어도 안 겹친다.
+        _round_badge(draw, (width - 24, height - 30), target_badge, small,
+                    fill=theme.color("color_block"), outline=theme.color("color_block"),
+                    text_color=theme.color("color_background"))
+    if tag:
+        _pill(draw, (width - 8 - draw.textlength(tag, font=small) - 12,
+                     height - 24, width - 8, height - 8), tag, small,
+              fill=theme.color("color_accent"), text_color=theme.color("color_background"))
 
     upgrade = int(card.get("upgrade_tier") or 0)
     if upgrade:
-        # 아래 오른쪽. 그림 위(왼쪽 위)에 쓰면 카드를 작게 그렸을 때 이름과
-        # 겹치고, 오른쪽 위는 덱 화면의 장수 뱃지 자리다.
         text = f"+{upgrade}"
-        draw.text((width - draw.textlength(text, font=small) - 8, height - 22),
+        draw.text((width - draw.textlength(text, font=small) - 8, height - 16),
                   text, font=small, fill=theme.color("color_accent"))
 
     if dimmed:
@@ -220,6 +247,29 @@ def render_card(card: dict, canvas: Canvas, *, size: tuple[int, int] | None = No
         overlay = Image.new("RGBA", size, (0, 0, 0, 150))
         image = Image.alpha_composite(image, overlay)
     return image
+
+
+def _pill(draw: ImageDraw.ImageDraw, box, text: str, font, *, fill, text_color) -> None:
+    draw.rounded_rectangle(box, radius=(box[3] - box[1]) / 2, fill=fill)
+    width = draw.textlength(text, font=font)
+    cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    draw.text((cx - width / 2, cy - font.size / 2 if hasattr(font, "size") else cy - 6),
+              text, font=font, fill=text_color)
+
+
+def _round_badge(draw: ImageDraw.ImageDraw, top_left, text: str, font, *,
+                 fill, outline, text_color) -> None:
+    x, y = top_left
+    draw.ellipse((x, y, x + 18, y + 18), fill=fill, outline=outline, width=2)
+    width = draw.textlength(text, font=font)
+    draw.text((x + 9 - width / 2, y + 9 - (font.size / 2 if hasattr(font, "size") else 6)),
+              text, font=font, fill=text_color)
+
+
+def _rarity_dots(draw: ImageDraw.ImageDraw, top_left, count: int, color) -> None:
+    x, y = top_left
+    for index in range(max(0, min(count, 6))):
+        draw.ellipse((x + index * 10, y, x + index * 10 + 6, y + 6), fill=color)
 
 
 # =====================================================================
