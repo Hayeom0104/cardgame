@@ -57,6 +57,7 @@ class EffectOutcome:
     choice_id: str | None = None
     terminal_transition: dict | None = None
     damage_events: list[dict] = field(default_factory=list)
+    heal_events: list[dict] = field(default_factory=list)
     deaths: list[int] = field(default_factory=list)
     log: list[str] = field(default_factory=list)
 
@@ -173,6 +174,8 @@ def _land(ctx: EffectContext, outcome: EffectOutcome, target: Unit,
         "final_damage": result.final_damage,
         "hp_loss": result.hp_loss,
         "hp_after": hp,
+        "block_consumed": result.block_consumed,
+        "source_id": ctx.actor.battle_unit_id if ctx.actor else None,
     })
     target.hp_current = hp
     target.block = max(0, target.block - result.block_consumed)
@@ -374,11 +377,19 @@ def _op_remove_card_from_run_deck(params: dict, ctx: EffectContext,
 
 
 def _op_modify_hp(params: dict, ctx: EffectContext, outcome: EffectOutcome) -> None:
+    source_id = ctx.actor.battle_unit_id if ctx.actor else None
     for target in ctx.targets:
         delta = (float(params["delta"]) if params["mode"] == "flat"
                  else target.hp_max * float(params["delta"]))
         if delta >= 0:
+            before = target.hp_current
             target.hp_current = un.heal(ctx.db, target.battle_unit_id, int(delta))
+            outcome.heal_events.append({
+                "target_id": target.battle_unit_id,
+                "amount": target.hp_current - before,
+                "hp_after": target.hp_current,
+                "source_id": source_id,
+            })
         else:
             # Cursed penalties can kill — no HP-1 floor (§2.7.1).
             target.hp_current = un.apply_hp_loss(ctx.db, target.battle_unit_id,
@@ -388,6 +399,8 @@ def _op_modify_hp(params: dict, ctx: EffectContext, outcome: EffectOutcome) -> N
                 "final_damage": int(-delta),
                 "hp_loss": int(-delta),
                 "hp_after": target.hp_current,
+                "block_consumed": 0,
+                "source_id": source_id,
             })
 
 

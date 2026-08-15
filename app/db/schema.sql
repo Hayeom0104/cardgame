@@ -411,6 +411,21 @@ CREATE TABLE IF NOT EXISTS battle_draw (
   PRIMARY KEY (battle_id, battle_unit_id, card_instance_id)
 );
 
+-- 사람이 읽는 전투 진행 로그. 카드/행동 하나를 처리할 때마다 한두 줄씩
+-- 쌓인다 — 화면은 이 중 최근 몇 줄만 보여준다. 계산 자체는 이 표 없이도
+-- 끝나므로(§2.11), 여기 쓰기가 실패해도 전투는 멈추지 않는다(호출부에서
+-- 감싼다).
+CREATE TABLE IF NOT EXISTS battle_log (
+  battle_log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  battle_id     INTEGER NOT NULL,
+  round_no      INTEGER NOT NULL,
+  entry         TEXT    NOT NULL,
+  created_at    TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_battle_log_battle
+  ON battle_log (battle_id, battle_log_id);
+
 -- =====================================================================
 -- §18.5 Discord surface
 -- =====================================================================

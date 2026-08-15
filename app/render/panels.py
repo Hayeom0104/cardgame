@@ -604,17 +604,40 @@ def render_enemy_panel(units: list[dict], telegraphs: dict[int, dict],
     return canvas.image
 
 
+def _render_log_strip(theme: theme_module.Theme, width: int, log: list[str]) -> Image.Image:
+    """전투 최근 기록 — 계산은 이미 다 되고 있었지만(§2.11) 화면 어디에도
+    보인 적이 없던 정보다. 몇 줄을 보여줄지는 `battle_log_lines` 로 정한다."""
+    lines_shown = theme.int_("battle_log_lines")
+    small = theme.font(role="small")
+    line_height = theme.int_("font_size_small") + 6
+    pad = 10
+    height = pad * 2 + 22 + lines_shown * line_height
+
+    image = Image.new("RGB", (width, height), theme.color("color_panel"))
+    draw = ImageDraw.Draw(image)
+    draw.line([(0, 0), (width, 0)], fill=theme.color("color_border"), width=2)
+    draw.text((pad, pad), "전투 기록", font=small, fill=theme.color("color_muted"))
+
+    shown = log[-lines_shown:] if log else ["아직 기록이 없습니다"]
+    top = pad + 22
+    for index, entry in enumerate(shown):
+        draw.text((pad, top + index * line_height), kit.truncate(draw, entry, small, width - pad * 2),
+                  font=small, fill=theme.color("color_text"))
+    return image
+
+
 def render_battle_screen(ally_units: list[dict], enemy_units: list[dict],
                          telegraphs: dict[int, dict], *, resource: int,
                          round_no: int, hand: list[dict] | None = None,
-                         passives: list[dict] | None = None
+                         passives: list[dict] | None = None,
+                         log: list[str] | None = None
                          ) -> list[Attachment]:
     """§1.3.7 — 중앙봇은 한 action 에 PNG 두 장까지만 받는다.
 
-    한 장은 **전투 참가자**(적·아군), 다른 한 장은 **이번 턴에 쓸 것**
-    (손패·장착 패시브·자원)으로 나눈다 — "누가 싸우는가"와 "내가 뭘 낼 수
-    있는가"는 서로 다른 질문이라, 한 장에 아군과 손패를 섞어 두면 어느
-    쪽을 보려는지 매번 다시 찾아야 했다."""
+    한 장은 **전투 참가자**(적·아군, 그 아래 최근 로그), 다른 한 장은
+    **이번 턴에 쓸 것**(손패·장착 패시브·자원)으로 나눈다 — "누가
+    싸우는가"와 "내가 뭘 낼 수 있는가"는 서로 다른 질문이라, 한 장에
+    아군과 손패를 섞어 두면 어느 쪽을 보려는지 매번 다시 찾아야 했다."""
     theme = theme_module.load()
     assets = AssetLibrary(theme)
     size = theme.size("panel_size")
@@ -624,10 +647,13 @@ def render_battle_screen(ally_units: list[dict], enemy_units: list[dict],
     ally_image = render_ally_panel(
         ally_units, resource=resource, round_no=round_no,
         canvas=Canvas(size, theme, assets))
-    combatants = Image.new("RGB", (size[0], size[1] * 2),
+    log_image = _render_log_strip(theme, size[0], log or [])
+
+    combatants = Image.new("RGB", (size[0], size[1] * 2 + log_image.height),
                            theme.color("color_background"))
     combatants.paste(enemy_image, (0, 0))
     combatants.paste(ally_image, (0, size[1]))
+    combatants.paste(log_image, (0, size[1] * 2))
 
     hand_image = render_hand(
         hand or [], resource=resource, passives=passives,

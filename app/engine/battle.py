@@ -56,6 +56,7 @@ class TurnResult:
     acted: bool = False
     reason: str | None = None
     damage_events: list[dict] = field(default_factory=list)
+    heal_events: list[dict] = field(default_factory=list)
     deaths: list[int] = field(default_factory=list)
     log: list[str] = field(default_factory=list)
     awaiting_input: bool = False
@@ -77,6 +78,10 @@ class BattleEngine:
     #: party_slot → {card_id: upgrade_tier}, read once per battle from the
     #: §16.2.3 build snapshot.
     _upgrade_cache: dict = field(default_factory=dict)
+    #: battle_unit_id → display name, for building the human-readable log
+    #: (§11 — the log is presentation, but resolving names once per turn
+    #: instead of once per event keeps it cheap).
+    _name_cache: dict = field(default_factory=dict)
 
     # -- accessors -----------------------------------------------------
     def battle_row(self):
@@ -84,6 +89,59 @@ class BattleEngine:
         if row is None:
             raise KeyError(f"battle {self.battle_id} does not exist")
         return row
+
+    def _unit_name(self, unit_id: int) -> str:
+        if unit_id in self._name_cache:
+            return self._name_cache[unit_id]
+        row = self.db.one(
+            "SELECT side, unit_def_id FROM battle_units WHERE battle_unit_id = ?",
+            (unit_id,))
+        name = f"유닛{unit_id}"
+        if row is not None:
+            table = "characters" if row["side"] == un.ALLY else "enemies"
+            id_column = "character_id" if row["side"] == un.ALLY else "enemy_id"
+            found = self.db.one(
+                f"SELECT name FROM {table} WHERE content_version_id = ? "
+                f"AND {id_column} = ?",
+                (self.content_version_id, row["unit_def_id"]))
+            if found is not None:
+                name = found["name"]
+        self._name_cache[unit_id] = name
+        return name
+
+    def _persist_log(self, entries: list[str], round_no: int) -> None:
+        """`result.log` 를 `battle_log` 에 남긴다 — 계산은 이 표 없이도
+        끝나므로, 쓰기가 하나 실패해도 전투를 막지 않는다."""
+        from app.db.connection import utcnow
+
+        for entry in entries:
+            try:
+                self.db.execute(
+                    "INSERT INTO battle_log (battle_id, round_no, entry, created_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (self.battle_id, round_no, entry, utcnow()),
+                )
+            except Exception:                                # noqa: BLE001
+                logger.exception("전투 로그를 남기지 못했습니다")
+
+    def _describe_outcome(self, unit: Unit, action_name: str | None,
+                          outcome) -> list[str]:
+        """카드 한 장·행동 하나의 결과를 사람이 읽는 줄로 (§11 전투 로그).
+
+        `outcome.log` 는 무적 무효화처럼 드문 경우를 위한 진단 문구라 대부분
+        비어 있다 — 실제로 무슨 일이 있었는지는 damage_events/heal_events가
+        갖고 있으므로 그걸 문장으로 바꾼다."""
+        actor = self._unit_name(unit.battle_unit_id)
+        lines = [f"{actor}: {action_name}"] if action_name else []
+        for event in outcome.damage_events:
+            target = self._unit_name(event["target_id"])
+            lines.append(f"{actor} → {target}: {event['final_damage']} 피해")
+            if event.get("block_consumed"):
+                lines.append(f"{target}: 블록 {event['block_consumed']} 흡수")
+        for event in outcome.heal_events:
+            target = self._unit_name(event["target_id"])
+            lines.append(f"{actor} → {target}: {event['amount']} 회복")
+        return lines
 
     @property
     def round_no(self) -> int:
@@ -399,8 +457,10 @@ class BattleEngine:
         ctx = self._context(unit, [unit], fx.ops.CTX_CURSED_CARD)
         outcome = fx.execute_effects(json.loads(definition["penalty_json"]), ctx)
         result.damage_events.extend(outcome.damage_events)
+        result.heal_events.extend(outcome.heal_events)
         result.log.extend(outcome.log)
         result.log.append(f"저주: {definition['name']}")
+        result.log.extend(self._describe_outcome(unit, None, outcome))
 
     # -- card play (P7 → P8) -------------------------------------------
     def select_card(self, unit: Unit, card_instance_id: int) -> dict:
@@ -450,7 +510,9 @@ class BattleEngine:
         # row is the un-upgraded original and must not be executed directly.
         outcome = fx.execute_effects(card["effects"], ctx)
         result.damage_events.extend(outcome.damage_events)
+        result.heal_events.extend(outcome.heal_events)
         result.log.extend(outcome.log)
+        result.log.extend(self._describe_outcome(unit, card["name"], outcome))
         result.acted = True
 
         # P9. ★ DEATH CHECK for every affected unit.
@@ -520,7 +582,9 @@ class BattleEngine:
         ctx.content_version_id = plan.content_version_id
         outcome = fx.execute_effects(action.effects, ctx)
         result.damage_events.extend(outcome.damage_events)
+        result.heal_events.extend(outcome.heal_events)
         result.log.extend(outcome.log)
+        result.log.extend(self._describe_outcome(unit, action.name, outcome))
         result.acted = True
 
         # E4. ★ DEATH CHECK for every affected unit.
@@ -603,6 +667,8 @@ class BattleEngine:
         # 8. For each SURVIVING boss: evaluate phase thresholds.
         for entry in self._evaluate_boss_phases(round_no):
             result.log.append(entry)
+
+        self._persist_log(result.log, round_no)
 
         # 9. Mark this snapshot entry consumed.
         self._consume_entry()
@@ -838,6 +904,18 @@ class BattleEngine:
             for unit in un.load_units(self.db, self.battle_id, side=un.ENEMY,
                                       living_only=True)
         ]
+
+
+def recent_log(db: Database, battle_id: int, limit: int) -> list[str]:
+    """최근 전투 로그 몇 줄 — 화면 하단 로그 창이 읽는 것 (§11).
+
+    오래된 순으로 돌려준다: 화면은 위에서 아래로 읽으므로, 가장 최근 일이
+    맨 아래에 오는 편이 자연스럽다."""
+    rows = db.query(
+        "SELECT entry FROM battle_log WHERE battle_id = ? "
+        "ORDER BY battle_log_id DESC LIMIT ?",
+        (battle_id, limit))
+    return [row["entry"] for row in reversed(rows)]
 
 
 def build_engine(db: Database, balance: Balance, *, battle_id: int, run_id: int,

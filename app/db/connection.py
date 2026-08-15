@@ -18,7 +18,7 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 # Bumped whenever schema.sql changes shape. §18.9: startup fails closed when the
 # file on disk is older than what the code expects.
-EXPECTED_SCHEMA_VERSION = 4
+EXPECTED_SCHEMA_VERSION = 5
 
 #: §18.9 forward-only migrations, applied in one transaction each and recorded.
 #: `schema.sql` uses CREATE TABLE IF NOT EXISTS, so it never alters an existing
@@ -39,6 +39,8 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     # `schema.sql` 의 CREATE TABLE IF NOT EXISTS 가 만들어 준다. 그래도 버전은
     # 올린다: 이 코드가 기대하는 스키마가 실제로 달라졌기 때문이다.
     4: (),
+    # 전투 로그(`battle_log`). 역시 새 테이블뿐이라 고칠 기존 테이블이 없다.
+    5: (),
 }
 
 

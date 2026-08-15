@@ -18,6 +18,7 @@ from app.engine import statuses as st
 from app.engine import timed_effects as te
 from app.engine import units as un
 from app.render import panels
+from app.render import theme as theme_module
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,9 @@ def battle(db: Database, balance, *, battle_id: int, run) -> list[dict]:
             resource=int(row["party_resource_current"] or 0),
             round_no=int(row["round_no"] or 1),
             hand=_hand(db, run),
-            passives=pv.equipped(db, battle_id, run["content_version_id"])))
+            passives=pv.equipped(db, battle_id, run["content_version_id"]),
+            log=bt.recent_log(db, battle_id,
+                              theme_module.load().int_("battle_log_lines"))))
 
     return safely(build)
 
