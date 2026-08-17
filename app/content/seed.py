@@ -395,6 +395,29 @@ def _seed_enemy_actions(db: Database, version: int) -> None:
          [{"operator": "apply_status",
            "params": {"status_id": st.ATTACK_UP, "stacks": 2}},
           {"operator": "grant_block", "params": {"mode": "multiplier", "value": 1.5}}]),
+        # 특수(변칙) 적용 행동 — 오너 승인으로 세계마다 한둘씩 추가한
+        # 콘텐츠다(설계 문서에 근거를 둔 수치가 아니라 기존 패턴을 따라
+        # 새로 지은 것). §2.5.1a의 기존 10개 상태와 기존 연산자만 쓴다 —
+        # 상태를 늘리면 §10.5의 scope 판정이 함께 늘어난다.
+        ("act_아군투지", "투지 고취", "버프디버프", "ally", 0,
+         [{"operator": "apply_status", "params": {"status_id": st.ATTACK_UP, "stacks": 2}}]),
+        ("act_필사반격", "필사의 각오", "버프디버프", "self", 0,
+         [{"operator": "modify_stat",
+           "params": {"stat": "atk", "delta": 30, "is_percent": True,
+                      "duration_rounds": 2}}]),
+        ("act_아군치유", "치유의 손길", "회복", "ally", 0,
+         [{"operator": "heal", "params": {"mode": "percent_max_hp", "value": 0.25}}]),
+        ("act_무적화", "굳건한 수호", "방어", "self", 0,
+         [{"operator": "set_invulnerable", "params": {"duration_rounds": 1}}]),
+        ("act_소환_하피", "폭풍 부르기", "버프디버프", "self", 0,
+         [{"operator": "summon_enemy",
+           "params": {"enemy_id": "enemy_w3_하피", "count": 1}}]),
+        ("act_가속", "질풍 가속", "버프디버프", "self", 0,
+         [{"operator": "modify_stat",
+           "params": {"stat": "spd", "delta": 15, "is_percent": False,
+                      "duration_rounds": 3}}]),
+        ("act_자가치유", "부패의 재생", "회복", "self", 0,
+         [{"operator": "heal", "params": {"mode": "percent_max_hp", "value": 0.20}}]),
     ]
     for action_id, name, category, target_side, is_basic, effects in rows:
         db.execute(
@@ -427,6 +450,16 @@ def _seed_enemies(db: Database, version: int) -> None:
              {"priority": 5, "condition": {"op": "always"},
               "action_id": "act_화상부여", "weight": 1.0, "cooldown_turns": 2},
          ]),
+        ("enemy_w1_늑대조련사", "고블린 늑대조련사", "일반", "지", "서포터형", 50, 9, 4, 98,
+         common_rules + [
+             {"priority": 5, "condition": {"op": "always"},
+              "action_id": "act_아군투지", "weight": 1.0, "cooldown_turns": 3},
+         ]),
+        ("enemy_w1_돌격병", "고블린 돌격병", "일반", "지", "공격형", 58, 13, 3, 105,
+         common_rules + [
+             {"priority": 5, "condition": {"op": "self_hp_below", "value": 0.5},
+              "action_id": "act_필사반격", "weight": 2.0, "cooldown_turns": 3},
+         ]),
         # 2세계 — 늪. 굳히고 늦추는 쪽으로 몰아간다.
         ("enemy_w2_도롱뇽", "늪지 도롱뇽", "일반", "수", "공격형", 58, 10, 5, 88,
          common_rules + [
@@ -448,6 +481,16 @@ def _seed_enemies(db: Database, version: int) -> None:
              {"priority": 5, "condition": {"op": "always"},
               "action_id": "act_출혈", "weight": 2.0, "cooldown_turns": 2},
          ]),
+        ("enemy_w2_늪치유사", "늪지 치유사", "일반", "수", "서포터형", 48, 8, 4, 90,
+         common_rules + [
+             {"priority": 5, "condition": {"op": "any_ally_hp_below", "value": 0.6},
+              "action_id": "act_아군치유", "weight": 2.0, "cooldown_turns": 3},
+         ]),
+        ("enemy_w2_가시덩굴", "가시 넝쿨", "일반", "목", "방어형", 66, 9, 7, 78,
+         common_rules + [
+             {"priority": 5, "condition": {"op": "own_side_count_below", "value": 2},
+              "action_id": "act_무적화", "weight": 2.0, "cooldown_turns": 4},
+         ]),
         # 3세계 — 절벽. 빠르고 성가시다.
         ("enemy_w3_하피", "절벽 하피", "일반", "풍", "공격형", 50, 12, 3, 110,
          common_rules + [
@@ -464,6 +507,16 @@ def _seed_enemies(db: Database, version: int) -> None:
              {"priority": 5, "condition": {"op": "self_hp_below", "value": 0.5},
               "action_id": "act_방벽", "weight": 2.0, "cooldown_turns": 1},
          ]),
+        ("enemy_w3_폭풍소환사", "폭풍 소환사", "엘리트", "풍", "서포터형", 100, 10, 6, 95,
+         common_rules + [
+             {"priority": 5, "condition": {"op": "round_number_gte", "value": 3},
+              "action_id": "act_소환_하피", "weight": 2.0, "cooldown_turns": 6},
+         ]),
+        ("enemy_w3_돌풍매", "돌풍매", "일반", "풍", "공격형", 52, 11, 3, 100,
+         common_rules + [
+             {"priority": 5, "condition": {"op": "round_number_gte", "value": 2},
+              "action_id": "act_가속", "weight": 1.5, "cooldown_turns": 3},
+         ]),
         # 4세계 — 심연. 광역과 디버프가 겹친다.
         ("enemy_w4_그림자", "그림자 병사", "일반", "암", "공격형", 62, 12, 5, 98,
          common_rules),
@@ -476,6 +529,17 @@ def _seed_enemies(db: Database, version: int) -> None:
          common_rules + [
              {"priority": 5, "condition": {"op": "always"},
               "action_id": "act_boss_돌진", "weight": 1.5, "cooldown_turns": 2},
+         ]),
+        ("enemy_w4_재생하는망자", "재생하는 망자", "일반", "암", "방어형", 60, 10, 6, 85,
+         common_rules + [
+             {"priority": 5, "condition": {"op": "self_hp_below", "value": 0.5},
+              "action_id": "act_자가치유", "weight": 2.0, "cooldown_turns": 3},
+         ]),
+        ("enemy_w4_무적파수꾼", "무적의 파수꾼", "엘리트", "암", "방어형", 140, 14, 9, 90,
+         common_rules + [
+             {"priority": 5, "condition": {"op": "owner_turn_index_mod",
+                                          "divisor": 3, "value": 0},
+              "action_id": "act_무적화", "weight": 2.0, "cooldown_turns": 4},
          ]),
     ]
     for enemy_id, name, tier, element, role, hp, atk, defense, spd, rules in rows:
@@ -567,6 +631,10 @@ def _seed_encounters(db: Database, version: int) -> None:
           {"enemy_id": "enemy_w1_고블린", "slot": 1}]),
         ("enc_w1_boss", WORLD_1_ID, "boss",
          [{"enemy_id": "enemy_w1_boss", "slot": 0}]),
+        ("enc_w1_normal_3", WORLD_1_ID, "normal",
+         [{"enemy_id": "enemy_w1_늑대조련사", "slot": 0},
+          {"enemy_id": "enemy_w1_돌격병", "slot": 1},
+          {"enemy_id": "enemy_w1_고블린", "slot": 2}]),
 
         ("enc_w2_normal", "world_2", "normal",
          [{"enemy_id": "enemy_w2_도롱뇽", "slot": 0},
@@ -575,6 +643,9 @@ def _seed_encounters(db: Database, version: int) -> None:
          [{"enemy_id": "enemy_w2_도롱뇽", "slot": 0},
           {"enemy_id": "enemy_w2_망령", "slot": 1},
           {"enemy_id": "enemy_w2_망령", "slot": 2}]),
+        ("enc_w2_normal_3", "world_2", "normal",
+         [{"enemy_id": "enemy_w2_늪치유사", "slot": 0},
+          {"enemy_id": "enemy_w2_가시덩굴", "slot": 1}]),
         ("enc_w2_elite", "world_2", "elite",
          [{"enemy_id": "enemy_w2_거머리", "slot": 0}]),
         ("enc_w2_boss", "world_2", "boss",
@@ -587,9 +658,15 @@ def _seed_encounters(db: Database, version: int) -> None:
         ("enc_w3_normal_2", "world_3", "normal",
          [{"enemy_id": "enemy_w3_주문사", "slot": 0},
           {"enemy_id": "enemy_w2_석상", "slot": 1}]),
+        ("enc_w3_normal_3", "world_3", "normal",
+         [{"enemy_id": "enemy_w3_돌풍매", "slot": 0},
+          {"enemy_id": "enemy_w3_돌풍매", "slot": 1}]),
         ("enc_w3_elite", "world_3", "elite",
          [{"enemy_id": "enemy_w3_수문장", "slot": 0},
           {"enemy_id": "enemy_w3_하피", "slot": 1}]),
+        ("enc_w3_elite_2", "world_3", "elite",
+         [{"enemy_id": "enemy_w3_폭풍소환사", "slot": 0},
+          {"enemy_id": "enemy_w3_돌풍매", "slot": 1}]),
         ("enc_w3_boss", "world_3", "boss",
          [{"enemy_id": "enemy_w3_boss", "slot": 0}]),
 
@@ -601,9 +678,14 @@ def _seed_encounters(db: Database, version: int) -> None:
          [{"enemy_id": "enemy_w4_그림자", "slot": 0},
           {"enemy_id": "enemy_w3_주문사", "slot": 1},
           {"enemy_id": "enemy_w4_봉인관", "slot": 2}]),
+        ("enc_w4_normal_3", "world_4", "normal",
+         [{"enemy_id": "enemy_w4_재생하는망자", "slot": 0},
+          {"enemy_id": "enemy_w4_그림자", "slot": 1}]),
         ("enc_w4_elite", "world_4", "elite",
          [{"enemy_id": "enemy_w4_집행자", "slot": 0},
           {"enemy_id": "enemy_w4_봉인관", "slot": 1}]),
+        ("enc_w4_elite_2", "world_4", "elite",
+         [{"enemy_id": "enemy_w4_무적파수꾼", "slot": 0}]),
         ("enc_w4_boss", "world_4", "boss",
          [{"enemy_id": "enemy_w4_boss", "slot": 0}]),
     ]
