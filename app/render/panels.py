@@ -997,48 +997,69 @@ def _effect_tile(item: dict, canvas: Canvas, size: tuple[int, int],
 # =====================================================================
 # 뽑기
 # =====================================================================
+#: 확률 등급마다 다른 색 — 카드 카테고리 배지와 같은 언어로, 배너에서도
+#: "최고"가 가장 눈에 띄게.
+_RATE_TIER_COLORS = {
+    "최고": (248, 178, 96), "중간": (150, 220, 130), "기본": (150, 158, 178),
+}
+
+
 def render_banner(banner: dict, *, rates: dict, pity: dict | None = None,
                   carta: int = 0) -> Attachment:
     """배너 화면 — 픽업 대상, 확률, 천장까지 남은 횟수 (§5).
 
     확률과 천장은 반드시 보여준다. 플레이어가 무엇에 돈을 쓰는지 알 수
-    없으면 안 된다.
+    없으면 안 된다. 카드·전투 화면과 같은 언어로 그린다 — 그림을 안쪽
+    가득 채우고, 위아래만 어둡게 깔아 그 위에 글자를 얹는다.
     """
-    canvas = Canvas(theme_module.load().size("banner_size"))
+    theme = theme_module.load()
+    canvas = Canvas(theme.size("banner_size"), theme, tint="color_tint_gacha")
     banner_id = str(banner.get("banner_id", ""))
 
-    art = canvas.assets.art("banner", banner_id,
-                            label=str(banner.get("name", banner_id)),
-                            size=(canvas.width, canvas.theme.size("banner_size")[1] // 2))
-    canvas.paste(art, (0, 0))
-    canvas.draw = ImageDraw.Draw(canvas.image)
+    inset = 6
+    radius = theme.int_("corner_radius")
+    art = canvas.assets.art("banner", banner_id, label="",
+                            size=(canvas.width - inset * 2, canvas.height - inset * 2))
+    canvas.art_tile((inset, inset, canvas.width - inset, canvas.height - inset),
+                    art, fade_top=True, fade_bottom=True,
+                    outline=canvas.accent)
 
-    top = art.height + canvas.gap
-    canvas.label((canvas.pad, top), str(banner.get("name", banner_id)),
-                 role="title", color=canvas.accent)
+    name = str(banner.get("name", banner_id))
+    canvas.draw.text((canvas.pad, canvas.pad - 4), name,
+                     font=canvas.font("title"), fill=canvas.text)
     right = f"카르타 {carta}"
     width = canvas.draw.textlength(right, font=canvas.font("body"))
-    canvas.label((canvas.width - canvas.pad - width, top + 6), right,
-                 color=canvas.accent)
+    canvas.draw.text((canvas.width - canvas.pad - width, canvas.pad),
+                     right, font=canvas.font("body"), fill=canvas.accent)
 
-    top += 40
-    pickup = banner.get("pickup_name") or banner.get("pickup_target_id")
-    if pickup:
-        canvas.label((canvas.pad, top), f"픽업  {pickup}")
-        top += 26
-
-    line = "  ".join(f"{name} {float(value) * 100:.2f}%"
-                     for name, value in rates.items())
-    canvas.label((canvas.pad, top), line, role="small", color=canvas.muted)
-    top += 24
-
+    # 아래쪽부터 쌓는다 — 픽업 이름 길이나 확률 개수가 달라져도 자리가
+    # 겹치지 않는다.
+    small = canvas.font("small")
+    bottom = canvas.height - 18
     if pity:
         remaining = pity.get("until_hard")
         text = f"확정까지 {remaining}회" if remaining is not None else ""
         if pity.get("guarantee_pending"):
-            text += "   다음 최고 등급은 픽업 확정"
+            text = (text + "   " if text else "") + "다음 최고 등급은 픽업 확정"
         if text:
-            canvas.label((canvas.pad, top), text, role="small", color=canvas.accent)
+            bottom -= 20
+            canvas.label((canvas.pad, bottom), text, role="small", color=canvas.accent)
+
+    bottom -= 26
+    cursor = canvas.pad
+    for tier_name, value in rates.items():
+        color = _RATE_TIER_COLORS.get(tier_name, canvas.muted)
+        cursor += canvas.pill((cursor, bottom), f"{tier_name} {float(value) * 100:.2f}%",
+                              color=theme.color("color_background"),
+                              back=kit.with_alpha(color, 235)) + 6
+
+    pickup = banner.get("pickup_name") or banner.get("pickup_target_id")
+    if pickup:
+        bottom -= 34
+        kit.pill(canvas.image, (canvas.pad, bottom), f"픽업 · {pickup}",
+                theme.font(max(9, round(theme.int_("font_size_body") * 0.9))),
+                fg=theme.color("color_background"), bg=kit.with_alpha(canvas.accent, 235))
+
     return canvas.finish("deckout_banner.png")
 
 

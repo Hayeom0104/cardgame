@@ -38,10 +38,10 @@ SOURCES = (
     ("banner", "banners", "banner_id", "banner_id", None, None),
 )
 
-#: 이 종류는 화면 쪽(카드·아군·적 패널)이 이름을 그림 위에 직접 얹으므로,
-#: 그림에마저 이름 띠를 구우면 글자가 겹친다. 나머지 종류는 이름을 따로
-#: 그리지 않는 화면에서도 쓰이므로 그림에 이름을 남겨 둔다.
-_NO_BAKED_LABEL = {"card", "character", "enemy"}
+#: 이 종류는 화면 쪽(카드·아군·적 패널·배너)이 이름을 그림 위에 직접
+#: 얹으므로, 그림에마저 이름 띠를 구우면 글자가 겹친다. 나머지 종류는
+#: 이름을 따로 그리지 않는 화면에서도 쓰이므로 그림에 이름을 남겨 둔다.
+_NO_BAKED_LABEL = {"card", "character", "enemy", "banner"}
 
 
 def rows_for(db: Database, version: int, source) -> list[dict]:
