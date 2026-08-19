@@ -266,9 +266,19 @@ def test_the_event_endpoint_opens_the_thread(tmp_path, monkeypatch):
         server.state["balance"] = Balance(server.state["db"], version)
         server.state["central"] = fake
 
-        client.post("/event", json={
+        first = client.post("/event", json={
             "type": "message", "user_id": 4242, "guild_id": 1, "channel_id": 2,
             "command": "덱아웃", "args": [], "raw_content": "!덱아웃"})
+        # 계정이 없는 첫 명령은 가입 프롬프트만 돌려준다 — 눌러야 계정이
+        # 생긴다.
+        # /event 는 컴포넌트를 액션 로우로 감싼다 — 한 단계 더 들어간다.
+        buttons = [c for row in first.json()["components"]
+                  for c in row.get("components", [row])]
+        register_id = next(c["custom_id"] for c in buttons
+                           if c["custom_id"].startswith("dko:reg:"))
+        client.post("/event", json={
+            "type": "interaction", "user_id": 4242, "guild_id": 1, "channel_id": 2,
+            "custom_id": register_id, "values": []})
         reply = client.post("/event", json={
             "type": "message", "user_id": 4242, "guild_id": 1, "channel_id": 2,
             "command": "덱아웃", "args": ["시작"], "raw_content": "!덱아웃 시작"})

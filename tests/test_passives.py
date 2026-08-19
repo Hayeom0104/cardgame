@@ -384,6 +384,10 @@ def test_the_command_reaches_the_screen(db, balance, version, user_id):
     from app.api import events as ev
     from app.api import handlers
 
+    # 튜토리얼을 마치기 전에는 `패시브` 화면 자체가 막힌다 — 이 테스트가
+    # 보려는 것은 그 게이트가 아니라 명령이 화면까지 닿는지다.
+    db.execute("UPDATE accounts SET tutorial_completed_at = ? WHERE user_id = ?",
+              (utcnow(), user_id))
     unlock(db, user_id, "pas_예리함")
     event = ev.MessageEvent(event_id="e1", user_id=user_id, guild_id=1,
                             channel_id=2, command="덱아웃", args=["패시브"],

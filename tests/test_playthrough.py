@@ -14,6 +14,7 @@ from __future__ import annotations
 import pytest
 
 from app.api import controls
+from app.api import errors
 from app.api import events as ev
 from app.api import handlers
 from app.central import surfaces
@@ -104,6 +105,16 @@ class Session:
         self.screen = surfaces.fulfil_thread_request(
             self.ctx.db, self.ctx.central, self.screen,
             parent_channel_id=PARENT_CHANNEL)
+
+        # 계정이 없는 첫 명령은 가입 프롬프트만 돌아온다 — 사람이라면 눌러야
+        # 하는 화면이지, 원래 치려던 명령이 통과된 게 아니다. 가입을 눌러
+        # 주고, 원래 명령을 다시 친다.
+        registration = next((component for component in self.components()
+                             if component.get("custom_id", "").startswith(
+                                 handlers.REGISTER_PREFIX)), None)
+        if registration is not None:
+            self.press_first()
+            return self.command(*args)
         return self.screen
 
     # -- 컴포넌트 ----------------------------------------------------
@@ -441,3 +452,53 @@ def test_a_main_campaign_run_never_gets_stuck(ctx, db, user_id):
                      (run_id,))["n"]
     assert battles >= 1, "전투 한 번 없이 본편 런이 끝났습니다"
     assert lc.active_run_for(db, user_id) is None
+
+
+# =====================================================================
+# 가입 게이트, 강제 튜토리얼 — 오너 지시로 §4.6.5의 "첫 명령에서 조용히
+# 계정을 만든다"를 명시적 가입 단계로 바꾸고, 튜토리얼을 마치기 전에는
+# 다른 진행(뽑기·상점 등)을 막는다.
+#
+# 아래 두 테스트는 공용 `user_id` 픽스처를 쓰지 않는다 — 그 픽스처는
+# `create_account`를 직접 불러 계정을 미리 만들어 두므로, 가입 게이트
+# 자체를 확인하려면 계정이 아예 없는 사용자로 시작해야 한다.
+# =====================================================================
+def test_an_unknown_user_is_prompted_to_register_before_anything_else(ctx, db):
+    fresh_id = 700001
+    event = ev.MessageEvent(event_id="e1", user_id=fresh_id, guild_id=1,
+                            channel_id=2, command="덱아웃", args=[],
+                            raw_content="!덱아웃")
+    screen = handlers.handle_message(ctx, event)
+
+    assert db.one("SELECT user_id FROM accounts WHERE user_id = ?",
+                  (fresh_id,)) is None, "가입 버튼을 누르기 전인데 계정이 생겼습니다"
+    components = screen.get("components") or []
+    register = next((c for c in components if c.get("custom_id", "").startswith(
+        handlers.REGISTER_PREFIX)), None)
+    assert register is not None, "가입 버튼이 없습니다"
+
+    interaction = ev.InteractionEvent(event_id="e2", user_id=fresh_id, guild_id=1,
+                                      channel_id=2, custom_id=register["custom_id"],
+                                      values=[])
+    handlers.handle_interaction(ctx, interaction)
+    assert db.one("SELECT user_id FROM accounts WHERE user_id = ?",
+                  (fresh_id,)) is not None, "가입 버튼을 눌렀는데 계정이 안 생겼습니다"
+
+
+def test_a_freshly_registered_account_cannot_skip_the_tutorial(ctx, db):
+    fresh_id = 700002
+    session = Session(ctx, fresh_id)
+    session.command()          # 가입 프롬프트 → 자동으로 눌러 준다 → 허브
+
+    for blocked in ("뽑기", "상점", "캐릭터", "장비", "연구", "업적", "덱", "패시브"):
+        screen = session.command(blocked)
+        assert screen.get("action") == "reply_ephemeral", \
+            f"튜토리얼 전인데 '{blocked}' 화면이 열렸습니다"
+        assert screen.get("content") == errors.TUTORIAL_NOT_CLEARED
+
+    # 허브와 시작은 튜토리얼을 마치기 전에도 열려야 한다 — 그래야 튜토리얼
+    # 자체를 진행할 수 있다.
+    hub = session.command()
+    assert hub.get("content") != errors.TUTORIAL_NOT_CLEARED
+    start = session.command("시작")
+    assert start.get("content") != errors.TUTORIAL_NOT_CLEARED

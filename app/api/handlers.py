@@ -69,6 +69,21 @@ def _reply(content: str, components: list | None = None) -> dict:
     return {"action": "reply", "content": content, "components": components or []}
 
 
+def _registration_prompt() -> dict:
+    return _reply(
+        "**덱아웃**에 오신 것을 환영합니다. 시작하려면 먼저 가입해 주세요.",
+        [{"type": "button", "custom_id": f"{REGISTER_PREFIX}go", "label": "가입하기"}])
+
+
+def handle_register(ctx: HandlerContext, user_id: int) -> dict:
+    """가입 버튼 → 계정을 만들고 허브로. 이미 가입돼 있으면 그대로 허브만."""
+    create_account(ctx.db, user_id, ctx.content_version_id)
+    screen = hub_screen(ctx, user_id)
+    return {**screen, "action": "edit",
+           "content": f"가입되었습니다. 먼저 튜토리얼을 진행해 주세요 "
+                      f"(`!덱아웃 시작`).\n\n{screen.get('content', '')}"}
+
+
 #: 중앙봇의 사용자 응답에서 코인 잔액을 찾을 때 볼 키들. 연동 가이드의 응답
 #: 스키마가 이 저장소에 없어서(§1.1 표에 경로만 있다) 흔한 이름을 순서대로
 #: 본다. 가이드를 확인하면 고칠 곳은 이 상수 하나다.
@@ -114,15 +129,37 @@ def _coin_line(ctx: HandlerContext, user_id: int) -> str:
 # =====================================================================
 # Message commands
 # =====================================================================
+#: 계정이 없는 사용자에게 내미는 가입 버튼. 런 밖 화면들과 같은 이유로
+#: (§19.2의 custom_id는 run_id를 요구하는데 가입 전에는 run_id 자체가
+#: 없다) 전용 접두사를 쓴다.
+REGISTER_PREFIX = "dko:reg:"
+
+#: 튜토리얼을 마치기 전에도 눌러야 하는 것들 — 허브 자체와, 튜토리얼을
+#: 시작·재시도·포기하는 길. 나머지(뽑기·상점·캐릭터·장비·연구·업적·덱·
+#: 패시브)는 튜토리얼을 마친 뒤에만 연다.
+_ALLOWED_BEFORE_TUTORIAL = frozenset({"", "시작", "포기"})
+
+
 def handle_message(ctx: HandlerContext, event: ev.MessageEvent) -> dict:
     if ctx.content_version_id is None:
         return _ephemeral("콘텐츠가 아직 준비되지 않았습니다.")
 
     subcommand = (event.args[0] if event.args else CMD_HUB)
 
-    # §4.6.5 — an unknown user issuing !덱아웃 is created and routed into the
-    # tutorial world. Idempotent against a retried first command.
-    create_account(ctx.db, event.user_id, ctx.content_version_id)
+    # 계정이 없으면 어떤 명령을 쳤든 가입부터 시킨다 — §4.6.5는 첫 명령에서
+    # 계정을 조용히 만들었지만, 그러면 "가입"이라는 순간이 플레이어에게
+    # 전혀 보이지 않는다. 오너 지시로 명시적인 가입 단계를 둔다.
+    account = ctx.db.one("SELECT * FROM accounts WHERE user_id = ?", (event.user_id,))
+    if account is None:
+        return _registration_prompt()
+
+    # 튜토리얼을 마치기 전에는 그 밖의 진행(뽑기·상점 등)을 열지 않는다 —
+    # "강제 튜토리얼". 마친 계정이나 이미 런이 진행 중인 계정은 그대로
+    # 지나간다(런 중 상태 검사는 각 화면·게이트가 따로 한다).
+    if (account["tutorial_completed_at"] is None
+            and subcommand not in _ALLOWED_BEFORE_TUTORIAL
+            and lc.active_run_for(ctx.db, event.user_id) is None):
+        return _ephemeral(errors.TUTORIAL_NOT_CLEARED)
 
     if subcommand == CMD_HUB:
         return hub_screen(ctx, event.user_id)
@@ -694,6 +731,8 @@ def achievements_screen(ctx: HandlerContext, user_id: int) -> dict:
 def handle_interaction(ctx: HandlerContext, event: ev.InteractionEvent) -> dict:
     # 준비·뽑기 화면은 런 밖에서 동작하므로 §19.2의 custom_id 형식(run_id를
     # 요구한다)을 쓸 수 없다. 각자의 접두사로 먼저 갈라낸다.
+    if event.custom_id.startswith(REGISTER_PREFIX):
+        return handle_register(ctx, event.user_id)
     if event.custom_id.startswith(screens.PREP_PREFIX):
         return screens.handle_prep(ctx.db, ctx.balance, event.user_id,
                                    event.custom_id, event.values,

@@ -125,7 +125,10 @@ def test_healthz_reports_status(client):
     assert response.json()["status"] == "ok"
 
 
-def test_an_unknown_user_is_created_by_the_base_command(client):
+def test_an_unknown_user_is_prompted_to_register_before_an_account_exists(client):
+    """계정이 없는 사용자의 첫 명령은 가입 버튼만 돌려준다 — 계정은 그
+    버튼을 눌러야 비로소 생긴다 (오너 지시로 §4.6.5의 조용한 자동 생성을
+    명시적 가입 단계로 바꿨다)."""
     from app.api import server
 
     response = client.post("/event", json={
@@ -133,18 +136,37 @@ def test_an_unknown_user_is_created_by_the_base_command(client):
         "command": "덱아웃", "args": [], "raw_content": "!덱아웃",
     })
     assert response.status_code == 200
-    assert response.json()["action"] == "reply"
+    body = response.json()
+    assert body["action"] == "reply"
+    # /event 는 컴포넌트를 액션 로우로 감싼다 — 한 단계 더 들어간다.
+    buttons = [c for row in body["components"] for c in row.get("components", [row])]
+    register_id = next(c["custom_id"] for c in buttons
+                       if c["custom_id"].startswith("dko:reg:"))
+    assert server.state["db"].one(
+        "SELECT user_id FROM accounts WHERE user_id = 777") is None
+
+    interaction = client.post("/event", json={
+        "type": "interaction", "user_id": 777, "guild_id": 1, "channel_id": 2,
+        "custom_id": register_id, "values": [],
+    })
+    assert interaction.status_code == 200
     account = server.state["db"].one("SELECT * FROM accounts WHERE user_id = 777")
     assert account is not None
     # §4.6.3 — exactly one 10-pull's worth of 카르타.
     assert account["carta"] == 1600
 
 
-def test_the_first_command_is_idempotent(client):
+def test_registering_twice_does_not_duplicate_the_account(client):
+    """가입 버튼을 두 번 눌러도(재전송 등) 계정은 하나만 남는다 — 계정
+    생성 자체가 `create_account`의 UNIQUE(user_id) 위에서 멱등이다."""
     from app.api import server
 
-    payload = {"type": "message", "user_id": 888, "command": "덱아웃", "args": [],
-               "raw_content": "!덱아웃"}
+    client.post("/event", json={
+        "type": "message", "user_id": 888, "guild_id": 1, "channel_id": 2,
+        "command": "덱아웃", "args": [], "raw_content": "!덱아웃",
+    })
+    payload = {"type": "interaction", "user_id": 888, "guild_id": 1, "channel_id": 2,
+               "custom_id": "dko:reg:go", "values": []}
     client.post("/event", json=payload)
     client.post("/event", json=payload)
     count = server.state["db"].one(
