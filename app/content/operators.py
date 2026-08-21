@@ -41,12 +41,15 @@ CTX_SETTLEMENT = "settlement"
 #: §5.8 카드 업그레이드 오버레이. 전투 카드와 같은 제약을 받되(§10.4.1a), 카드
 #: 정의 자체가 아니라 그 위에 덧씌워지는 목록이다.
 CTX_CARD_UPGRADE = "card_upgrade"
+#: §2.13 반응형 능력의 effect_operators. 카드/패시브와 같은 제약(PURE ∩
+#: BATTLE_SAFE)을 받는다 — 피격 즉시 전투 턴 안에서 실행되기 때문이다.
+CTX_REACTIVE_ABILITY = "reactive_ability"
 
 #: Contexts that resolve inside a battle turn's effect list. §10.4.1a restricts
 #: these to PURE_SYNCHRONOUS ∩ BATTLE_SAFE.
 IN_BATTLE_CONTEXTS = frozenset(
     {CTX_BATTLE_CARD, CTX_PASSIVE, CTX_ENEMY_ACTION, CTX_CURSED_CARD,
-     CTX_TRANSITION_EFFECT, CTX_CARD_UPGRADE}
+     CTX_TRANSITION_EFFECT, CTX_CARD_UPGRADE, CTX_REACTIVE_ABILITY}
 )
 
 #: Contexts where PROGRESSION operators are legal.
@@ -133,16 +136,27 @@ def _register(spec: OperatorSpec) -> None:
     OPERATORS[spec.name] = spec
 
 
+#: §10.4.3 [NEW, this session] — optional on both damage operators. Default
+#: crit_chance = 0. On success the damage computation uses crit_multiplier in
+#: place of (not stacked with) multiplier/amount's normal scaling.
+#: Card-authored per-card, not a character stat — no §15.1 stat pipeline entry.
+_CRIT_PARAMS = (
+    ParamSpec("crit_chance", (int, float), required=False, default=0),
+    ParamSpec("crit_multiplier", (int, float), required=False),
+)
+
 _register(OperatorSpec("deal_damage", BATTLE_SAFE, (
     ParamSpec("multiplier", (int, float)),
     ParamSpec("ignores_block", (bool,), required=False, default=False),
     ParamSpec("ignores_defense", (bool,), required=False, default=False),
+    *_CRIT_PARAMS,
 ), _pure))
 
 _register(OperatorSpec("deal_flat_damage", BATTLE_SAFE, (
     ParamSpec("amount", (int,)),
     ParamSpec("ignores_block", (bool,), required=False, default=False),
     ParamSpec("ignores_defense", (bool,), required=False, default=False),
+    *_CRIT_PARAMS,
 ), _pure))
 
 _register(OperatorSpec("grant_block", BATTLE_SAFE, (
@@ -293,6 +307,7 @@ CONDITION_OPERATORS = frozenset({
     "own_side_count_below", "opposing_side_count_below",
     "self_has_status", "target_has_status", "round_number_gte",
     "phase_is", "owner_turn_index_mod",
+    "random_chance",   # [NEW, this session] — journaled via §16.4, not a bare RNG call
 })
 
 
@@ -329,6 +344,16 @@ def validate_effect_list(effects: list[dict[str, Any]], context: str) -> None:
         if spec is None:
             raise ValidationError(f"effect[{index}]: unknown operator {operator!r}")
         spec.validate_params(params)
+
+        # §10.4.3 — crit_chance/crit_multiplier bounds. Only deal_damage and
+        # deal_flat_damage declare these params, so this only ever fires for
+        # them (an unknown key on any other operator already failed above).
+        crit_chance = params.get("crit_chance")
+        if crit_chance is not None and not 0.0 <= float(crit_chance) <= 1.0:
+            raise ValidationError(f"effect[{index}]: crit_chance must be 0..1")
+        crit_multiplier = params.get("crit_multiplier")
+        if crit_multiplier is not None and float(crit_multiplier) <= 0:
+            raise ValidationError(f"effect[{index}]: crit_multiplier must be > 0")
 
         category = spec.categorize(params)
 

@@ -177,3 +177,27 @@ def key_curse_insert(party_slot: int, seq) -> str:
 
 def key_settle_keepset() -> str:
     return "settle:keepset"
+
+
+def key_counter(battle_id: int, round_no: int, seq: int) -> str:
+    """§2.13 reactive-ability condition rolls (e.g. `random_chance`)."""
+    return f"battle:{battle_id}:r{round_no}:counter:{seq}"
+
+
+def key_crit(battle_id: int, round_no: int, seq: int) -> str:
+    """§10.4.3 `crit_chance` rolls on `deal_damage` / `deal_flat_damage`."""
+    return f"battle:{battle_id}:r{round_no}:crit:{seq}"
+
+
+def next_journaled_seq(db: Database, prefix: str) -> int:
+    """How many journal rows already exist under `prefix`, plus one.
+
+    A lazy way to allocate a fresh, unique numeric suffix for an op_key only
+    at the moment a roll is actually needed, without a dedicated counter
+    column anywhere. Safe because turn processing within one battle is
+    strictly sequential — §16.7's CAS is what guarantees that — so nothing
+    else can be allocating under the same prefix concurrently.
+    """
+    row = db.one("SELECT COUNT(*) AS n FROM rng_operations WHERE op_key LIKE ?",
+                (f"{prefix}%",))
+    return int(row["n"]) + 1

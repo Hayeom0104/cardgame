@@ -177,12 +177,21 @@ def cooldown_turns_for(registry: ActionRegistry, enemy_def_id: str,
 # §10.4.5 condition operators
 # =====================================================================
 def evaluate_condition(db: Database, condition: dict | None, *, actor: Unit,
-                       battle_id: int, round_no: int) -> bool:
+                       battle_id: int, round_no: int,
+                       rng=None, rng_key: str | None = None) -> bool:
     if condition is None:
         return False          # unconditional rules go to the weighted pool
     op = condition.get("op", "always")
     value = condition.get("value")
 
+    if op == "random_chance":
+        # [NEW, this session] — journaled via §16.4, not a bare RNG call.
+        # Only reachable when the caller supplies a journal draw: enemy
+        # action-rule conditions don't use this op today, §2.13 reactive
+        # abilities do (`app.engine.reactive`).
+        if rng is None or rng_key is None:
+            raise ValueError("random_chance requires a journaled rng and rng_key")
+        return rng.chance(rng_key, float(value))
     if op == "always":
         return True
     if op == "self_hp_below":

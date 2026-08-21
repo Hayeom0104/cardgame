@@ -44,6 +44,7 @@ CONTENT_TABLES: dict[str, tuple[str, ...]] = {
     "boss_phases": ("boss_phase_id",),
     "transition_effects": ("transition_effect_id",),
     "cursed_cards": ("cursed_card_id",),
+    "reactive_abilities": ("reactive_ability_id",),
     "passive_cards": ("passive_card_id",),
     "events": ("event_id",),
     "reward_tables": ("reward_table_id",),

@@ -172,8 +172,11 @@ def _seed_cards(db: Database, version: int) -> None:
         # 여기부터는 §5.6의 여섯 등급이 고르게 차도록, 그리고 일곱 원소가
         # 전부 한 장 이상은 갖도록 채운 것들이다. 보상 칸과 상점이 등급별로
         # 뽑아 가므로 어느 등급이 비면 그 칸이 늘 같은 카드를 내놓는다.
+        # §10.4.3 [NEW, this session] — crit_chance/crit_multiplier demo:
+        # 풍 (wind/speed) is the thematic fit for a precision strike.
         ("card_풍_질풍", "질풍베기", "풍", 1, "공격", "enemy", 2,
-         [{"operator": "deal_damage", "params": {"multiplier": 1.3}}]),
+         [{"operator": "deal_damage",
+           "params": {"multiplier": 1.3, "crit_chance": 0.15, "crit_multiplier": 2.0}}]),
         ("card_풍_가속", "순풍", "풍", 1, "버프디버프", "ally", 3,
          [{"operator": "modify_stat",
            "params": {"stat": "spd", "delta": 12, "duration_rounds": 2}}]),
@@ -357,14 +360,45 @@ def _seed_transition_effects(db: Database, version: int) -> None:
 
 
 # =====================================================================
+# §2.13 seed reactive abilities (2) — unit-agnostic: one on a character,
+# one on an enemy, demonstrating both owner types the mechanism supports.
+# =====================================================================
+def _seed_reactive_abilities(db: Database, version: int) -> None:
+    from app.engine import reactive as ra
+
+    rows = [
+        ("ra_테라돈_돌벽반격", "돌벽의 반격", ra.OWNER_CHARACTER, "char_terradon",
+         [{"op": "self_hp_below", "value": 0.5}],
+         [{"operator": "deal_flat_damage",
+           "params": {"amount": 6, "ignores_block": False, "ignores_defense": False}}]),
+        ("ra_가시덩굴_가시반격", "가시 반격", ra.OWNER_ENEMY, "enemy_w2_가시덩굴",
+         [],
+         [{"operator": "deal_flat_damage",
+           "params": {"amount": 5, "ignores_block": True, "ignores_defense": False}}]),
+    ]
+    for index, (ability_id, name, owner_type, owner_id, conditions, effects) in enumerate(rows):
+        db.execute(
+            "INSERT OR REPLACE INTO reactive_abilities (content_version_id, "
+            "reactive_ability_id, name, owner_content_type, owner_id, "
+            "trigger_event, sort_order, condition_operators_json, effects_json, "
+            "is_retired) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+            (version, ability_id, name, owner_type, owner_id,
+             ra.TRIGGER_ON_DAMAGE_TAKEN, index, _json(conditions), _json(effects)),
+        )
+
+
+# =====================================================================
 # Enemies, actions, encounters, worlds
 # =====================================================================
 def _seed_enemy_actions(db: Database, version: int) -> None:
     rows = [
         ("act_기본공격", "기본 공격", "공격", "enemy", 1,
          [{"operator": "deal_damage", "params": {"multiplier": 1.0}}]),
+        # §10.4.3 [NEW, this session] — crit demo on the enemy side too;
+        # the mechanism is not card-exclusive even though it's card-authored.
         ("act_강타", "강타", "공격", "enemy", 0,
-         [{"operator": "deal_damage", "params": {"multiplier": 1.6}}]),
+         [{"operator": "deal_damage",
+           "params": {"multiplier": 1.6, "crit_chance": 0.1, "crit_multiplier": 1.8}}]),
         ("act_화상부여", "불꽃 낙인", "버프디버프", "enemy", 0,
          [{"operator": "apply_status", "params": {"status_id": st.BURN, "stacks": 2}}]),
         ("act_boss_광역", "심연의 파도", "공격", "all", 0,
@@ -1028,6 +1062,7 @@ def seed_all(db: Database, *, publish_version: bool = True) -> int:
     _seed_transition_effects(db, version)
     _seed_enemy_actions(db, version)
     _seed_enemies(db, version)
+    _seed_reactive_abilities(db, version)
     _seed_encounters(db, version)
     _seed_worlds(db, version)
     _seed_reward_tables(db, version)

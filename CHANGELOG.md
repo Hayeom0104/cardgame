@@ -13,6 +13,75 @@
 
 ## 2026-08-21
 
+### 11:20 KST — §2.13 반응형 능력(반격/카운터) + §10.4.3 크리티컬 구현
+
+오너 확인: §4.6.5는 기존 가입 버튼 방식을 그대로 유지(문서 대신 코드가
+기준), §2.13(반응형 능력)과 크리티컬 시스템 둘 다 구현하기로 결정.
+
+문서 v7이 이번 세션에 새로 추가한 §2.13을 처음부터 끝까지 구현했다 —
+유닛에 종속되지 않는(unit-agnostic) 콘텐츠 타입으로, 캐릭터든 적이든
+`on_damage_taken` 트리거를 가진 반응형 능력을 가질 수 있다.
+
+- **스키마**: `reactive_abilities` 테이블 추가 (`schema_version` 5 → 6).
+  `content_version_id, reactive_ability_id` 두 부분 키(§10.6)를 따르고,
+  §10.6 발행 복사·지문·대시보드 CRUD가 자동으로 붙도록
+  `versioning.CONTENT_TABLES`에 등록했다 — 별도 대시보드 라우트를 새로
+  만들 필요가 없었다.
+- **엔진 훅**: `effects._land()`(모든 `deal_damage`/`deal_flat_damage`가
+  최종 피해를 반영하는 유일한 지점, §2.11 P8/E3)에서 곧바로
+  `engine.reactive.fire_on_damage_taken()`을 호출한다. 사망 시 무효
+  처리, 조건 평가(§10.4.5, 새 `random_chance` 연산자 포함), 효과 목록
+  실행, 반격 자신의 사망 체크까지 문서 순서 그대로 따른다.
+- **무한 루프 방지**: 서로를 반격하는 콘텐츠 조합이 턴을 붙들지 않도록
+  `reactive_ability_max_depth`(기본 4, `config/01_전투.toml`, §15
+  하드코딩 금지 원칙에 따라 설정값)로 재귀 깊이를 제한했다. 문서에
+  명시되지 않은 순수 엔진 안전장치라는 점을 주석에 남겼다.
+- **RNG 저널링**: `random_chance` 조건은 §16.4 저널을 통해서만 굴린다 —
+  같은 (전투, 라운드) 안에서 서로 다른 시점에 굴리는 롤이 같은 op_key로
+  충돌하지 않도록, 실제로 굴림이 필요한 순간에만 기존 저널 행 수를 세어
+  다음 순번을 매기는 방식을 썼다(전투 한 판 내 처리는 항상 순차적이라
+  안전하다 — §16.7 CAS가 보장하는 전제).
+- **검증(§10.5)**: 소유자(owner_content_type/owner_id)가 실제로
+  존재하는지, `trigger_event`가 지원되는 값인지, 조건 연산자가
+  §10.4.5 닫힌 집합에 속하는지, 효과가 PURE_SYNCHRONOUS ∩ BATTLE_SAFE인지
+  (§10.4.1a — 카드/패시브와 같은 제약, 전투 턴 안에서 즉시 실행되므로),
+  그리고 상태 효과의 §2.5.1a 풀 소속(캐릭터 소유는 player 풀 → enemy_only
+  금지, 적 소유는 enemy 풀 → player_only 금지)까지 검사한다.
+- **시드 콘텐츠**: 두 예시를 넣어 두 소유 타입 모두 실제로 동작함을
+  보였다 — `char_terradon`의 "돌벽의 반격"(HP 50% 이하일 때, 조건부)과
+  `enemy_w2_가시덩굴`의 "가시 반격"(무조건).
+- **테스트**: `tests/test_reactive_abilities.py` 신설, 10개 —
+  양쪽 소유 타입의 발동, 조건 게이팅, 사망 시 무효, 재귀 깊이 상한(정확히
+  `depth_cap + 1`개의 피해 이벤트로 멈추는지까지), `random_chance`의
+  저널링·재현, 그리고 §10.5 검증 실패 케이스 세 가지.
+
+**§10.4.3 크리티컬(`crit_chance`/`crit_multiplier`)** 도 같은 작업에서
+같이 구현했다 — `deal_damage`/`deal_flat_damage` 둘 다에 붙는 선택 파라미터.
+
+- **연산자 스키마**: 두 연산자 모두 `crit_chance`(기본 0)·`crit_multiplier`
+  (선택)를 받는다. §10.5가 `crit_chance`는 0..1, `crit_multiplier`는
+  0보다 큰 값인지 검사한다.
+- **판정**: 해상 시점에 저널링된(§16.4) `random_chance(crit_chance)`를
+  굴린다 — `crit_chance`나 `crit_multiplier` 중 하나라도 없으면 굴리지
+  않고 저널 행도 남기지 않는다(대부분의 콘텐츠는 크리티컬을 안 쓰므로).
+  op_key는 반응형 능력의 `counter:` 와 같은 지연 순번 할당 방식을
+  `crit:` 네임스페이스로 공유한다(`rng.next_journaled_seq` 로 공통화).
+- **적용**: 성공하면 `crit_multiplier`가 원래의 `multiplier`/`amount`
+  스케일링을 **대체**한다(곱해서 누적하지 않음) — `deal_damage`는
+  `multiplier` 자리에 `crit_multiplier`를 그대로 쓰고, `deal_flat_damage`는
+  정수 `amount`에 스케일 개념이 없어 `amount × crit_multiplier`로 해석했다
+  (문서 문구가 flat 쪽에는 다소 모호해 이 해석을 코드 주석에 남겼다).
+  캐릭터 스탯이 아니라 카드/행동 단위로만 존재하며, §15.1 스탯 파이프라인에
+  새 항목을 추가하지 않는다.
+- **시드 콘텐츠**: `card_풍_질풍`(플레이어 카드)과 `act_강타`(적 행동)
+  양쪽에 걸어 두 경로 모두 실제로 동작함을 보였다.
+- **테스트**: `tests/test_crit.py` 신설, 8개 — 강제 크리티컬이 대체이지
+  누적이 아님을 배율 비교로 증명, flat 피해 스케일링, 저널링 여부,
+  `crit_chance=0`일 때 롤 자체가 없는지, 그리고 §10.5 검증 3가지.
+
+검증: `python -m app.cli.bootstrap`, `python -m app.cli.check_content`,
+`pytest -q` (전체 스위트) 모두 통과.
+
 ### 09:40 KST — 설계 문서 v7 반영: 시작 캐릭터 이름·런 화폐 표시 이름 확정
 
 오너가 업로드한 Deckout Design Doc v7을 처음부터 끝까지 읽고 현재 구현과

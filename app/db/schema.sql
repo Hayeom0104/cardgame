@@ -708,6 +708,25 @@ CREATE TABLE IF NOT EXISTS transition_effects (
   PRIMARY KEY (content_version_id, transition_effect_id)
 );
 
+-- §2.13 반응형 능력 — unit-agnostic: character 또는 enemy 어느 쪽이든 가질 수
+-- 있다. `trigger`는 지금은 'on_damage_taken' 하나뿐이다.
+CREATE TABLE IF NOT EXISTS reactive_abilities (
+  content_version_id   INTEGER NOT NULL,
+  reactive_ability_id   TEXT    NOT NULL,
+  name                  TEXT    NOT NULL,
+  owner_content_type    TEXT    NOT NULL,   -- character | enemy
+  owner_id              TEXT    NOT NULL,
+  trigger_event         TEXT    NOT NULL DEFAULT 'on_damage_taken',
+  sort_order            INTEGER NOT NULL DEFAULT 0,   -- authored order (§2.13 step 3)
+  condition_operators_json TEXT NOT NULL DEFAULT '[]',   -- §10.4.5 list, AND'ed
+  effects_json          TEXT    NOT NULL,   -- §10.4 operator list, PURE ∩ BATTLE_SAFE only
+  is_retired            INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (content_version_id, reactive_ability_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reactive_abilities_owner
+  ON reactive_abilities(content_version_id, owner_content_type, owner_id);
+
 CREATE TABLE IF NOT EXISTS cursed_cards (
   content_version_id INTEGER NOT NULL,
   cursed_card_id     TEXT    NOT NULL,

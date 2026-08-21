@@ -46,6 +46,11 @@ class EffectContext:
     card_multiplier_source: str = "card"
     #: counters for op_key derivation within one effect list
     sequence: int = 0
+    #: §2.13 — how many reactive-ability effect lists deep this context is.
+    #: 0 for a card/action's own list; incremented for the nested list a
+    #: firing reactive ability executes, so a mutual-counter loop authored by
+    #: content cannot hang the turn.
+    reactive_depth: int = 0
 
 
 @dataclass
@@ -118,6 +123,23 @@ def _apply_pure(operator: str, params: dict, ctx: EffectContext,
     handler(params, ctx, outcome)
 
 
+def _roll_crit(params: dict, ctx: EffectContext) -> bool:
+    """§10.4.3 — journaled `random_chance(crit_chance)` at resolution.
+
+    Only rolls when both `crit_chance` and `crit_multiplier` are authored;
+    default `crit_chance = 0` means no roll and no journal row at all for the
+    overwhelming majority of content that never sets these.
+    """
+    crit_chance = float(params.get("crit_chance") or 0)
+    if crit_chance <= 0 or params.get("crit_multiplier") is None or ctx.battle_id is None:
+        return False
+    from app.engine.rng import key_crit, next_journaled_seq
+
+    prefix = f"battle:{ctx.battle_id}:r{ctx.round_no}:crit:"
+    op_key = key_crit(ctx.battle_id, ctx.round_no, next_journaled_seq(ctx.db, prefix))
+    return ctx.rng.chance(op_key, crit_chance)
+
+
 def _op_deal_damage(params: dict, ctx: EffectContext, outcome: EffectOutcome) -> None:
     if ctx.actor is None:
         return
@@ -132,10 +154,13 @@ def _op_deal_damage(params: dict, ctx: EffectContext, outcome: EffectOutcome) ->
             continue
 
         pierced = st.has_status(ctx.db, target.battle_unit_id, st.SHIELD_PIERCE)
+        crit = _roll_crit(params, ctx)
+        # crit_multiplier REPLACES multiplier — not stacked with it.
+        multiplier = float(params["crit_multiplier"]) if crit else float(params["multiplier"])
         result = stats.compute_damage(
             ctx.balance,
             attacker_atk=attacker_atk,
-            card_multiplier=float(params["multiplier"]),
+            card_multiplier=multiplier,
             target_def=un.effective_def(ctx.db, target),
             attacker_element=ctx.actor.element,
             target_element=target.element,
@@ -146,6 +171,8 @@ def _op_deal_damage(params: dict, ctx: EffectContext, outcome: EffectOutcome) ->
             ignores_block=bool(params.get("ignores_block")) or pierced,
             ignores_defense=bool(params.get("ignores_defense")),
         )
+        if crit:
+            outcome.log.append(f"unit {target.battle_unit_id}: 치명타!")
         _land(ctx, outcome, target, result)
 
 
@@ -157,10 +184,20 @@ def _op_deal_flat_damage(params: dict, ctx: EffectContext,
         if te.is_invulnerable(ctx.db, target.battle_unit_id, ctx.round_no):
             continue
         pierced = st.has_status(ctx.db, target.battle_unit_id, st.SHIELD_PIERCE)
+        crit = _roll_crit(params, ctx)
+        amount = int(params["amount"])
+        if crit:
+            # A flat amount has no `multiplier` of its own to replace, so
+            # crit_multiplier scales it directly — the only mechanical
+            # reading that keeps "crit_multiplier replaces the operator's own
+            # scaling" meaningful when that scaling is just a bare integer.
+            amount = int(round(amount * float(params["crit_multiplier"])))
         result = stats.compute_flat_damage(
-            int(params["amount"]), target.block,
+            amount, target.block,
             ignores_block=bool(params.get("ignores_block")) or pierced,
         )
+        if crit:
+            outcome.log.append(f"unit {target.battle_unit_id}: 치명타!")
         _land(ctx, outcome, target, result)
 
 
@@ -179,6 +216,13 @@ def _land(ctx: EffectContext, outcome: EffectOutcome, target: Unit,
     })
     target.hp_current = hp
     target.block = max(0, target.block - result.block_consumed)
+
+    # §2.13 — immediately after final damage lands, before the next operator
+    # in the acting unit's own list resolves (§2.11 P8/E3).
+    if ctx.actor is not None:
+        from app.engine import reactive as ra
+
+        ra.fire_on_damage_taken(ctx, outcome, owner=target, source=ctx.actor)
 
 
 def _op_grant_block(params: dict, ctx: EffectContext, outcome: EffectOutcome) -> None:

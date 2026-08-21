@@ -30,6 +30,7 @@ def validate_version(db: Database, version_id: int) -> None:
     _validate_threat_grid(db, version_id)
     _validate_cards(db, version_id)
     _validate_cursed_cards(db, version_id)
+    _validate_reactive_abilities(db, version_id)
     _validate_enemy_actions(db, version_id)
     _validate_enemies(db, version_id)
     _validate_transition_effects(db, version_id)
@@ -371,6 +372,76 @@ def _validate_cursed_cards(db: Database, version_id: int) -> None:
         # 저주받은 카드는 플레이어에게 가해지는 콘텐츠이므로 §2.5.1a의 적 풀에
         # 속한다: player_only 상태는 여기 나타날 수 없다.
         _reject_scoped_statuses(effects, scopes, st.PLAYER_ONLY, label)
+
+
+def _validate_reactive_abilities(db: Database, version_id: int) -> None:
+    """§2.13 — condition/effect operators, owner resolution, and status scope.
+
+    A reactive ability's `effects` always target the unit that dealt the
+    damage (§2.13 step 3b — no selector), so a character-owned ability is
+    player-pool content even though its target is usually an enemy, and an
+    enemy-owned ability is enemy-pool content even though its target is
+    usually a player — same §2.5.1a classification `_validate_passives` and
+    `_validate_enemy_actions` already use, keyed by *who authored it* rather
+    than by the mechanical target.
+    """
+    from app.engine import reactive as ra
+
+    scopes = _status_scopes(db, version_id)
+    characters = {row["character_id"] for row in db.query(
+        "SELECT character_id FROM characters WHERE content_version_id = ?",
+        (version_id,))}
+    enemies = {row["enemy_id"] for row in db.query(
+        "SELECT enemy_id FROM enemies WHERE content_version_id = ?",
+        (version_id,))}
+
+    for row in db.query("SELECT * FROM reactive_abilities WHERE content_version_id = ?",
+                        (version_id,)):
+        label = f"reactive ability {row['reactive_ability_id']!r}"
+        owner_type = row["owner_content_type"]
+        if owner_type not in ra.OWNER_CONTENT_TYPES:
+            raise ValidationError(
+                f"{label}: owner_content_type {owner_type!r} 은(는) "
+                f"{sorted(ra.OWNER_CONTENT_TYPES)} 중 하나여야 합니다")
+        owner_pool = characters if owner_type == ra.OWNER_CHARACTER else enemies
+        if row["owner_id"] not in owner_pool:
+            raise ValidationError(
+                f"{label}: owner {row['owner_id']!r} ({owner_type}) does not resolve")
+        if row["trigger_event"] not in ra.TRIGGERS:
+            raise ValidationError(
+                f"{label}: trigger_event {row['trigger_event']!r} 은(는) "
+                f"{sorted(ra.TRIGGERS)} 중 하나여야 합니다 (§2.13)")
+
+        try:
+            conditions = json.loads(row["condition_operators_json"])
+        except json.JSONDecodeError as error:
+            raise ValidationError(
+                f"{label}: condition_operators_json 이 JSON 이 아닙니다") from error
+        if not isinstance(conditions, list):
+            raise ValidationError(f"{label}: condition_operators_json 은 배열이어야 합니다")
+        for index, condition in enumerate(conditions):
+            op = condition.get("op") if isinstance(condition, dict) else None
+            if op not in ops.CONDITION_OPERATORS:
+                raise ValidationError(
+                    f"{label}: condition[{index}] operator {op!r} is not in the "
+                    "closed set (§10.4.5)")
+            if op == "random_chance":
+                value = condition.get("value")
+                if not isinstance(value, (int, float)) or not 0.0 <= float(value) <= 1.0:
+                    raise ValidationError(
+                        f"{label}: condition[{index}] random_chance value must be "
+                        "0..1")
+
+        effects = _effects(row["effects_json"])
+        if not effects:
+            raise ValidationError(f"{label}: 효과가 비어 있습니다")
+        try:
+            ops.validate_effect_list(effects, ops.CTX_REACTIVE_ABILITY)
+        except ValidationError as error:
+            raise ValidationError(f"{label}: {error}") from error
+
+        forbidden = st.ENEMY_ONLY if owner_type == ra.OWNER_CHARACTER else st.PLAYER_ONLY
+        _reject_scoped_statuses(effects, scopes, forbidden, label)
 
 
 def _validate_enemy_actions(db: Database, version_id: int) -> None:
