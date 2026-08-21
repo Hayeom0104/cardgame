@@ -930,7 +930,7 @@ def _curve(start: tuple[int, int], end: tuple[int, int], steps: int = 24
 # 상점
 # =====================================================================
 def render_shop(items: list[dict], *, currency: int, title: str = "상점",
-                currency_label: str = "탐험 자금") -> Attachment:
+                currency_label: str = "실버") -> Attachment:
     """상점 화면 — 진열된 물건, 가격, 살 수 있는지 여부 (§7).
 
     이미 산 물건은 목록에서 빼지 않고 `판매 완료` 로 덮는다. 무엇이 있었는지

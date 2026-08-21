@@ -978,7 +978,7 @@ def _on_shop_buy(ctx: HandlerContext, event: ev.InteractionEvent,
         "SELECT * FROM run_shop_items WHERE run_id = ? AND node_index = ? "
         "ORDER BY item_index", (parsed.run_id, run["current_node_index"]))]
     return {"action": "edit",
-            "content": f"구매 완료 · 탐험 자금 {result['run_currency']}",
+            "content": f"구매 완료 · 실버 {result['run_currency']}",
             "components": controls.shop(ctx.db, parsed.run_id, items),
             "attachments": visuals.shop(ctx.db, run, items)}
 
@@ -1233,7 +1233,7 @@ def _conclusion_summary(conclusion: dict) -> str:
         return f"런 종료 — 보관 {kept}개"
     rewards = conclusion.get("rewards", {})
     drops = len(rewards.get("drops", []))
-    return f"승리! 탐험 자금 +{rewards.get('run_currency', 0)} · 획득 {drops}개"
+    return f"승리! 실버 +{rewards.get('run_currency', 0)} · 획득 {drops}개"
 
 
 def _on_skip(ctx: HandlerContext, event: ev.InteractionEvent,

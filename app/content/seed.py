@@ -4,8 +4,9 @@ Everything here is *content*, not logic: it is inserted through the same
 validation layer the dashboard uses (§10.3), so nothing in this file can
 express something the engine cannot execute.
 
-Naming-only 🔴 PENDING items carry their stable internal identifiers:
-`starter_001` (P-2) and `run_currency` (P-3). Neither blocks implementation.
+P-2 (starter display name → 루야) and P-3 (run currency label → 실버) were
+resolved in Design Doc v7 §13.1. Internal identifiers (`starter_001`,
+`run_currency`) stay stable; only the display text changed.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from app.engine import passives as pv
 from app.engine import statuses as st
 from app.engine import timed_effects as te
 
-STARTER_CHARACTER_ID = "starter_001"    # §4.6.1, display name is 🔴 PENDING (P-2)
+STARTER_CHARACTER_ID = "starter_001"    # §4.6.1, display name 루야 (P-2, resolved v7)
 TUTORIAL_WORLD_ID = "world_tutorial"
 WORLD_1_ID = "world_1"
 
@@ -276,7 +277,7 @@ def _seed_characters(db: Database, version: int) -> None:
         "INSERT OR REPLACE INTO characters (content_version_id, character_id, name, "
         "element, job_role, base_rarity, special_cap, in_gacha_pool, art_asset, "
         "is_retired) VALUES (?, ?, ?, '화', '딜서포트형', 1, 0, 0, NULL, 0)",
-        (version, STARTER_CHARACTER_ID, "견습 모험가"),   # 🔴 P-2 placeholder
+        (version, STARTER_CHARACTER_ID, "루야"),   # P-2, resolved v7
     )
     # §4.5.2 seed examples — gacha-pool characters.
     for character_id, name, element, role, rarity in [

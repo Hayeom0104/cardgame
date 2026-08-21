@@ -198,7 +198,7 @@ def shop(db: Database, run_id: int, items: list[dict]) -> list[dict]:
             "placeholder": "구매",
             "options": [{
                 "label": _shop_label(item)[:100],
-                "description": f"탐험 자금 {item.get('price', 0)}"[:100],
+                "description": f"실버 {item.get('price', 0)}"[:100],
                 "value": str(item["item_index"]),
             } for item in available[:MAX_OPTIONS]],
         })
