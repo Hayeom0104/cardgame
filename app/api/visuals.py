@@ -363,6 +363,24 @@ def collection(db: Database, *, user_id: int,
     return safely(build)
 
 
+def compendium(db: Database, *, user_id: int,
+               content_version_id: int) -> list[dict]:
+    """§5.3a 카드 도감 — 안 가진 칸도 가려서 그대로 보여준다."""
+
+    def build() -> list[dict]:
+        from app.content import catalog
+
+        cards = catalog.compendium(db, user_id, content_version_id)
+        if not cards:
+            return []
+        owned_count = sum(1 for card in cards if card.owned)
+        return attach(panels.render_compendium(
+            [card.as_art() | {"owned": card.owned} for card in cards],
+            title=f"카드 도감 {owned_count}/{len(cards)}"))
+
+    return safely(build)
+
+
 # =====================================================================
 # 허브 — 요약, 캐릭터, 장비, 연구, 업적
 # =====================================================================

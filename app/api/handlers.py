@@ -187,6 +187,22 @@ def handle_message(ctx: HandlerContext, event: ev.MessageEvent) -> dict:
     return _ephemeral(errors.ILLEGAL_STATE)
 
 
+#: §19.1/§19.3 — the 카드 도감 button on `!덱아웃 덱`, in and out of a run.
+_CATALOG_BUTTON = {"type": "button", "custom_id": f"{hub.HUB_PREFIX}catalog",
+                   "label": "도감"}
+
+
+def catalog_screen(ctx: HandlerContext, user_id: int) -> dict:
+    """§5.3a 카드 도감 — `[도감]` 버튼. 런 안팎 어디서든, 읽기 전용이다.
+
+    선택도 대상 지정도 없다 — 안 가진 칸은 속성·등급만 보이고 이름·그림·
+    종류는 가려서(masked) 그대로 있다.
+    """
+    return {**_reply("**카드 도감** — 안 가진 카드는 속성과 등급만 보입니다."),
+            "attachments": visuals.compendium(
+                ctx.db, user_id=user_id, content_version_id=ctx.content_version_id)}
+
+
 def deck_screen(ctx: HandlerContext, user_id: int) -> dict:
     """`!덱아웃 덱` — 런 중이면 그 런의 덱을, 밖이면 소장 카드와 강화를.
 
@@ -202,7 +218,8 @@ def deck_screen(ctx: HandlerContext, user_id: int) -> dict:
 
     cards = catalog.owned(ctx.db, user_id, ctx.content_version_id)
     if not cards:
-        return _reply("아직 가진 카드가 없습니다. `!덱아웃 뽑기`로 시작해 보세요.")
+        return _reply("아직 가진 카드가 없습니다. `!덱아웃 뽑기`로 시작해 보세요.",
+                      [_CATALOG_BUTTON])
 
     characters = [card for card in cards if card.is_character]
     actions = [card for card in cards if not card.is_character]
@@ -233,7 +250,7 @@ def deck_screen(ctx: HandlerContext, user_id: int) -> dict:
                 upgradable.append((card, plan))
         lines.append(line)
 
-    components = []
+    components = [_CATALOG_BUTTON]
     if upgradable:
         components.append({
             "type": "string_select", "custom_id": f"{hub.HUB_PREFIX}cardup",
@@ -283,7 +300,8 @@ def _run_deck_screen(ctx: HandlerContext, run) -> dict:
                            "hand": piles.get("in_hand", 0), "cursed": cursed_n})
     lines.append("이 런의 덱은 시작할 때 고정됩니다. "
                  "계정에서 카드를 강화해도 다음 런부터 반영됩니다. (§16.2.3)")
-    return {**_reply("\n".join(lines)), "attachments": visuals.run_deck(render_rows)}
+    return {**_reply("\n".join(lines), [_CATALOG_BUTTON]),
+            "attachments": visuals.run_deck(render_rows)}
 
 
 def _expire_and_close(ctx: HandlerContext, user_id: int) -> dict | None:

@@ -132,6 +132,17 @@ def owned(db: Database, user_id: int, content_version_id: int) -> list[Card]:
     return all_cards(db, content_version_id, user_id=user_id, owned_only=True)
 
 
+def compendium(db: Database, user_id: int, content_version_id: int) -> list[Card]:
+    """§5.3a 카드 도감 — 행동 카드 전 칸, 가졌든 안 가졌든.
+
+    캐릭터는 §4/§5.2의 별도 성급·조각 체계를 따르는 다른 화면 몫이라
+    (`characters_screen`) 여기서는 뺀다 — §5.3a가 근거로 삼는 §5.3
+    자체가 카드(행동 카드)의 영구 해금만 다룬다.
+    """
+    return [card for card in all_cards(db, content_version_id, user_id=user_id)
+            if not card.is_character]
+
+
 def characters(db: Database, user_id: int, content_version_id: int) -> list[Card]:
     return [card for card in owned(db, user_id, content_version_id)
             if card.is_character]

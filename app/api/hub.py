@@ -58,6 +58,13 @@ def handle_hub(ctx, user_id: int, custom_id: str, values: list[str], *,
         except ValueError:
             return {"action": "reply_ephemeral", "content": errors.ILLEGAL_STATE}
 
+    # §5.3a 카드 도감 — 읽기 전용이라 재화도 게이트도 없다. `_dispatch`의
+    # 메시지+새로고침 모양이 아니라 완성된 화면 하나를 그대로 돌려준다.
+    if action == "catalog":
+        from app.api import handlers
+
+        return {**handlers.catalog_screen(ctx, user_id), "action": "edit"}
+
     try:
         message, refresh = _dispatch(ctx, user_id, action, chosen, argument,
                                      event_id=event_id)

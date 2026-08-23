@@ -234,7 +234,7 @@ def to_attachment(image: Image.Image, filename: str) -> Attachment:
 # =====================================================================
 def render_card(card: dict, canvas: Canvas, *, size: tuple[int, int] | None = None,
                 footer: str = "", dimmed: bool = False,
-                index_badge: str | None = None) -> Image.Image:
+                index_badge: str | None = None, masked: bool = False) -> Image.Image:
     """카드 한 장. 손패·상점·보상·덱 화면이 모두 이걸 쓴다.
 
     `card` 에서 읽는 것: card_id, name, cost, element, rarity_tier,
@@ -247,6 +247,11 @@ def render_card(card: dict, canvas: Canvas, *, size: tuple[int, int] | None = No
     `index_badge` 는 왼쪽 위에 다는 작은 번호표다. 클릭 자리가 아니라
     참고용이다 — 실제 선택은 여전히 드롭다운으로 하지만, 드롭다운 항목
     앞에 같은 번호를 붙여 두면 그림 속 카드와 목록 줄을 서로 잇는다.
+
+    `masked` 는 §5.3a 카드 도감의 미보유 칸이다 — 등급(테두리·보석)과
+    속성은 보이고, 이름·그림·종류(효과 계열을 드러낸다)는 가린다. 실제
+    그림이 있어도 `AssetLibrary`를 아예 거치지 않는다 — 그림이 없어서
+    쓰는 실루엣 대체(§11)와는 다른, 별도의 렌더 분기다.
     """
     theme = canvas.theme
     size = size or theme.size("card_size")
@@ -256,7 +261,9 @@ def render_card(card: dict, canvas: Canvas, *, size: tuple[int, int] | None = No
     # 아니라 성급으로 표시되므로 보석을 그리면 안 된다.
     graded = card.get("rarity_tier") is not None
     rarity = int(card.get("rarity_tier") or 1)
-    category = str(card.get("category", ""))
+    # §5.3a — category names the effect family (공격/방어/…), so a masked
+    # card hides it along with name/art; only element and rarity stay visible.
+    category = "" if masked else str(card.get("category", ""))
 
     kind_color = _card_kind_color(theme, category, element)
     border_color = _rarity_border(theme, rarity)
@@ -289,26 +296,42 @@ def render_card(card: dict, canvas: Canvas, *, size: tuple[int, int] | None = No
     # 그림 — 카드 안쪽을 거의 꽉 채운다. 이름·배지는 그림 위에 얹고, 위아래
     # 가장자리만 어둡게 깔아(fade) 글자가 묻히지 않게 한다.
     inset = max(2, round(5 * scale))
-    # label 을 비워 둔다 — 이름은 이 함수가 위쪽에 직접 얹으므로, 그림에마저
-    # 이름이 있으면 카드 아래쪽에서 글자가 겹친다.
-    art = canvas.assets.art("card", str(card.get("card_id", "")), label="",
-                            rarity=rarity, element=element,
-                            size=(width - inset * 2, height - inset * 2))
-    kit.framed_art(image, (inset, inset, width - inset, height - inset), art,
-                   radius=max(1, radius - 2), grayscale=dimmed,
-                   fade_top=True, fade_bottom=True)
+    if masked:
+        # §5.3a — 실제 그림이 있어도 AssetLibrary를 거치지 않는다. 그림이
+        # 없어서 쓰는 실루엣 대체(§11)와 섞이면 "그림이 없다"와 "안
+        # 가졌다"가 화면에서 구분되지 않는다.
+        art_box = (inset, inset, width - inset, height - inset)
+        kit.panel(image, art_box,
+                 top=kit.mix(theme.color("color_panel_top"), (0, 0, 0), 0.35),
+                 bottom=kit.mix(theme.color("color_panel"), (0, 0, 0), 0.55),
+                 radius=max(1, radius - 2), shadow=False)
+        mark_font = theme.font(max(20, round(52 * scale)))
+        mark_w, mark_h = kit.text_size(draw, "?", mark_font)
+        draw.text(((width - mark_w) / 2, (height - mark_h) / 2 - round(4 * scale)),
+                  "?", font=mark_font, fill=theme.color("color_muted"))
+    else:
+        # label 을 비워 둔다 — 이름은 이 함수가 위쪽에 직접 얹으므로, 그림에마저
+        # 이름이 있으면 카드 아래쪽에서 글자가 겹친다.
+        art = canvas.assets.art("card", str(card.get("card_id", "")), label="",
+                                rarity=rarity, element=element,
+                                size=(width - inset * 2, height - inset * 2))
+        kit.framed_art(image, (inset, inset, width - inset, height - inset), art,
+                       radius=max(1, radius - 2), grayscale=dimmed,
+                       fade_top=True, fade_bottom=True)
 
     # 배지 한 칸의 세로 자리 — 비용·번호가 같은 줄에 나란히 앉는다.
     badge_top = max(3, round(6 * scale))
     badge_bottom = badge_top + badge_r * 2
 
-    # 이름 — 비용 원·번호표와 겹치지 않게 시작점과 폭을 미리 뺀다
-    cost = card.get("cost")
+    # 이름 — 비용 원·번호표와 겹치지 않게 시작점과 폭을 미리 뺀다. 미보유
+    # 카드는 이름 대신 물음표만 보인다 (§5.3a).
+    cost = None if masked else card.get("cost")
+    display_name = "???" if masked else str(card.get("name", ""))
     name_left = (badge_r * 2 + pad + 4) if index_badge else pad
     name_width = width - name_left - pad - (badge_r * 2 + 6 if cost is not None else 0)
     if name_width > 0:
         draw.text((name_left, badge_top - 3),
-                  kit.truncate(draw, str(card.get("name", "")), body, name_width),
+                  kit.truncate(draw, display_name, body, name_width),
                   font=body, fill=theme.color("color_muted") if dimmed else theme.color("color_text"))
 
     if cost is not None:
@@ -342,6 +365,10 @@ def render_card(card: dict, canvas: Canvas, *, size: tuple[int, int] | None = No
         kit.pill(image, (pad, height - round(48 * scale)), category[:6], small,
                  fg=theme.color("color_muted") if dimmed else theme.color("color_text"),
                  bg=kit.with_alpha(badge_color, 235))
+    elif masked and element:
+        # §5.3a — 종류는 가리지만 속성은 보인다. 종류 배지가 비운 자리를 쓴다.
+        kit.pill(image, (pad, height - round(48 * scale)), str(element)[:6], small,
+                 fg=theme.color("color_text"), bg=kit.with_alpha(kind_color, 235))
 
     line = footer or ""
     if line:
@@ -1287,6 +1314,46 @@ def render_collection(cards: list[dict], *, title: str) -> Attachment:
         canvas.label((canvas.pad, canvas.height - 24), f"그 외 {hidden}장",
                      role="small", color=canvas.muted)
     return canvas.finish("deckout_collection.png")
+
+
+def render_compendium(cards: list[dict], *, title: str) -> Attachment:
+    """§5.3a 카드 도감 — 뽑아 본 적 없는 카드도 칸은 항상 있다.
+
+    소장 목록(`render_collection`)과 달리 안 가진 칸을 지우지 않고
+    `render_card(masked=True)`로 가려서 그대로 둔다. 읽기 전용이라
+    번호표를 달지 않는다 — 여기서는 아무것도 고를 수 없다.
+    """
+    canvas = Canvas(theme_module.load().size("prep_size"))
+    canvas.title(title)
+
+    card_size = canvas.theme.size("card_size")
+    scale = 0.55
+    size = (int(card_size[0] * scale), int(card_size[1] * scale))
+    columns = max(1, (canvas.width - canvas.pad * 2 + canvas.gap)
+                  // (size[0] + canvas.gap))
+    rows = max(1, (canvas.height - 56 - canvas.pad + canvas.gap)
+               // (size[1] + canvas.gap))
+    capacity = columns * rows
+
+    # 가진 칸을 앞에, 그 안에서는 등급이 높은 순 — 칸 수가 한 화면을 넘기면
+    # "그 외 N장"에 잘리는 쪽은 안 가진 칸이어야 한다. 등급순으로만 앞세우면
+    # 정작 가진 카드가 전부 뒤로 밀려, 화면 전체가 물음표만 보이는 채로
+    # 잘릴 수 있다.
+    ordered = sorted(cards, key=lambda entry: (not entry.get("owned"),
+                                               -int(entry.get("rarity_tier") or 1),
+                                               str(entry.get("name", ""))))
+    for index, card in enumerate(ordered[:capacity]):
+        column, row = index % columns, index // columns
+        left = canvas.pad + column * (size[0] + canvas.gap)
+        top = 56 + row * (size[1] + canvas.gap)
+        canvas.paste(render_card(card, canvas, size=size,
+                                 masked=not card.get("owned")), (left, top))
+
+    hidden = len(ordered) - capacity
+    if hidden > 0:
+        canvas.label((canvas.pad, canvas.height - 24), f"그 외 {hidden}장",
+                     role="small", color=canvas.muted)
+    return canvas.finish("deckout_compendium.png")
 
 
 # =====================================================================
