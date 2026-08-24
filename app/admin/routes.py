@@ -258,7 +258,8 @@ async def content_row(request: Request, table: str, key_path: str):
     pretty = {column: _pretty(value) for column, value in row.items()}
     return _render(request, "content_row.html", table=table, row=row,
                    pretty=pretty, version_id=version_id, key_path=key_path,
-                   keys=service.vs.CONTENT_TABLES[table])
+                   keys=service.vs.CONTENT_TABLES[table],
+                   content_sync_enabled=settings.content_sync_enabled)
 
 
 def _pretty(value: Any) -> str:
@@ -299,6 +300,64 @@ async def content_save(request: Request, table: str, key_path: str):
 
 
 # =====================================================================
+# §10.7 되돌리기 — 이 엔티티의 git 이력, 확인용 필드별 비교, 되돌리기 실행
+# =====================================================================
+@router.get("/content/{table}/{key_path}/history")
+async def content_history(request: Request, table: str, key_path: str):
+    if (blocked := _guard(request)) is not None:
+        return blocked
+    from urllib.parse import unquote
+
+    db = _db(request)
+    parts = [unquote(part) for part in key_path.split("~")]
+    try:
+        history = service.entity_history(db, table, parts)
+    except service.AdminError as error:
+        return _fail(error)
+    return JSONResponse({"ok": True, "history": history})
+
+
+@router.post("/content/{table}/{key_path}/revert-diff")
+async def content_revert_diff(request: Request, table: str, key_path: str):
+    if (blocked := _guard(request)) is not None:
+        return blocked
+    from urllib.parse import unquote
+
+    db = _db(request)
+    body = await request.json()
+    parts = [unquote(part) for part in key_path.split("~")]
+    try:
+        diff = service.revert_diff(db, table, parts, body["commit_sha"])
+    except service.AdminError as error:
+        return _fail(error)
+    return JSONResponse({"ok": True, **diff})
+
+
+@router.post("/content/{table}/{key_path}/revert")
+async def content_revert(request: Request, table: str, key_path: str):
+    if (blocked := _guard(request)) is not None:
+        return blocked
+    from urllib.parse import unquote
+
+    db = _db(request)
+    body = await request.json()
+    parts = [unquote(part) for part in key_path.split("~")]
+    try:
+        stamp = service.revert_content_row(db, table, parts, body["commit_sha"])
+    except service.AdminError as error:
+        return _fail(error)
+
+    from app.api.server import state
+    from app.content.balance import Balance
+    from app.content.versioning import current_version_id
+
+    version_id = current_version_id(db)
+    state["content_version_id"] = version_id
+    state["balance"] = Balance(db, version_id) if version_id else None
+    return _ok(f"v{version_id} 로 되돌렸습니다. ({stamp[:12]})")
+
+
+# =====================================================================
 # 버전
 # =====================================================================
 @router.get("/versions")
@@ -306,7 +365,11 @@ async def versions_page(request: Request):
     if (blocked := _guard(request)) is not None:
         return blocked
     db = _db(request)
-    return _render(request, "versions.html", versions=service.versions(db))
+    versions = service.versions(db)
+    sync = {entry["version_id"]: service.sync_status(db, entry["version_id"])
+           for entry in versions}
+    return _render(request, "versions.html", versions=versions,
+                   sync=sync, content_sync_enabled=settings.content_sync_enabled)
 
 
 @router.post("/versions/draft")

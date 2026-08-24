@@ -28,7 +28,8 @@
 
 <div class="panel scroll">
   <table>
-    <tr><th>버전</th><th>상태</th><th>발행 시각</th><th>지문</th></tr>
+    <tr><th>버전</th><th>상태</th><th>발행 시각</th><th>지문</th>
+      {% if content_sync_enabled %}<th>GitHub 동기화(§10.7)</th>{% endif %}</tr>
     {% for entry in versions %}
     <tr>
       <td>v{{ entry.version_id }}</td>
@@ -38,6 +39,18 @@
       </td>
       <td class="muted">{{ entry.published_at or '—' }}</td>
       <td class="muted"><code>{{ (entry.fingerprint or '—')[:16] }}</code></td>
+      {% if content_sync_enabled %}
+      <td class="muted">
+        {% set s = sync.get(entry.version_id) %}
+        {% if not s %}—
+        {% elif s.commit_error %}<span class="pill danger">커밋 실패: {{ s.commit_error[:40] }}</span>
+        {% elif not s.commit_sha %}변경 없음
+        {% elif s.push_error %}<span class="pill danger">push 실패, 재시도 대기</span>
+        {% elif s.pushed_at %}<code>{{ s.commit_sha[:10] }}</code> · push 완료
+        {% else %}<code>{{ s.commit_sha[:10] }}</code> · 커밋만
+        {% endif %}
+      </td>
+      {% endif %}
     </tr>
     {% endfor %}
   </table>

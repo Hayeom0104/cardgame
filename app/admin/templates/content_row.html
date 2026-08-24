@@ -24,6 +24,37 @@
     <span class="muted">`_json` 열은 JSON으로 저장됩니다.</span>
   </div>
 </div>
+
+{% if content_sync_enabled %}
+<div class="panel">
+  <h2>이력 (§10.7)</h2>
+  <p class="sub" style="margin:0 0 12px">
+    발행 때마다 git에 남는 이 엔티티만의 변경 이력입니다. 과거 시점으로
+    되돌리면 그 값이 새 버전으로 발행됩니다 — 버전 번호는 되감기지 않습니다.
+  </p>
+  <button class="ghost" onclick="loadHistory()">이력 보기</button>
+  <table id="history-table" style="display:none; margin-top:12px">
+    <tr><th>시각</th><th>커밋</th><th>메시지</th><th></th></tr>
+    <tbody id="history-rows"></tbody>
+  </table>
+
+  <div id="revert-diff" style="display:none; margin-top:16px">
+    <h2>되돌리기 확인</h2>
+    <p class="sub" style="margin:0 0 12px">
+      바뀌는 필드만 보여줍니다. 확인을 누르기 전까지는 아무것도 바뀌지 않습니다.
+    </p>
+    <table>
+      <tr><th>필드</th><th>현재</th><th>되돌릴 값</th></tr>
+      <tbody id="diff-rows"></tbody>
+    </table>
+    <div class="row" style="margin-top:10px">
+      <button class="danger" onclick="confirmRevert()">되돌리기 확정</button>
+      <button class="ghost" onclick="document.getElementById('revert-diff').style.display='none'">취소</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <script>
   async function saveRow() {
     const payload = {};
@@ -31,6 +62,75 @@
       payload[box.dataset.column] = box.value;
     });
     await post('/admin/content/{{ table }}/{{ key_path }}/save', {values: payload});
+  }
+
+  let pendingCommit = null;
+
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  async function loadHistory() {
+    const response = await fetch('/admin/content/{{ table }}/{{ key_path }}/history');
+    const data = await response.json();
+    const rows = document.getElementById('history-rows');
+    rows.innerHTML = '';
+    if (!data.ok || data.history.length === 0) {
+      rows.innerHTML = '<tr><td colspan="4" class="muted">이력이 없습니다 — 아직 두 번 이상 발행되지 않았습니다.</td></tr>';
+    } else {
+      data.history.forEach((entry, index) => {
+        const tr = document.createElement('tr');
+        const subject = entry.subject.split('\n')[0];
+        const action = index === 0
+          ? '<span class="pill current">현재</span>'
+          : `<button class="ghost" onclick="showDiff('${entry.commit_sha}')">되돌리기</button>`;
+        tr.innerHTML = `<td class="muted">${escapeHtml(entry.committed_at)}</td>`
+          + `<td><code>${entry.commit_sha.slice(0, 10)}</code></td>`
+          + `<td>${escapeHtml(subject)}</td><td>${action}</td>`;
+        rows.appendChild(tr);
+      });
+    }
+    document.getElementById('history-table').style.display = 'table';
+    document.getElementById('revert-diff').style.display = 'none';
+  }
+
+  async function showDiff(commitSha) {
+    const response = await fetch('/admin/content/{{ table }}/{{ key_path }}/revert-diff', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({commit_sha: commitSha}),
+    });
+    let data = {};
+    try { data = await response.json(); } catch (e) { /* 본문 없음 */ }
+    if (!response.ok || !data.ok) {
+      toast(data.message || '비교에 실패했습니다.', false);
+      return;
+    }
+    pendingCommit = commitSha;
+    const rows = document.getElementById('diff-rows');
+    rows.innerHTML = '';
+    const changed = data.fields.filter(
+      f => JSON.stringify(f.current) !== JSON.stringify(f.picked));
+    if (changed.length === 0) {
+      rows.innerHTML = '<tr><td colspan="3" class="muted">이 시점과 현재 값이 같습니다.</td></tr>';
+    } else {
+      changed.forEach(f => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td><code>${escapeHtml(f.column)}</code></td>`
+          + `<td class="bad">${escapeHtml(String(f.current))}</td>`
+          + `<td class="good">${escapeHtml(String(f.picked))}</td>`;
+        rows.appendChild(tr);
+      });
+    }
+    document.getElementById('revert-diff').style.display = 'block';
+  }
+
+  async function confirmRevert() {
+    if (!pendingCommit) { return; }
+    const data = await post('/admin/content/{{ table }}/{{ key_path }}/revert',
+                            {commit_sha: pendingCommit});
+    if (data) { location.reload(); }
   }
 </script>
 {% endblock %}

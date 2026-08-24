@@ -56,9 +56,25 @@ class Settings:
     admin_secret: str = os.environ.get("DECKOUT_ADMIN_SECRET", "")
     admin_session_hours: int = int(os.environ.get("DECKOUT_ADMIN_SESSION_HOURS", "12"))
 
+    # -- §10.7 GitHub 콘텐츠 동기화 --------------------------------------
+    #: 봇 애플리케이션 코드와 같은 저장소의 로컬 체크아웃 경로. 비어 있으면
+    #: 동기화는 완전히 꺼진다 — SQLite가 유일한 원본(§10.3)이므로, 설정을
+    #: 잊은 배포나 테스트가 이 저장소 자체에 실수로 커밋하는 사고보다는
+    #: 안 도는 편이 낫다.
+    content_repo_path: str = os.environ.get("DECKOUT_CONTENT_REPO_PATH", "")
+    #: 커밋 뒤 `git push`까지 시도할지. 꺼져 있으면 로컬 커밋만 남기고
+    #: push는 하지 않는다 — push는 실패해도 발행 자체를 막지 않는
+    #: best-effort 동작이라(§10.7 Reliability), 자격 증명 없는 환경에서는
+    #: 커밋까지만 하는 편이 안전한 기본값이다.
+    content_repo_push: bool = os.environ.get("DECKOUT_CONTENT_REPO_PUSH") == "1"
+
     @property
     def admin_enabled(self) -> bool:
         return bool(self.admin_password)
+
+    @property
+    def content_sync_enabled(self) -> bool:
+        return bool(self.content_repo_path)
 
     def registration_yaml(self) -> str:
         return (

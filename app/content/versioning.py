@@ -23,8 +23,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 
 from app.db.connection import Database, utcnow
+
+logger = logging.getLogger(__name__)
 
 #: Every content table, with the columns that make up its logical key.
 CONTENT_TABLES: dict[str, tuple[str, ...]] = {
@@ -118,6 +121,21 @@ def publish(db: Database, version_id: int) -> str:
             "published_at = ?, fingerprint = ? WHERE version_id = ?",
             (utcnow(), stamp, version_id),
         )
+
+    # §10.7 — observes the publish and mirrors it to git. SQLite above is
+    # already committed by this point, so a sync failure here must not (and
+    # per `sync_and_record`'s own contract, cannot) undo the publish.
+    from app.config import settings
+
+    if settings.content_sync_enabled:
+        from app.content import github_sync as gs
+
+        try:
+            gs.sync_and_record(db, version_id, repo_path=settings.content_repo_path,
+                               push=settings.content_repo_push)
+        except Exception:                                          # noqa: BLE001
+            logger.exception("§10.7 content sync raised past its own contract")
+
     return stamp
 
 

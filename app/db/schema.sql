@@ -427,6 +427,21 @@ CREATE INDEX IF NOT EXISTS idx_battle_log_battle
   ON battle_log (battle_id, battle_log_id);
 
 -- =====================================================================
+-- §10.7 GitHub content sync — a failed push must never fail the publish
+-- itself (SQLite stays the source of truth); this row is how a failure
+-- gets surfaced to the dashboard and retried instead of silently lost.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS content_sync_log (
+  version_id     INTEGER PRIMARY KEY,
+  changed_count  INTEGER NOT NULL DEFAULT 0,
+  commit_sha     TEXT,
+  commit_error   TEXT,
+  pushed_at      TEXT,
+  push_error     TEXT,
+  updated_at     TEXT NOT NULL
+);
+
+-- =====================================================================
 -- §18.5 Discord surface
 -- =====================================================================
 -- §1.3.3 written BEFORE sending; the callback carries neither

@@ -222,6 +222,87 @@ def save_content_row(db: Database, table: str, version_id: int,
         raise AdminError("해당 행을 찾지 못했습니다.")
 
 
+def sync_status(db: Database, version_id: int) -> dict | None:
+    """§10.7 — this version's git mirror status, for the versions page."""
+    row = db.one("SELECT * FROM content_sync_log WHERE version_id = ?", (version_id,))
+    return dict(row) if row else None
+
+
+def entity_history(db: Database, table: str, key_values: list[str]) -> list[dict]:
+    """§10.7 되돌리기 step 1 — this entity's git history, newest first.
+
+    Empty (not an error) when sync is off — an entity simply has no history
+    to offer yet, same as one that has never been published a second time.
+    """
+    from app.config import settings
+
+    if not settings.content_sync_enabled:
+        return []
+    from app.content import github_sync as gs
+
+    logical_id = "~".join(key_values)
+    return [
+        {"commit_sha": entry.commit_sha, "committed_at": entry.committed_at,
+         "subject": entry.subject}
+        for entry in gs.history_for(settings.content_repo_path, table, logical_id)
+    ]
+
+
+def revert_diff(db: Database, table: str, key_values: list[str],
+                commit_sha: str) -> dict:
+    """§10.7 되돌리기 step 2 — current live values vs. the picked version,
+    field by field, shown BEFORE any write happens."""
+    from app.config import settings
+
+    if not settings.content_sync_enabled:
+        raise AdminError("GitHub 콘텐츠 동기화가 꺼져 있어 되돌리기를 쓸 수 없습니다.")
+    from app.content import github_sync as gs
+
+    logical_id = "~".join(key_values)
+    picked = gs.value_at(settings.content_repo_path, table, logical_id, commit_sha)
+    if picked is None:
+        raise AdminError("그 시점의 값을 git에서 찾지 못했습니다.")
+
+    keys = _require_table(table)
+    current_version = vs.current_version_id(db)
+    current = content_row(db, table, current_version, key_values) if current_version else None
+
+    excluded = {"content_version_id", *keys}
+    fields = sorted((set(picked) | set(current or {})) - excluded)
+    return {
+        "fields": [
+            {"column": column, "current": (current or {}).get(column),
+             "picked": picked.get(column)}
+            for column in fields
+        ],
+    }
+
+
+def revert_content_row(db: Database, table: str, key_values: list[str],
+                       commit_sha: str) -> str:
+    """§10.7 되돌리기 step 3 — load the picked version as the draft, then
+    immediately publish through the normal §10.5/§10.6 flow.
+
+    This creates a NEW content_version_id; §10.6's versions are
+    forward-only, so a revert is structurally indistinguishable from any
+    other publish, git mirror included.
+    """
+    from app.config import settings
+
+    if not settings.content_sync_enabled:
+        raise AdminError("GitHub 콘텐츠 동기화가 꺼져 있어 되돌리기를 쓸 수 없습니다.")
+    from app.content import github_sync as gs
+
+    logical_id = "~".join(key_values)
+    payload = gs.value_at(settings.content_repo_path, table, logical_id, commit_sha)
+    if payload is None:
+        raise AdminError("그 시점의 값을 git에서 찾지 못했습니다.")
+
+    version_id = editable_version_id(db)
+    save_content_row(db, table, version_id, key_values, payload)
+    return publish_draft(db)
+
+
 def _require_table(table: str) -> tuple[str, ...]:
     keys = vs.CONTENT_TABLES.get(table)
     if keys is None:
