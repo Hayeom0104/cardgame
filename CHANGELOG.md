@@ -13,6 +13,33 @@
 
 ## 2026-08-24
 
+### 09:40 KST — 한글이 전부 네모로 깨지는 버그 수정: 글꼴 파일을 저장소에 번들
+
+오너가 실제 화면 스크린샷을 보내 줬는데, 카드 이름을 포함한 모든 한글이
+□로 깨져 있었다(숫자·영문은 정상).
+
+`app/render/theme.py`의 `_load_font()`는 이 상황을 이미 예상하고
+있었다 — `font_candidates`(§10_화면.toml) 순서대로 찾되 **실제로 한글이
+그려지는지**(`_supports_hangul`, 네모와 실제 글리프의 렌더 결과를
+비교)까지 검사하고, 하나도 없으면 경고 로그를 남기고 Pillow 기본 글꼴로
+물러난다. 그런데 목록의 첫 자리 `assets/fonts/main.ttf`가 `.gitkeep`만
+있는 빈 폴더였고, 나머지 후보는 전부 **배포 서버에 설치돼 있어야 하는
+시스템 글꼴 경로**(NanumGothic, NotoSansCJK, wqy-zenhei, 일본어
+고딕)였다. 이 세션의 샌드박스에는 우연히 `wqy-zenhei.ttc`가 깔려 있어
+지금까지 렌더 확인이 전부 정상으로 보였지만, 오너의 실제 배포 환경에는
+그 후보 전부가 없어서 진짜 마지막 대비책(Pillow 기본 글꼴, 한글
+글리프 없음)까지 떨어진 것이었다.
+
+**고침**: 시스템 글꼴에 기대지 않도록 `assets/fonts/main.ttf`에 실제
+한글 지원 글꼴을 저장소에 직접 넣었다 — WenQuanYi Zen Hei
+(Debian `fonts-wqy-zenhei`, GPL-2 + font embedding exception이라
+자유롭게 임베드 가능, 출처는 `assets/fonts/NOTICE.md`). 이제 배포
+환경이 무엇이든 첫 번째 후보에서 항상 성공한다.
+
+검증: 허브 대시보드를 실제로 렌더해 한글이 정상적으로 나오는지 눈으로
+확인. `tests/test_assets_and_screens.py`의 글꼴 관련 테스트(폴백,
+한글 지원 검사) 포함해 재실행, 전체 스위트 통과.
+
 ### 06:40 KST — 설계 문서 부록 A-1 구현: 가입 화면, 허브 대시보드, 도움말
 
 오너가 업로드한 `Deckout_Design_Addendum_A1_Onboarding_Hub.md`를 v7의
