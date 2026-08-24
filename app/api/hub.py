@@ -32,6 +32,26 @@ logger = logging.getLogger(__name__)
 
 HUB_PREFIX = "dko:hub:"
 
+#: A-1.1/A-1.2 — 가입 버튼과 허브 대시보드의 빠른 실행 버튼은 채널에 공개로
+#: 뜬다. 나머지 허브 버튼과 달리 "이벤트의 user_id가 곧 대상"이라는 가정이
+#: 성립하지 않으므로(누구나 볼 수 있다), custom_id에 담긴 대상 user_id36과
+#: 실제로 누른 사람을 따로 대조한다. 값은 `handlers.py`가 부르는 함수
+#: 이름이다 — "같은 화면을 부르는 지름길일 뿐, 별도 코드 경로가 아니다"
+#: 라는 문서 원칙을 그대로 지킨다.
+_QUICK_ACTIONS = {
+    "st": "start_run", "dk": "deck_screen", "gc": "gacha_screen_action",
+    "ch": "characters_screen", "rs": "research_screen", "sp": "hub_shop_screen",
+    "ac": "achievements_screen",
+}
+
+
+def _user_from_payload(argument: str) -> int | None:
+    try:
+        return int(argument, 36)
+    except ValueError:
+        return None
+
+
 def _tx_id(event_id: str | None) -> str | None:
     """이 조작의 §17 트랜잭션 키.
 
@@ -49,6 +69,21 @@ def handle_hub(ctx, user_id: int, custom_id: str, values: list[str], *,
     payload = custom_id[len(HUB_PREFIX):]
     action, _, argument = payload.partition(":")
     chosen = values[0] if values else argument
+
+    # A-1.1/A-1.2 — 공개 메시지에 뜨는 버튼이므로 소유권을 직접 대조한다.
+    if action == "join" or action in _QUICK_ACTIONS:
+        target = _user_from_payload(argument)
+        if target is None or target != user_id:
+            return {"action": "reply_ephemeral", "content": errors.NOT_OWNER}
+        if action == "join":
+            return handlers.handle_join(ctx, user_id)
+        screen = getattr(handlers, _QUICK_ACTIONS[action])(ctx, user_id)
+        # 대부분의 대상 화면은 공개 응답이라 눌린 메시지를 그대로 바꿔
+        # 끼운다. [시작]만은 준비 흐름이 ephemeral일 수 있다(§16.2.2) —
+        # 그런 응답까지 "edit"으로 덮으면 개인 화면이 공개로 새 나간다.
+        if screen.get("action") == "reply":
+            return {**screen, "action": "edit"}
+        return screen
 
     # 장착만 두 단계다 — 장비를 고른 다음 대상 캐릭터를 고른다. 한 컴포넌트에
     # 둘을 담을 수 없어서, 첫 단계는 결과가 아니라 다음 화면을 돌려준다.

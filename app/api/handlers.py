@@ -10,6 +10,7 @@ notice and a forced re-render, never silently ignored.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -22,7 +23,7 @@ from app.api import screens
 from app.central import delivery, surfaces
 from app.config import settings
 from app.content.balance import Balance
-from app.content.seed import TUTORIAL_WORLD_ID, create_account
+from app.content.seed import STARTER_CHARACTER_ID, TUTORIAL_WORLD_ID, create_account
 from app.db.connection import Database
 from app.engine import achievements as ach
 from app.engine import attendance as att
@@ -51,6 +52,7 @@ CMD_RESEARCH = "연구"
 CMD_SHOP = "상점"
 CMD_ACHIEVEMENTS = "업적"
 CMD_PASSIVES = "패시브"
+CMD_HELP = "도움말"
 
 
 @dataclass
@@ -69,19 +71,44 @@ def _reply(content: str, components: list | None = None) -> dict:
     return {"action": "reply", "content": content, "components": components or []}
 
 
-def _registration_prompt() -> dict:
-    return _reply(
-        "**덱아웃**에 오신 것을 환영합니다. 시작하려면 먼저 가입해 주세요.",
-        [{"type": "button", "custom_id": f"{REGISTER_PREFIX}go", "label": "가입하기"}])
+def _registration_prompt(user_id: int) -> dict:
+    """A-1.1 가입 화면 — Deckout 채널의 공개 응답.
+
+    다른 사람도 이 메시지를 보고 버튼을 누를 수 있으므로, custom_id에
+    대상 user_id36을 담아 두고(`hub.handle_hub`가 대조한다) 본인이 아니면
+    거절한다. 홍보 그림은 Pillow로 그리지 않는 고정 에셋이다(§11과 별개).
+    """
+    return {
+        **_reply(
+            "**덱아웃**에 오신 것을 환영합니다! 카드로 파티를 꾸려 던전을 "
+            "돌파하는 로그라이크 배틀러입니다.\n시작하려면 가입해 주세요.",
+            [{"type": "button",
+              "custom_id": f"{hub.HUB_PREFIX}join:{cid.to_base36(user_id)}",
+              "label": "가입하기"}]),
+        "attachments": visuals.join_promo(),
+    }
 
 
-def handle_register(ctx: HandlerContext, user_id: int) -> dict:
-    """가입 버튼 → 계정을 만들고 허브로. 이미 가입돼 있으면 그대로 허브만."""
+def handle_join(ctx: HandlerContext, user_id: int) -> dict:
+    """A-1.1 가입 버튼 — 계정을 만들고 튜토리얼로 곧장 들어간다.
+
+    중복 클릭 경합으로 이 클릭 전에 이미 계정이 있었다면(만든 게 이
+    클릭이 아니라면) 새로 만들지도, 다시 안내하지도 않고 조용히 허브만
+    보여준다 — `create_account` 자체는 이미 멱등이므로 안전하게 다시
+    불러도 되지만, 화면까지 "가입 완료"처럼 보이면 안 된다.
+    """
+    already_existed = ctx.db.one(
+        "SELECT 1 FROM accounts WHERE user_id = ?", (user_id,)) is not None
     create_account(ctx.db, user_id, ctx.content_version_id)
-    screen = hub_screen(ctx, user_id)
+
+    if already_existed:
+        screen = hub_screen(ctx, user_id)
+        return {**screen, "action": "edit"}
+
+    screen = start_run(ctx, user_id)
     return {**screen, "action": "edit",
-           "content": f"가입되었습니다. 먼저 튜토리얼을 진행해 주세요 "
-                      f"(`!덱아웃 시작`).\n\n{screen.get('content', '')}"}
+           "content": f"가입되었습니다! 튜토리얼을 시작합니다.\n\n"
+                      f"{screen.get('content', '')}"}
 
 
 #: 중앙봇의 사용자 응답에서 코인 잔액을 찾을 때 볼 키들. 연동 가이드의 응답
@@ -89,8 +116,26 @@ def handle_register(ctx: HandlerContext, user_id: int) -> dict:
 #: 본다. 가이드를 확인하면 고칠 곳은 이 상수 하나다.
 COIN_BALANCE_KEYS = ("balance", "coin", "coins", "currency", "value")
 
+#: A-1.2 허브 대시보드의 닉네임. 같은 이유로(§1.1 표에 경로만 있다) 흔한
+#: 이름을 순서대로 본다.
+DISPLAY_NAME_KEYS = ("display_name", "username", "nickname", "global_name", "name")
 
-def coin_balance(ctx: HandlerContext, user_id: int) -> int | None:
+
+def _central_user(ctx: HandlerContext, user_id: int) -> dict:
+    """`GET /v1/users/{id}` 응답. 실패하거나 중앙봇이 없으면 빈 dict.
+
+    코인 잔액과 닉네임이 같은 호출에서 나오므로 한 번만 부른다.
+    """
+    if ctx.central is None:
+        return {}
+    try:
+        return ctx.central.get_user(user_id) or {}
+    except Exception:                                        # noqa: BLE001
+        logger.info("중앙봇 사용자 정보를 읽지 못했습니다 (user %s)", user_id)
+        return {}
+
+
+def coin_balance(ctx: HandlerContext, user_id: int, *, profile: dict | None = None) -> int | None:
     """플레이어의 코인 잔액. 알 수 없으면 None.
 
     **표시 전용이다 (§17.3).** 권위 있는 검사는 언제나 §17 트랜잭션 안에서
@@ -102,23 +147,29 @@ def coin_balance(ctx: HandlerContext, user_id: int) -> int | None:
     아는 화면이었다는 뜻이다.
 
     중앙봇이 죽어 있어도 화면은 떠야 하므로 실패는 None 으로 돌려준다.
+    `profile` 을 이미 읽어 뒀으면 다시 부르지 않는다.
     """
-    if ctx.central is None:
-        return None
-    try:
-        payload = ctx.central.get_user(user_id) or {}
-    except Exception:                                        # noqa: BLE001
-        logger.info("코인 잔액을 읽지 못했습니다 (user %s)", user_id)
-        return None
+    payload = profile if profile is not None else _central_user(ctx, user_id)
     for key in COIN_BALANCE_KEYS:
         value = payload.get(key)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             return int(value)
-    logger.warning(
-        "사용자 응답에서 코인 잔액을 찾지 못했습니다. 받은 키: %s — "
-        "handlers.COIN_BALANCE_KEYS 를 연동 가이드에 맞춰 고쳐야 합니다",
-        sorted(payload.keys()))
+    if profile is None and ctx.central is not None and payload:
+        logger.warning(
+            "사용자 응답에서 코인 잔액을 찾지 못했습니다. 받은 키: %s — "
+            "handlers.COIN_BALANCE_KEYS 를 연동 가이드에 맞춰 고쳐야 합니다",
+            sorted(payload.keys()))
     return None
+
+
+def display_name(ctx: HandlerContext, user_id: int, *, profile: dict | None = None) -> str:
+    """A-1.2 — 허브 대시보드에 보일 닉네임. 알 수 없으면 user_id로 채운다."""
+    payload = profile if profile is not None else _central_user(ctx, user_id)
+    for key in DISPLAY_NAME_KEYS:
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return f"플레이어 {user_id}"
 
 
 def _coin_line(ctx: HandlerContext, user_id: int) -> str:
@@ -129,15 +180,11 @@ def _coin_line(ctx: HandlerContext, user_id: int) -> str:
 # =====================================================================
 # Message commands
 # =====================================================================
-#: 계정이 없는 사용자에게 내미는 가입 버튼. 런 밖 화면들과 같은 이유로
-#: (§19.2의 custom_id는 run_id를 요구하는데 가입 전에는 run_id 자체가
-#: 없다) 전용 접두사를 쓴다.
-REGISTER_PREFIX = "dko:reg:"
-
 #: 튜토리얼을 마치기 전에도 눌러야 하는 것들 — 허브 자체와, 튜토리얼을
-#: 시작·재시도·포기하는 길. 나머지(뽑기·상점·캐릭터·장비·연구·업적·덱·
-#: 패시브)는 튜토리얼을 마친 뒤에만 연다.
-_ALLOWED_BEFORE_TUTORIAL = frozenset({"", "시작", "포기"})
+#: 시작·재시도·포기하는 길, 그리고 명령 안내(A-1.3, 순수 정보라 게이트할
+#: 이유가 없다). 나머지(뽑기·상점·캐릭터·장비·연구·업적·덱·패시브)는
+#: 튜토리얼을 마친 뒤에만 연다.
+_ALLOWED_BEFORE_TUTORIAL = frozenset({"", "시작", "포기", "도움말"})
 
 
 def handle_message(ctx: HandlerContext, event: ev.MessageEvent) -> dict:
@@ -151,14 +198,19 @@ def handle_message(ctx: HandlerContext, event: ev.MessageEvent) -> dict:
     # 전혀 보이지 않는다. 오너 지시로 명시적인 가입 단계를 둔다.
     account = ctx.db.one("SELECT * FROM accounts WHERE user_id = ?", (event.user_id,))
     if account is None:
-        return _registration_prompt()
+        return _registration_prompt(event.user_id)
 
     # 튜토리얼을 마치기 전에는 그 밖의 진행(뽑기·상점 등)을 열지 않는다 —
-    # "강제 튜토리얼". 마친 계정이나 이미 런이 진행 중인 계정은 그대로
-    # 지나간다(런 중 상태 검사는 각 화면·게이트가 따로 한다).
+    # "강제 튜토리얼". 튜토리얼을 마친 계정만 예외다.
+    #
+    # A-1.1로 가입이 튜토리얼 런을 곧장 만들면서, 이 게이트가 예전에 두던
+    # "이미 런이 진행 중이면 지나간다" 예외가 구멍이 됐다 — 튜토리얼을
+    # 마치지 않은 계정의 유일한 런은 언제나 튜토리얼 런이므로, 그 예외는
+    # 실질적으로 "튜토리얼 런 중에는 게이트를 끈다"는 뜻이 되어 버렸다.
+    # 인 런(맵·전투) 상호작용은 handle_interaction을 타므로 이 게이트와
+    # 무관하다 — 여기서 막는 것은 텍스트 명령뿐이다.
     if (account["tutorial_completed_at"] is None
-            and subcommand not in _ALLOWED_BEFORE_TUTORIAL
-            and lc.active_run_for(ctx.db, event.user_id) is None):
+            and subcommand not in _ALLOWED_BEFORE_TUTORIAL):
         return _ephemeral(errors.TUTORIAL_NOT_CLEARED)
 
     if subcommand == CMD_HUB:
@@ -184,6 +236,8 @@ def handle_message(ctx: HandlerContext, event: ev.MessageEvent) -> dict:
                                     ctx.content_version_id)
     if subcommand == CMD_DECK:
         return deck_screen(ctx, event.user_id)
+    if subcommand == CMD_HELP:
+        return help_screen()
     return _ephemeral(errors.ILLEGAL_STATE)
 
 
@@ -572,6 +626,48 @@ def hub_shop_screen(ctx: HandlerContext, user_id: int) -> dict:
                 currency=coin_balance(ctx, user_id))}
 
 
+#: A-1.3 — `!덱아웃 도움말`. 정적 목록이라 Pillow로 그리지 않는다(A-1.3).
+_HELP_TEXT = (
+    "**!덱아웃 도움말**\n\n"
+    "시작   — 런 시작\n"
+    "덱     — 덱 관리 (카드 도감 포함)\n"
+    "뽑기   — 가챠\n"
+    "캐릭터 — 보유 캐릭터 목록\n"
+    "장비   — 장비 관리\n"
+    "연구   — 연구 트리\n"
+    "상점   — 허브 상점\n"
+    "업적   — 업적 목록\n"
+    "포기   — 진행 중인 런 포기 (런 진행 중에만 사용 가능)"
+)
+
+
+def help_screen() -> dict:
+    """A-1.3 `!덱아웃 도움말` — 정적 텍스트, 게임 상태와 무관하다."""
+    return _reply(_HELP_TEXT)
+
+
+#: A-1.2 허브 대시보드의 빠른 실행 버튼. 순서가 그대로 화면 순서다 — 문서는
+#: 4+3 두 줄로 나누지만, 버튼을 실제 액션 로우로 나누는 `to_action_rows`는
+#: 5개씩 자동으로 채운다(§1.3.7). 순서는 그대로 지키고 정확한 줄 나눔은
+#: 눈으로 보는 사소한 차이로 남겨 둔다.
+_QUICK_ACTION_BUTTONS = (
+    ("st", "시작"), ("dk", "덱 관리"), ("gc", "뽑기"), ("ch", "캐릭터"),
+    ("rs", "연구"), ("sp", "상점"), ("ac", "업적"),
+)
+
+
+def _quick_action_components(user_id: int) -> list[dict]:
+    target = cid.to_base36(user_id)
+    return [{"type": "button", "custom_id": f"{hub.HUB_PREFIX}{action}:{target}",
+            "label": label}
+            for action, label in _QUICK_ACTION_BUTTONS]
+
+
+def gacha_screen_action(ctx: HandlerContext, user_id: int) -> dict:
+    """허브 빠른 실행의 [뽑기] — `!덱아웃 뽑기`와 같은 화면을 부른다."""
+    return screens.gacha_screen(ctx.db, ctx.balance, user_id, ctx.content_version_id)
+
+
 def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
     """`!덱아웃` → 허브 화면, a public reply in the Deckout channel.
 
@@ -612,7 +708,7 @@ def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
         lines.append("튜토리얼이 아직 남아 있습니다. `!덱아웃 시작`")
 
     daily = att.status(ctx.db, ctx.balance, user_id=user_id)
-    components = []
+    components = list(_quick_action_components(user_id))
     if daily["claimable"]:
         reward = daily["reward"]
         lines.append(
@@ -625,12 +721,47 @@ def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
     else:
         lines.append(f"출석 {daily['streak']}일째 — 오늘 것은 받았습니다.")
 
-    screen = _reply("\n".join(lines))
-    if components:
-        screen["components"] = components
+    # A-1.2 대시보드 — 닉네임·캐릭터 수·슬롯 진행·업적 진행을 한 번에 읽는다.
+    profile = _central_user(ctx, user_id)
+    owned_characters = ctx.db.one(
+        "SELECT COUNT(*) AS n FROM owned_characters WHERE user_id = ?", (user_id,))
+    total_characters = ctx.db.one(
+        "SELECT COUNT(*) AS n FROM characters WHERE content_version_id = ? "
+        "AND is_retired = 0", (ctx.content_version_id,))
+    achievements = ach.progress_list(ctx.db, user_id, ctx.content_version_id)
+    dashboard = {
+        **dict(account),
+        "display_name": display_name(ctx, user_id, profile=profile),
+        "silver": None,   # 런 밖이라 실버는 항상 없음 (A-1.2)
+        "characters_owned": int(owned_characters["n"]),
+        "characters_total": int(total_characters["n"]),
+        "party_slots_max": int(ctx.balance.get("max_party_slots")),
+        "passive_slots_max": _max_passive_slots(ctx),
+        "achievements_completed": sum(1 for entry in achievements if entry["completed"]),
+        "achievements_total": len(achievements),
+        "portrait_character_id": STARTER_CHARACTER_ID,   # A-1.4 — 대표 캐릭터 미도입
+    }
+
+    screen = _reply("\n".join(lines), components)
     screen["attachments"] = visuals.hub(
-        dict(account), coin=coin_balance(ctx, user_id), daily=daily, note=note)
+        dashboard, coin=coin_balance(ctx, user_id, profile=profile), daily=daily,
+        note=note)
     return screen
+
+
+def _max_passive_slots(ctx: HandlerContext) -> int:
+    """A-1.2 — 패시브 슬롯의 해금 상한. §9.2의 연구 노드 중 `passive_slot`
+    종류의 최댓값이다. `max_party_slots`(§01_전투.toml)와 달리 이 값은
+    아직 전용 밸런싱 상수가 없어 연구 노드에서 계산한다."""
+    best = 2   # create_account 의 시작값
+    for row in ctx.db.query(
+        "SELECT effect_json FROM research_nodes WHERE content_version_id = ?",
+        (ctx.content_version_id,),
+    ):
+        effect = json.loads(row["effect_json"])
+        if effect.get("kind") == "passive_slot":
+            best = max(best, int(effect.get("value", 0)))
+    return best
 
 
 def start_run(ctx: HandlerContext, user_id: int) -> dict:
@@ -683,8 +814,6 @@ def _prepare_and_materialize(ctx: HandlerContext, user_id: int, world_id: str, *
     [5] MATERIALIZE와 [6] SURFACE는 준비 화면과 같은 코드를 쓴다: 스레드 생성을
     빠뜨린 런은 화면 없이 계정만 점유한다 (§16.3).
     """
-    from app.content.seed import STARTER_CHARACTER_ID
-
     request = lc.RunBuildRequest(
         user_id=user_id,
         world_id=world_id,
@@ -748,9 +877,8 @@ def achievements_screen(ctx: HandlerContext, user_id: int) -> dict:
 # =====================================================================
 def handle_interaction(ctx: HandlerContext, event: ev.InteractionEvent) -> dict:
     # 준비·뽑기 화면은 런 밖에서 동작하므로 §19.2의 custom_id 형식(run_id를
-    # 요구한다)을 쓸 수 없다. 각자의 접두사로 먼저 갈라낸다.
-    if event.custom_id.startswith(REGISTER_PREFIX):
-        return handle_register(ctx, event.user_id)
+    # 요구한다)을 쓸 수 없다. 각자의 접두사로 먼저 갈라낸다. 가입(A-1.1)은
+    # hub.HUB_PREFIX 아래로 옮겨졌다 — 뒤의 분기가 잡는다.
     if event.custom_id.startswith(screens.PREP_PREFIX):
         return screens.handle_prep(ctx.db, ctx.balance, event.user_id,
                                    event.custom_id, event.values,

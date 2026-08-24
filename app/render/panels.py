@@ -1359,33 +1359,60 @@ def render_compendium(cards: list[dict], *, title: str) -> Attachment:
 # =====================================================================
 # 허브 — 요약, 캐릭터, 장비, 연구, 업적
 # =====================================================================
-def render_hub(account: dict, *, coin: int | None, daily: dict,
+def render_hub(dashboard: dict, *, coin: int | None, daily: dict,
                note: str | None = None) -> Attachment:
-    """허브 요약 — 재화, 슬롯, 출석 (§4.6).
+    """허브 대시보드 (A-1.2) — 닉네임, 재화, 캐릭터, 슬롯, 업적, 출석.
 
-    허브 화면은 글자만 있었다. 다른 화면은 전부 그림 한 장을 붙이는데
+    `dashboard` 는 계정 행에 이 화면만 계산하는 필드를 얹은 것이다:
+    display_name, silver, characters_owned/total, party_slots_max,
+    passive_slots_max, achievements_completed/total, portrait_character_id.
+
+    허브 화면은 원래 글자만 있었다. 다른 화면은 전부 그림 한 장을 붙이는데
     여기만 빠져 있었던 이유는 그릴 만한 '내용물'(카드·캐릭터·지도)이 없기
-    때문이었다 — 그래서 숫자 자체를 패널로 그린다.
+    때문이었다 — 그래서 대표 캐릭터 초상 하나와 숫자들을 패널로 그린다.
     """
     canvas = Canvas(theme_module.load().size("panel_size"))
-    canvas.title("덱아웃")
+    canvas.title("덱아웃", right=str(dashboard.get("display_name") or ""))
 
     top = 56
     if note:
         canvas.label((canvas.pad, top), note[:60], role="small", color=canvas.muted)
         top += 22
 
-    coin_text = f"코인 {coin}" if coin is not None else "코인 —"
-    canvas.label((canvas.pad, top), coin_text, color=canvas.accent)
-    canvas.label((canvas.pad, top + 26),
-                 f"카르타 {account.get('carta', 0)} · "
-                 f"와일드카드 {account.get('wildcards', 0)}")
-    canvas.label((canvas.pad, top + 50),
-                 f"파티 슬롯 {account.get('party_slots', 0)} · "
-                 f"패시브 슬롯 {account.get('passive_slots', 0)}", role="small",
-                 color=canvas.muted)
+    portrait_size = (96, 96)
+    portrait = canvas.assets.art(
+        "character", str(dashboard.get("portrait_character_id") or ""),
+        label="", size=portrait_size)
+    canvas.paste(portrait, (canvas.pad, top))
+    canvas.draw.rectangle(
+        [canvas.pad, top, canvas.pad + portrait_size[0] - 1,
+         top + portrait_size[1] - 1], outline=canvas.accent, width=2)
 
-    daily_top = top + 86
+    text_left = canvas.pad + portrait_size[0] + 18
+    silver = dashboard.get("silver")
+    silver_text = f"실버 {silver}" if silver is not None else "실버 —"
+    coin_text = f"코인 {coin}" if coin is not None else "코인 —"
+    canvas.label((text_left, top), f"{coin_text} · {silver_text}", color=canvas.accent)
+    canvas.label((text_left, top + 24),
+                 f"카르타 {dashboard.get('carta', 0)} · "
+                 f"와일드카드 {dashboard.get('wildcards', 0)}")
+    canvas.label(
+        (text_left, top + 48),
+        f"캐릭터 {dashboard.get('characters_owned', 0)}/"
+        f"{dashboard.get('characters_total', 0)}", role="small", color=canvas.muted)
+    canvas.label(
+        (text_left, top + 70),
+        f"파티 슬롯 {dashboard.get('party_slots', 0)}/"
+        f"{dashboard.get('party_slots_max', 0)} 해금 · "
+        f"패시브 슬롯 {dashboard.get('passive_slots', 0)}/"
+        f"{dashboard.get('passive_slots_max', 0)} 해금", role="small",
+        color=canvas.muted)
+    canvas.label(
+        (text_left, top + 92),
+        f"업적 {dashboard.get('achievements_completed', 0)}/"
+        f"{dashboard.get('achievements_total', 0)}", role="small", color=canvas.muted)
+
+    daily_top = top + portrait_size[1] + 20
     if daily.get("claimable"):
         reward = daily.get("reward", {})
         canvas.label((canvas.pad, daily_top),

@@ -79,3 +79,8 @@ status = { directory = "statuses", size = [32, 32], fit = "contain" }
 
 # 화면 장식용 그림(테두리, 배경 등). 파일 이름은 자유롭게 정합니다.
 ui = { directory = "ui", size = [0, 0], fit = "contain" }
+
+# 가입 화면의 홍보 그림(A-1.1). Pillow로 그리지 않는 고정 이미지입니다 —
+# 없으면 그냥 첨부 없이 화면이 나갑니다. 파일 이름은 "join" 하나뿐입니다.
+# (예: assets/promo/join.png)
+promo = { directory = "promo", size = [860, 260], fit = "cover" }

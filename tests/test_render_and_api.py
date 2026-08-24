@@ -141,7 +141,7 @@ def test_an_unknown_user_is_prompted_to_register_before_an_account_exists(client
     # /event 는 컴포넌트를 액션 로우로 감싼다 — 한 단계 더 들어간다.
     buttons = [c for row in body["components"] for c in row.get("components", [row])]
     register_id = next(c["custom_id"] for c in buttons
-                       if c["custom_id"].startswith("dko:reg:"))
+                       if c["custom_id"].startswith("dko:hub:join:"))
     assert server.state["db"].one(
         "SELECT user_id FROM accounts WHERE user_id = 777") is None
 
@@ -161,12 +161,14 @@ def test_registering_twice_does_not_duplicate_the_account(client):
     생성 자체가 `create_account`의 UNIQUE(user_id) 위에서 멱등이다."""
     from app.api import server
 
+    from app.api.custom_id import to_base36
+
     client.post("/event", json={
         "type": "message", "user_id": 888, "guild_id": 1, "channel_id": 2,
         "command": "덱아웃", "args": [], "raw_content": "!덱아웃",
     })
     payload = {"type": "interaction", "user_id": 888, "guild_id": 1, "channel_id": 2,
-               "custom_id": "dko:reg:go", "values": []}
+               "custom_id": f"dko:hub:join:{to_base36(888)}", "values": []}
     client.post("/event", json=payload)
     client.post("/event", json=payload)
     count = server.state["db"].one(

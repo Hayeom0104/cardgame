@@ -247,7 +247,12 @@ def test_the_hub_says_so_when_the_thread_cannot_be_reopened(ctx, db, user_id,
 # =====================================================================
 def test_the_event_endpoint_opens_the_thread(tmp_path, monkeypatch):
     """핸들러를 직접 부르는 것이 아니라 `/event` 를 통과시켜 본다 —
-    배선이 빠져 있던 곳이 바로 여기였다."""
+    배선이 빠져 있던 곳이 바로 여기였다.
+
+    A-1.1로 가입이 튜토리얼 런을 곧장 만들므로, 스레드는 가입 클릭 자체가
+    연다. 뒤이은 `!덱아웃 시작`은 이미 있는 런으로 리다이렉트할 뿐, 새
+    스레드를 만들지 않는다.
+    """
     from app.api import server
     from app.config import settings
 
@@ -275,20 +280,24 @@ def test_the_event_endpoint_opens_the_thread(tmp_path, monkeypatch):
         buttons = [c for row in first.json()["components"]
                   for c in row.get("components", [row])]
         register_id = next(c["custom_id"] for c in buttons
-                           if c["custom_id"].startswith("dko:reg:"))
+                           if c["custom_id"].startswith("dko:hub:join:"))
         client.post("/event", json={
             "type": "interaction", "user_id": 4242, "guild_id": 1, "channel_id": 2,
             "custom_id": register_id, "values": []})
+
+        assert len(fake.create_calls) == 1, \
+            "가입 클릭으로 튜토리얼 런이 열렸는데 스레드가 만들어지지 않았습니다"
+        run = server.state["db"].one(
+            "SELECT thread_id FROM runs WHERE user_id = 4242")
+        assert run["thread_id"] is not None
+
         reply = client.post("/event", json={
             "type": "message", "user_id": 4242, "guild_id": 1, "channel_id": 2,
             "command": "덱아웃", "args": ["시작"], "raw_content": "!덱아웃 시작"})
 
         assert reply.status_code == 200
         assert len(fake.create_calls) == 1, \
-            "/event 를 통과했는데 스레드가 만들어지지 않았습니다"
-        run = server.state["db"].one(
-            "SELECT thread_id FROM runs WHERE user_id = 4242")
-        assert run["thread_id"] is not None
+            "이미 진행 중인 런인데 스레드를 새로 만들었습니다"
         assert "thread_request" not in reply.json()
 
 

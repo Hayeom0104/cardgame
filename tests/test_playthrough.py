@@ -17,6 +17,7 @@ from app.api import controls
 from app.api import errors
 from app.api import events as ev
 from app.api import handlers
+from app.api import hub
 from app.central import surfaces
 from app.content.seed import TUTORIAL_WORLD_ID
 from app.engine import lifecycle as lc
@@ -111,7 +112,7 @@ class Session:
         # 주고, 원래 명령을 다시 친다.
         registration = next((component for component in self.components()
                              if component.get("custom_id", "").startswith(
-                                 handlers.REGISTER_PREFIX)), None)
+                                 f"{hub.HUB_PREFIX}join:")), None)
         if registration is not None:
             self.press_first()
             return self.command(*args)
@@ -474,7 +475,7 @@ def test_an_unknown_user_is_prompted_to_register_before_anything_else(ctx, db):
                   (fresh_id,)) is None, "가입 버튼을 누르기 전인데 계정이 생겼습니다"
     components = screen.get("components") or []
     register = next((c for c in components if c.get("custom_id", "").startswith(
-        handlers.REGISTER_PREFIX)), None)
+        f"{hub.HUB_PREFIX}join:")), None)
     assert register is not None, "가입 버튼이 없습니다"
 
     interaction = ev.InteractionEvent(event_id="e2", user_id=fresh_id, guild_id=1,
@@ -488,7 +489,7 @@ def test_an_unknown_user_is_prompted_to_register_before_anything_else(ctx, db):
 def test_a_freshly_registered_account_cannot_skip_the_tutorial(ctx, db):
     fresh_id = 700002
     session = Session(ctx, fresh_id)
-    session.command()          # 가입 프롬프트 → 자동으로 눌러 준다 → 허브
+    session.command()          # 가입 프롬프트 → 자동으로 눌러 준다 → 튜토리얼 런 시작(A-1.1)
 
     for blocked in ("뽑기", "상점", "캐릭터", "장비", "연구", "업적", "덱", "패시브"):
         screen = session.command(blocked)

@@ -382,12 +382,31 @@ def compendium(db: Database, *, user_id: int,
 
 
 # =====================================================================
+# 가입 (A-1.1)
+# =====================================================================
+def join_promo() -> list[dict]:
+    """가입 화면의 고정 홍보 그림. Pillow로 그리지 않는다 — 있으면 그대로
+    붙이고, 없으면(아직 콘텐츠 저작 전) 첨부 없이 화면이 나간다."""
+
+    def build() -> list[dict]:
+        from app.render.assets import AssetLibrary
+
+        library = AssetLibrary(theme_module.load())
+        image = library.load("promo", "join")
+        if image is None:
+            return []
+        return attach(panels.to_attachment(image, "deckout_join.png"))
+
+    return safely(build)
+
+
+# =====================================================================
 # 허브 — 요약, 캐릭터, 장비, 연구, 업적
 # =====================================================================
-def hub(account: dict, *, coin: int | None, daily: dict,
+def hub(dashboard: dict, *, coin: int | None, daily: dict,
        note: str | None = None) -> list[dict]:
     return safely(lambda: attach(panels.render_hub(
-        account, coin=coin, daily=daily, note=note)))
+        dashboard, coin=coin, daily=daily, note=note)))
 
 
 def characters(rows: list[dict]) -> list[dict]:
