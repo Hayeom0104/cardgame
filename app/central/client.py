@@ -22,6 +22,8 @@ from typing import Any
 
 import httpx
 
+from app import config
+
 logger = logging.getLogger(__name__)
 
 #: §1.3.4 — every one of these is checked exactly. Deckout's core loop depends
@@ -115,7 +117,8 @@ def _balance_after(payload: dict) -> int | None:
 
 
 class CentralClient:
-    def __init__(self, base_url: str, api_key: str, *, timeout: float = 5.0,
+    def __init__(self, base_url: str, api_key: str, *,
+                 timeout: float = config.CENTRAL_CLIENT_TIMEOUT_SECONDS,
                  client: httpx.Client | None = None):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key

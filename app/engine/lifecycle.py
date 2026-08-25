@@ -83,6 +83,10 @@ class LifecycleError(RuntimeError):
 class StaleRevisionError(LifecycleError):
     """The §16.7 CAS was lost. Reject and re-render; mutate nothing."""
 
+    def __init__(self, message: str, *, run_id: int | None = None):
+        super().__init__(message)
+        self.run_id = run_id
+
 
 # =====================================================================
 # §16.7 compare-and-swap
@@ -104,7 +108,8 @@ def claim_mutation(db: Database, run_id: int, expected_revision: int) -> int:
     )
     if cursor.rowcount == 0:
         raise StaleRevisionError(
-            f"run {run_id}: expected revision {expected_revision} but the row has moved"
+            f"run {run_id}: expected revision {expected_revision} but the row has moved",
+            run_id=run_id,
         )
     return expected_revision + 1
 
@@ -117,6 +122,31 @@ def event_already_handled(db: Database, event_id: str) -> bool:
     """
     return db.one("SELECT 1 FROM processed_events WHERE event_id = ?",
                   (event_id,)) is not None
+
+
+def run_for_event(db: Database, event_id: str) -> int | None:
+    """R3 B-02 — which run this already-processed event mutated, if any.
+
+    Lets a duplicate redelivery answer with that run's current screen instead
+    of a bare `ignore` (§api.server./event).
+    """
+    row = db.one("SELECT run_id FROM processed_events WHERE event_id = ?", (event_id,))
+    return int(row["run_id"]) if row and row["run_id"] is not None else None
+
+
+def most_relevant_run_id(db: Database, user_id: int) -> int | None:
+    """R3 B-02 — the run an event for this user most likely just touched.
+
+    The active run if there is one; otherwise the user's most recent run,
+    which covers an event that just settled it (defeat, tutorial clear,
+    abandon) — `active_run_for` goes None the instant that commits.
+    """
+    run = active_run_for(db, user_id)
+    if run is not None:
+        return int(run["run_id"])
+    row = db.one("SELECT run_id FROM runs WHERE user_id = ? ORDER BY run_id DESC LIMIT 1",
+                (user_id,))
+    return int(row["run_id"]) if row else None
 
 
 def record_event(db: Database, event_id: str, run_id: int | None) -> bool:
@@ -613,3 +643,68 @@ def recreate_surface(db: Database, run_id: int) -> int:
         row = conn.execute("SELECT surface_generation FROM runs WHERE run_id = ?",
                            (run_id,)).fetchone()
     return int(row["surface_generation"])
+
+
+# =====================================================================
+# R3 M-03 — terminal thread cleanup (§16.8, v7 §16.8 startup-recovery region)
+# =====================================================================
+def threads_due_for_cleanup(db: Database, balance: Balance) -> list[dict]:
+    """Terminal runs whose private thread has sat past
+    `terminal_thread_retention_hours` (doc default 24h) and hasn't been
+    deleted yet. `terminal_thread_retention_hours` was configured but nothing
+    ever read it — every completed/abandoned/expired run's thread stayed
+    around forever."""
+    from datetime import datetime, timedelta, timezone
+
+    hours = int(balance.get("terminal_thread_retention_hours"))
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    states = ",".join(f"'{state}'" for state in TERMINAL_STATES)
+    rows = db.query(
+        f"SELECT * FROM runs WHERE state IN ({states}) AND thread_id IS NOT NULL "
+        "AND thread_deleted_at IS NULL AND ended_at IS NOT NULL "
+        "AND ended_at <= ? ORDER BY run_id", (cutoff.isoformat(timespec="seconds"),))
+    return [dict(row) for row in rows]
+
+
+def cleanup_terminal_thread(db: Database, central, run: dict) -> str:
+    """Delete one terminal run's thread via the guide's DELETE call (v7 §16.8:
+    `reason="run_ended"`, `expected_thread_id`, `expected_surface_generation`
+    — no other fields are documented for this endpoint, unlike the durable
+    edit call).
+
+    Idempotent both ways: `already_missing` is treated the same as `deleted`
+    so a thread removed by an operator or a previous partial run doesn't get
+    retried forever. `stale_generation` means the surface moved on since we
+    read the row — leave it for the next pass rather than guess.
+    """
+    if central is None:
+        return "no_central"
+    try:
+        result = central.delete_thread(
+            logical_session_id=run["logical_session_id"],
+            expected_thread_id=int(run["thread_id"]),
+            expected_surface_generation=int(run["surface_generation"]),
+            reason="run_ended",
+        )
+    except Exception:                                        # noqa: BLE001
+        logger.exception("run %s 스레드 삭제 요청이 실패했습니다", run["run_id"])
+        return "retryable_failure"
+
+    outcome = result.get("status") or result.get("result") or "unknown"
+    if outcome in ("deleted", "already_missing"):
+        db.execute("UPDATE runs SET thread_deleted_at = ? WHERE run_id = ?",
+                  (utcnow(), run["run_id"]))
+    else:
+        logger.info("run %s 스레드 삭제 보류: %s", run["run_id"], outcome)
+    return outcome
+
+
+def cleanup_terminal_threads(db: Database, balance: Balance, central) -> dict:
+    """Run the whole sweep once. One failure never stops the rest — the same
+    policy `_settle_expired` already uses for startup recovery."""
+    due = threads_due_for_cleanup(db, balance)
+    counts: dict[str, int] = {}
+    for run in due:
+        outcome = cleanup_terminal_thread(db, central, run)
+        counts[outcome] = counts.get(outcome, 0) + 1
+    return {"checked": len(due), "by_outcome": counts}

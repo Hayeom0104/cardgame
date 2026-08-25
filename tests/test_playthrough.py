@@ -225,6 +225,12 @@ def test_a_tutorial_run_never_gets_stuck(ctx, db, user_id):
 
     한 판을 도는 데 수백 번을 눌러야 하므로 확인할 것을 여기 모아 둔다 —
     같은 판을 여러 번 돌 이유가 없다.
+
+    이 테스트가 보는 것은 **화면이 막히지 않는가** 뿐이다 — `give_up=True`라
+    포기도 정상 종료로 받아들인다. "이길 수 있는가"는 다른 질문이고,
+    아래 `test_a_fresh_player_can_actually_clear_the_tutorial_and_reach_the_main_campaign`
+    가 실제 승리를 요구한다 (R3 B-01 — 이 테스트가 포기를 받아들이는 것만으로
+    균형 문제를 가려서는 안 된다는 지적).
     """
     session = Session(ctx, user_id)
     session.command()                 # 계정 생성 + 허브
@@ -263,6 +269,109 @@ def test_a_tutorial_run_never_gets_stuck(ctx, db, user_id):
 
     # 5. 조용히 삼킨 응답이 없었다.
     assert all(line.strip() for line in session.log)
+
+
+def test_a_fresh_player_can_actually_clear_the_tutorial_and_reach_the_main_campaign(ctx, db):
+    """R3 §9 Mandatory Acceptance Test A — 진짜 승리로, 화면이 준 컨트롤만으로.
+
+    보스 HP를 직접 0으로 만들지 않는다. `!덱아웃 포기`로 끝내지 않는다 —
+    끝까지 눌러서 이긴다. `test_clearing_the_tutorial_opens_the_main_campaign`
+    은 정산 로직만 빠르게 보는 합성 테스트이고, 이 테스트가 R3이 요구한
+    "실제 컨트롤로 이겼는가"를 담당한다.
+
+    재시도 상한: `_strongest`가 항상 가장 비싼 카드를 내는 순공격 일변도
+    전략이라 방어를 섞는 사람보다 나쁜 표본이다 — 그런데도 R3 재현
+    당시(원소 상성 버그 포함) 1,500회를 눌러도 못 이기던 것이, 그 버그를
+    고친 지금은 실측으로 10판 중 9판을 ~85회 안에 이긴다. 5회는 그 여유의
+    반 정도이니 "수십 번의 통계적 재시도"에 기대는 게 아니라 이 상한
+    자체가 곧 R3이 요구한 "승인된 재시도 상한"이다.
+    """
+    RETRY_CEILING = 5
+    fresh_id = 810400
+    session = None
+    cleared = False
+    for attempt in range(RETRY_CEILING):
+        session = Session(ctx, fresh_id)
+        session.command()                 # 가입 버튼 클릭까지 포함 (A-1.1)
+        session.command("시작")
+        assert session.state() == lc.MAP_NAVIGATION
+        final = session.play(max_presses=300, give_up=False)
+        assert final in TERMINAL
+        if final == lc.RUN_COMPLETED:
+            cleared = True
+            break
+        assert final == lc.RUN_DEFEATED, \
+            f"시도 {attempt + 1}: 예상 밖의 종료 상태 {final!r}"
+    assert cleared, (
+        f"{RETRY_CEILING}회 시도했지만 실제 컨트롤로 튜토리얼을 깨지 못했습니다 "
+        "(R3 B-01)")
+
+    account = db.one("SELECT tutorial_completed_at, party_slots FROM accounts "
+                     "WHERE user_id = ?", (fresh_id,))
+    assert account["tutorial_completed_at"] is not None
+    assert account["party_slots"] >= 2
+
+    worlds = [row["world_id"] for row in db.query(
+        "SELECT wu.world_id FROM world_unlocks wu JOIN worlds w "
+        "ON w.world_id = wu.world_id AND w.content_version_id = ? "
+        "WHERE wu.user_id = ? AND w.is_tutorial = 0",
+        (ctx.content_version_id, fresh_id))]
+    assert worlds, "튜토리얼을 깼는데 본편이 열리지 않았습니다"
+
+    # 첫 뽑기 보장 (§5.10) — 10연은 정확히 보장 창(10) 안에서 캐릭터를
+    # 확정으로 내주므로, 실제로 눌러서 두 번째 캐릭터를 받는다.
+    from app.api import screens as scr
+
+    session.command("뽑기")
+    ten_button = next(c for c in session.components()
+                      if c.get("custom_id", "").startswith(scr.GACHA_PREFIX)
+                      and c["custom_id"].endswith(":ten"))
+    reply = handlers.handle_interaction(
+        ctx, ev.InteractionEvent(event_id="gacha-guarantee", user_id=fresh_id,
+                                 guild_id=1, channel_id=2,
+                                 custom_id=ten_button["custom_id"], values=[]))
+    assert reply.get("action") != "reply_ephemeral", reply.get("content")
+
+    owned = db.one("SELECT COUNT(*) AS n FROM owned_characters WHERE user_id = ?",
+                   (fresh_id,))["n"]
+    assert owned >= 2, "10연을 돌렸는데 캐릭터가 하나뿐입니다 (첫 뽑기 보장 실패)"
+
+    # 본편 준비 화면이 실제로 런을 만들어낸다.
+    session.command("시작")
+    for _ in range(20):
+        if lc.active_run_for(db, fresh_id) is not None:
+            break
+        session.press_first()
+    run = lc.active_run_for(db, fresh_id)
+    assert run is not None, "본편 준비 화면을 끝까지 눌렀는데 런이 안 생겼습니다"
+    assert run["is_tutorial"] == 0
+
+
+def test_a_stale_component_click_gets_the_live_screen_back(ctx, db, user_id):
+    """R3 B-02 — a component built against an older `presentation_revision`
+    (the run moved on since it was rendered — e.g. two clicks on the same
+    button) used to get only "화면이 갱신되었습니다. 다시 시도해 주세요." and
+    nothing to press. The message being clicked is still the live one, so
+    the fix answers with the run's current screen instead."""
+    from app.api import custom_id as cid
+
+    session = Session(ctx, user_id)
+    session.command()
+    session.command("시작")
+    live_button = next(c for c in session.components() if c["type"] == "button")
+    run_id = cid.parse(live_button["custom_id"]).run_id
+
+    # 다른 조작이 먼저 리비전을 올렸다고 가정한다 — 지금 누르는 버튼은 여전히
+    # 화면에 붙어 있는 그 메시지의 것이지만, 런은 이미 한 발 앞서 있다.
+    db.execute("UPDATE runs SET presentation_revision = presentation_revision + 1 "
+              "WHERE run_id = ?", (run_id,))
+
+    reply = handlers.handle_interaction(ctx, ev.InteractionEvent(
+        event_id="stale-click", user_id=user_id, guild_id=1, channel_id=2,
+        custom_id=live_button["custom_id"], values=[]))
+
+    assert reply["action"] == "edit", reply
+    assert reply["components"], "재전송 화면에 누를 수 있는 컨트롤이 없습니다"
 
 
 def test_clearing_the_tutorial_opens_the_main_campaign(ctx, db, user_id):

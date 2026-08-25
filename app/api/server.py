@@ -291,16 +291,29 @@ async def event(request: Request) -> JSONResponse:
         lifecycle.handle_thread_deleted(db, parsed.logical_session_id)
         return JSONResponse({"action": "ignore"})
 
-    # §16.7 duplicate event protection.
-    if parsed.event_id and lifecycle.event_already_handled(db, parsed.event_id):
-        return JSONResponse({"action": "ignore", "duplicate": True})
-
     context = handlers.HandlerContext(
         db=db,
         balance=state.get("balance"),
         central=state.get("central"),
         content_version_id=state.get("content_version_id"),
     )
+
+    # §16.7 duplicate event protection.
+    if parsed.event_id and lifecycle.event_already_handled(db, parsed.event_id):
+        # R3 B-02 — the mutation this event caused already committed on the
+        # first delivery; only the response was lost. Answering with a bare
+        # "ignore" left the player on a stale screen with no live controls
+        # and no way back in short of a service restart. Answer with the
+        # run's current authoritative screen instead, when it's one we can
+        # safely rebuild from committed state alone.
+        run_id = lifecycle.run_for_event(db, parsed.event_id)
+        replay = handlers.current_screen(context, run_id) if run_id else None
+        if replay is not None:
+            if "components" in replay:
+                replay["components"] = to_action_rows(replay["components"])
+            return JSONResponse(replay)
+        return JSONResponse({"action": "ignore", "duplicate": True})
+
     if isinstance(parsed, ev.MessageEvent):
         response = handlers.handle_message(context, parsed)
     elif isinstance(parsed, ev.InteractionEvent):
@@ -325,7 +338,10 @@ async def event(request: Request) -> JSONResponse:
     # handler exception permanently swallow Central's redelivery of an event
     # this service never actually processed.
     if parsed.event_id:
-        lifecycle.record_event(db, parsed.event_id, None)
+        # R3 B-02 — recording `run_id=None` made a duplicate redelivery
+        # unable to say which run's screen to replay (see the lookup above).
+        run_id = lifecycle.most_relevant_run_id(db, parsed.user_id)
+        lifecycle.record_event(db, parsed.event_id, run_id)
     return JSONResponse(response)
 
 

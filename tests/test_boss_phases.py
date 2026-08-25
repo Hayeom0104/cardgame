@@ -3,6 +3,14 @@
 > In the tutorial this was fully visible: starter 속도 95 ties the boss at 95,
 > allies win ties, so the player crosses 50% → 무적 is created → the boss acts
 > → the round ends → 무적 is gone. **The boss taught nothing.**
+
+The mechanic this documents (early 무적 + immediate re-plan within the same
+round) is still real engine behavior and still worth knowing about for any
+boss with a phase-gated action — it's exercised below against a
+main-campaign boss. R3 B-01 removed the tutorial boss's own phase-2 action
+(`act_boss_기절`) entirely, since §15.9's worked tempo math never accounted
+for it and "the boss taught nothing" undersold it — in practice it let the
+boss safely unlock its hardest attack exactly when the player crossed 50%.
 """
 
 from __future__ import annotations
@@ -146,21 +154,34 @@ def test_a_phase_is_entered_exactly_once(db, engine):
     assert len(effects) == 1
 
 
-def test_the_boss_uses_its_phase_gated_action_only_in_phase_two(db, engine):
+def test_the_boss_uses_its_phase_gated_action_only_in_phase_two(db, engine, balance,
+                                                                 version):
     """§2.8.5 — `min_phase` / `max_phase` replace or extend the active rule
-    list on a phase change."""
-    boss = _boss(db, engine)
+    list on a phase change.
+
+    R3 B-01 fix: the tutorial boss's own phase-2 rule (`act_boss_기절`) was
+    removed — §15.9's worked tempo math never accounted for it, and it
+    turned "player crosses 50%" into "boss becomes briefly invulnerable AND
+    unlocks its hardest attack" (see this file's module docstring). The
+    `min_phase` engine mechanism this test actually cares about is still
+    real content on the main-campaign bosses, so it's exercised there
+    instead of on the tutorial boss.
+    """
     from app.engine import enemy_ai as ai
+    from app.engine import encounter as enc
+
+    unit_id = enc.summon_enemy(db, engine.battle_id, "enemy_w1_boss", version, balance)
+    boss = un.load_unit(db, unit_id)
 
     action = ai.select_action(db, engine.action_registry, actor=boss,
                               battle_id=engine.battle_id, round_no=1,
                               rng=engine.rng, rng_key="k1")
-    assert action.action_id == "act_기본공격"      # phase 1 — gated rule filtered out
+    assert action.action_id != "act_boss_돌진"      # phase 1 — gated rule filtered out
 
-    db.execute("UPDATE battle_units SET hp_current = 45, boss_phase = 2 "
-               "WHERE battle_unit_id = ?", (boss.battle_unit_id,))
-    boss = _boss(db, engine)
+    db.execute("UPDATE battle_units SET boss_phase = 2 WHERE battle_unit_id = ?",
+              (boss.battle_unit_id,))
+    boss = un.load_unit(db, unit_id)
     action = ai.select_action(db, engine.action_registry, actor=boss,
                               battle_id=engine.battle_id, round_no=1,
                               rng=engine.rng, rng_key="k2")
-    assert action.action_id == "act_boss_기절"
+    assert action.action_id == "act_boss_돌진"

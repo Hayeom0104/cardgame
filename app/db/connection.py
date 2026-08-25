@@ -18,7 +18,7 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 # Bumped whenever schema.sql changes shape. §18.9: startup fails closed when the
 # file on disk is older than what the code expects.
-EXPECTED_SCHEMA_VERSION = 7
+EXPECTED_SCHEMA_VERSION = 8
 
 #: §18.9 forward-only migrations, applied in one transaction each and recorded.
 #: `schema.sql` uses CREATE TABLE IF NOT EXISTS, so it never alters an existing
@@ -47,6 +47,12 @@ MIGRATIONS: dict[int, tuple[str, ...]] = {
     # §10.7 GitHub 콘텐츠 동기화(`content_sync_log`). 새 테이블뿐이라 고칠
     # 기존 테이블이 없다.
     7: (),
+    # R3 M-03 — 종료된 런의 개인 스레드를 실제로 지우는 정리 작업이
+    # `terminal_thread_retention_hours`만 있고 아무도 실행하지 않았다. 이미
+    # 정리한 것과 아직인 것을 구분해야 매번 다시 지우려 들지 않는다.
+    8: (
+        "ALTER TABLE runs ADD COLUMN thread_deleted_at TEXT",
+    ),
 }
 
 

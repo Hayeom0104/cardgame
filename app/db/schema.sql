@@ -160,7 +160,9 @@ CREATE TABLE IF NOT EXISTS runs (
   updated_at              TEXT    NOT NULL,
   last_activity_at        TEXT    NOT NULL,
   ended_at                TEXT,
-  end_reason              TEXT
+  end_reason              TEXT,
+  thread_deleted_at       TEXT                     -- R3 M-03: §16.8 terminal
+                                                   -- cleanup, once actually run
 );
 -- §16.3 one active run per user, globally.
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_run ON runs (user_id)

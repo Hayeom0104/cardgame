@@ -11,7 +11,132 @@
 - 커밋 또는 PR이 있으면 식별자를 함께 적습니다.
 - 비밀값(API 키, 토큰, 비밀번호, 개인 정보)은 이 파일에 기록하지 않습니다.
 
-## 2026-08-24
+## 2026-08-25
+
+### 15:32 KST — R3 검증 보고서: 두 BLOCKER(B-01/B-02)와 세 MAJOR(M-01/M-02/M-03) 조치
+
+오너가 업로드한 `Deckout_Existing_Implementation_Gameplay_Verification_R3.md`가
+지적한 항목을 실제 코드에 대조해 확인하고 고쳤다. G-01(한글 글꼴)은
+어제 이미 고쳤고(commit `89233e2`), G-02(최종 에셋)는 콘텐츠 제작
+작업이라 코드로 손댈 것이 없다 — 이 항목은 손대지 않았다.
+
+**B-01 — 강제 튜토리얼이 사실상 클리어 불가능** (BLOCKER)
+
+보고서는 "가장 강한 카드만 골라도 1,500회 조작·140연패 동안
+클리어 없음"을 재현했다. §15.9의 완결된 튠tempo 계산(스킬
+`floor(10×1.8−4)=14`, 평타 6, 보스 피해 `11.5−6=5.5`/턴 — **어디에도
+속성 상성 배율이 없다**)과 실제 시드를 대조한 결과, `enemy_tut_박쥐`와
+`enemy_tut_boss`가 '암' 속성으로 시드돼 있었다. 이 값은 §15.9 표
+어디에도 없다 — 튜토리얼 적 속성은 문서가 정하지 않은 값이었는데,
+누군가 '암'을 골라 넣은 것이다. 문제는 스타터 루야가 §4.6.1에 **명시된**
+'화' 속성이라는 점: 화→암은 상성상 최악의 조합이라(스킬 -25%, 받는
+피해 +50%) 문서의 계산이 완전히 무너졌다. 게다가 튜토리얼 보스에만
+문서에 없는 2페이즈 전용 기절기(`act_boss_기절`, 14dmg+기절)가 붙어
+있었는데, §15.9의 계산은 그 전 구간 내내 평타만 가정한다 — 보스가
+가장 위험해지는 시점(50% 미만)에 정확히 플레이어의 턴을 통째로
+날리는 발명된 메커닉이 얹혀 있던 셈이다.
+
+**고침**: `enemy_tut_박쥐`/`enemy_tut_boss` 속성을 '무속성'으로
+되돌리고(§15.9가 가정한 상성 없음과 정확히 일치), 튜토리얼 보스의
+`act_boss_기절` 페이즈2 규칙을 제거했다(§15.9가 아예 존재를 언급하지
+않는 능력). 새로 만든 값을 발명하지 않고, 문서가 이미 계산해 둔
+숫자가 성립하도록 **문서에 없던 값만** 제거한 것이다.
+
+몬테카를로로 실측: 렌더를 건너뛰고 실제 화면 클릭 경로(`Session`)로
+30판을 돌린 결과 — 고치기 전 20/20 전부 400회 예산 소진(`run_abandoned`,
+0% 클리어), 고친 뒤 27/30 클리어(90%, 평균 84회 조작). `tests/test_boss_phases.py`의
+"phase-gated action" 테스트는 튜토리얼 보스 대신 본편 보스
+(`enemy_w1_boss`)로 옮겨 `min_phase` 엔진 동작 자체는 계속 검증한다.
+
+`tests/test_playthrough.py`에 R3 §9 필수 인수 테스트 A를 새로 추가했다
+(`test_a_fresh_player_can_actually_clear_the_tutorial_and_reach_the_main_campaign`)
+— 보스 HP를 직접 0으로 만들거나 포기를 정상 종료로 받아들이지 않고,
+화면이 준 컨트롤만으로 실제로 이겨서 `tutorial_completed_at`·본편
+해금·첫 뽑기 보장(10연)·본편 준비 화면까지 끝까지 확인한다. 재시도
+상한 5회(실측 90% 단판 클리어율 기준 — "수십 번의 통계적 재시도"가
+아니라 이 상한 자체가 R3이 요구한 "승인된 재시도 상한"이다).
+기존 `test_a_tutorial_run_never_gets_stuck`는 포기를 정상 종료로 받는
+이유(화면이 막히는가만 본다)를 docstring에 명시하고 균형 검증은 새
+테스트로 분리했다.
+
+**B-02 — 응답 유실 뒤 화면 복구 불가** (BLOCKER)
+
+`POST /event`는 핸들러를 커밋한 뒤 `processed_events`에 `event_id`만
+기록하고(`run_id`는 항상 `None`) 응답을 돌려줬다. 응답이 유실되면
+재전송은 그냥 `{"action": "ignore", "duplicate": true}`였고, 오래된
+버튼은 리비전 불일치로 거절되고, `!덱아웃`은 스레드로의 redirect뿐
+새 화면을 밀어주지 않았다 — 플레이어는 서비스 재시작 없이는 빠져나갈
+길이 없었다.
+
+**고침**:
+- `record_event`에 실제 `run_id`를 기록한다(`lifecycle.most_relevant_run_id`
+  — 활성 런이 있으면 그것, 방금 끝난 런이면 그 유저의 가장 최근 런).
+- 중복 `event_id` 수신 시 `lifecycle.run_for_event`로 그 런을 찾아
+  `handlers.current_screen()`이 **이미 커밋된 상태만으로** 지금 화면을
+  다시 만들어 돌려준다(지도/전투/보스전/상점/보상/이벤트 분기 지원).
+  재구성할 수 없는 상태(중첩 정지 화면)만 기존 `ignore`로 물러난다.
+  로직을 재실행하지 않는다 — `surfaces._current_screen_payload`(§16.8
+  기동 복구)와 같은 안전 규칙.
+- 같은 `current_screen()`을 스테일 컴포넌트 거절에도 재사용했다
+  (`gates.StaleComponentError`/`lifecycle.StaleRevisionError`) — 리비전이
+  밀린 버튼이라도 그 버튼이 붙은 메시지는 여전히 유효하므로, 텍스트뿐인
+  "다시 시도해 주세요" 대신 지금 화면을 그대로 돌려준다. `presentation_revision`을
+  건드리지 않으므로 §16.6 단일 기록자 규칙과 충돌하지 않는다.
+- `!덱아웃`의 "이미 진행 중" redirect는 **손대지 않았다** — `push_frame`은
+  "끝난 런에만 쓴다"고 스스로 문서화돼 있고(§16.6), 진행 중인 런에 억지로
+  쓰면 인터랙션 응답과 경합하는 두 번째 기록자가 생긴다. 발명하는 대신
+  남겨 둔다.
+
+검증: `tests/test_render_and_api.py`에 실제 FastAPI `TestClient`로
+R3 §9 필수 인수 테스트 B를 그대로 재현하는 테스트를 추가했다 — 노드
+클릭 커밋 → 같은 `event_id` 재전송 → 살아 있는 전투 컨트롤을 받아
+실제로 눌러 진행까지 확인. `tests/test_playthrough.py`에 스테일
+컴포넌트 클릭 테스트도 추가.
+
+**M-01 — Central 호출이 이벤트 예산을 넘길 수 있음** (MAJOR)
+
+허브가 `_coin_line()`과 A-1.2 대시보드에서 각자 `_central_user()`를
+불러 `GET /v1/users/{id}`가 한 응답에 두 번 나갔다(지난 세션에 반쪽만
+고쳐졌던 자리). `profile`을 함수 맨 앞에서 한 번만 읽어 두 곳 모두에
+넘기도록 고쳤다. `CentralClient`의 기본 타임아웃도 5.0초 → 1.5초로
+낮췄다(§1.2 인터랙션 예산 2.0초보다 짧게, `app/config.py`의
+`CENTRAL_CLIENT_TIMEOUT_SECONDS`로 뺐다). 검증: `test_the_hub_fetches_the_central_profile_only_once`
+추가.
+
+**M-02 — 인박티비티 만료가 스레드 안 버튼 조작에는 적용 안 됨** (MAJOR)
+
+`check_gates()`가 `is_expired()`를 아예 확인하지 않아, 30분 방치된
+스레드의 예전 버튼을 누르면 `claim_mutation()`이 `last_activity_at`을
+갱신해 방치된 런을 되살렸다. `check_gates()`에 만료 확인을 추가하고
+(`gates.RunExpiredError`), 걸리면 그 자리에서 §16.3 정산을 실행한 뒤
+스레드 화면도 정리된 상태로 고쳐 쓴다. 검증:
+`test_a_stale_in_thread_component_click_settles_the_run_as_expired`
+추가(R3 §9 필수 인수 테스트 D의 앞부분).
+
+**M-03 — 종료된 런의 개인 스레드 정리가 구현되지 않음** (MAJOR)
+
+`terminal_thread_retention_hours`는 설정돼 있었지만 아무도 읽지
+않았고 `CentralClient.delete_thread()`는 어디서도 불리지 않았다.
+`lifecycle.threads_due_for_cleanup`/`cleanup_terminal_threads`를 새로
+만들고, 운영자가 직접 돌리는 `python -m app.cli.cleanup_terminal_threads`를
+추가했다(기동 시 자동 실행은 하지 않는다 — Discord 스레드 삭제는
+외부에 보이는 동작이라 `reconcile_transactions.py`와 같은 이유로
+운영자 판단에 맡긴다). `runs.thread_deleted_at` 컬럼을 추가해
+이미 정리한 것을 다시 시도하지 않는다(스키마 v8, `MIGRATIONS[8]`).
+
+`delete_thread()` 자체의 요청 필드는 **바꾸지 않았다** — R3는 가이드
+원문에 `delivery_request_id`/`service_id`가 있다고 적었지만, 이
+저장소가 가진 v6.4/v7 설계 문서(§1.3.5, "Retain the thread for 24
+hours, then DELETE... reason, expected_thread_id, expected_surface_generation
+supplied")는 지금 코드와 정확히 일치하는 필드만 보여준다. 두 소스가
+서로 다른 내용을 말하고 있어 어느 쪽이 맞는지 이 세션은 확인할
+방법이 없다 — 실제 가이드 원문(`중앙봇_API_연동_가이드_업데이트`) 없이
+필드를 지어내지 않았다. 오너 확인이 필요하다.
+
+검증: `tests/test_terminal_thread_cleanup.py` 신규(정상 삭제·
+already_missing·stale_generation·재시도 안 함·부분 실패 격리).
+전체 스위트 재실행, 초록. `python -m app.cli.bootstrap` (schema v8),
+`python -m app.cli.check_content` 통과.
 
 ### 09:40 KST — 한글이 전부 네모로 깨지는 버그 수정: 글꼴 파일을 저장소에 번들
 

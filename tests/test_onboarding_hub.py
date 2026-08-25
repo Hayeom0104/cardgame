@@ -25,6 +25,7 @@ class FakeCentral:
         return {"thread_id": self._next, "message_id": 11}
 
     def get_user(self, user_id):
+        self.get_user_calls = getattr(self, "get_user_calls", 0) + 1
         return self.profile
 
 
@@ -140,6 +141,14 @@ def test_the_dashboard_renders_an_image(ctx, graduated_user):
 def test_the_dashboard_shows_the_nickname_from_central(ctx, graduated_user):
     name = handlers.display_name(ctx, graduated_user)
     assert name == "테스트유저"
+
+
+def test_the_hub_fetches_the_central_profile_only_once(ctx, graduated_user, central):
+    """R3 M-01 — the coin line and the A-1.2 dashboard used to each call
+    `GET /v1/users/{id}` separately, pushing a slow Central over the 2.5s
+    message budget for one hub render."""
+    handlers.hub_screen(ctx, graduated_user)
+    assert central.get_user_calls == 1
 
 
 def test_display_name_falls_back_when_central_has_no_known_key(db, balance, version):

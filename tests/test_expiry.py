@@ -181,6 +181,35 @@ def test_the_startup_scan_settles_expired_runs(db, balance, run_id, user_id):
                   (run_id,))["state"] == lc.RUN_EXPIRED
 
 
+def test_a_stale_in_thread_component_click_settles_the_run_as_expired(
+        ctx, db, balance, run_id, user_id):
+    """R3 M-02 / §9 Mandatory Test D — `check_gates()` never checked
+    `is_expired()`, so a component click inside an old thread revived an
+    already-abandoned run via `claim_mutation()`'s `last_activity_at` bump
+    instead of settling it. This clicks a real map button after the run has
+    gone idle past the configured window."""
+    from app.api import controls
+    from app.api import events as ev
+    from app.api import handlers as h
+
+    _idle(db, run_id, int(balance.get("inactivity_expiry_minutes")) + 1)
+
+    buttons = controls.game_map(db, run_id)
+    assert buttons, "지도에 누를 것이 없습니다"
+    stale_button = buttons[0]
+
+    reply = h.handle_interaction(ctx, ev.InteractionEvent(
+        event_id="stale-click", user_id=user_id, guild_id=1, channel_id=2,
+        custom_id=stale_button["custom_id"], values=[]))
+
+    assert reply["action"] == "reply_ephemeral"
+    assert reply["content"] == errors.RUN_EXPIRED
+
+    run = db.one("SELECT state FROM runs WHERE run_id = ?", (run_id,))
+    assert run["state"] == lc.RUN_EXPIRED
+    assert lc.active_run_for(db, user_id) is None
+
+
 def test_one_failing_run_does_not_stop_the_others(db, balance, run_id, user_id,
                                                    monkeypatch):
     """만료 정산에 걸려 서비스가 못 뜨면 막힌 계정을 풀 방법도 사라진다."""

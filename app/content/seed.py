@@ -474,7 +474,16 @@ def _seed_enemies(db: Database, version: int) -> None:
         # tutorial band — §15.9: HP 30-42 / 공격 9-13 / 방어 2-4 / 속도 80-100
         ("enemy_tut_슬라임", "훈련용 슬라임", "일반", "무속성", "공격형", 36, 10, 3, 90,
          common_rules),
-        ("enemy_tut_박쥐", "동굴 박쥐", "일반", "암", "공격형", 30, 11, 2, 100,
+        # R3 B-01 fix: was '암' — §15.9's own worked tempo math (skill
+        # floor(10×1.8−4)=14, boss dmg 11.5−6=5.5) carries no elemental
+        # affinity term at all, so it only holds if tutorial enemies are
+        # neutral. '암' was never specified by the doc; it was invented
+        # during seeding, and it happens to be the single worst matchup
+        # against the doc-mandated 화 starter (§4.6.1) — both disadvantaging
+        # the player's skill card (×0.75) and advantaging every enemy hit
+        # against the player (×1.5). Fixed to 무속성 to match 슬라임 and
+        # restore the doc's own arithmetic exactly.
+        ("enemy_tut_박쥐", "동굴 박쥐", "일반", "무속성", "공격형", 30, 11, 2, 100,
          common_rules),
         # main campaign 일반 band — HP 45-70 / 공격 8-12 / 방어 3-6 / 속도 80-110
         ("enemy_w1_고블린", "고블린", "일반", "지", "공격형", 55, 11, 4, 95, common_rules),
@@ -588,18 +597,31 @@ def _seed_enemies(db: Database, version: int) -> None:
         )
 
     # §15.9 tutorial boss: HP 100, 공격 10-13, 방어 4, 속도 95, 2 phases.
+    #
+    # R3 B-01 fix: this used to also carry a phase-2 "act_boss_기절" rule
+    # (14 dmg + a full stun on the player) that §15.9 never specifies — its
+    # own fully-worked tempo math (§15.9, "Player damage taken") models
+    # ONLY the plain 11.5-avg basic attack for all ~11 rounds and lands on
+    # a already-thin ~15 HP survival margin. An invented extra attack that
+    # both hits harder and skips the player's next turn, arriving right as
+    # the boss enters its low-HP phase, eats that margin before a real
+    # player can ever close it out. Dropped so phase 2 matches the doc:
+    # mechanically identical to phase 1 except for the one-round 무적 entry.
+    #
+    # Element fixed to 무속성 for the same reason as 박쥐 above — '암' was
+    # invented, was never in §15.9, and doubly punished the doc-mandated 화
+    # starter. `act_boss_기절` itself is left defined in _seed_enemy_actions
+    # as reusable generic content for a MAIN-CAMPAIGN boss, just not wired
+    # to the tutorial fight the doc explicitly worked the numbers for.
     boss_rules = [
         {"priority": 10, "condition": None, "action_id": "act_기본공격", "weight": 3.0,
          "cooldown_turns": 0},
-        {"priority": 5, "condition": {"op": "self_hp_below", "value": 0.5},
-         "action_id": "act_boss_기절", "weight": 1.0, "cooldown_turns": 2,
-         "min_phase": 2},
     ]
     db.execute(
         "INSERT OR REPLACE INTO enemies (content_version_id, enemy_id, name, tier, "
         "element, role, hp, atk, def, spd, strategy_override, action_rules_json, "
         "art_asset, is_retired) VALUES (?, 'enemy_tut_boss', '각인된 수호자', '보스', "
-        "'암', '방어형', 100, 11, 4, 95, NULL, ?, NULL, 0)",
+        "'무속성', '방어형', 100, 11, 4, 95, NULL, ?, NULL, 0)",
         (version, _json(boss_rules)),
     )
     # Tutorial boss transition: 무적 1 round on entering phase 2 (50%).

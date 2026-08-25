@@ -18,7 +18,7 @@ from typing import Any
 from app.api import custom_id as cid
 from app.api import controls, errors, hub, visuals
 from app.api import events as ev
-from app.api.gates import GateError, check_gates
+from app.api.gates import GateError, RunExpiredError, StaleComponentError, check_gates
 from app.api import screens
 from app.central import delivery, surfaces
 from app.config import settings
@@ -172,8 +172,8 @@ def display_name(ctx: HandlerContext, user_id: int, *, profile: dict | None = No
     return f"플레이어 {user_id}"
 
 
-def _coin_line(ctx: HandlerContext, user_id: int) -> str:
-    balance = coin_balance(ctx, user_id)
+def _coin_line(ctx: HandlerContext, user_id: int, *, profile: dict | None = None) -> str:
+    balance = coin_balance(ctx, user_id, profile=profile)
     return f"코인 {balance}" if balance is not None else "코인 —"
 
 
@@ -692,6 +692,10 @@ def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
                 "content": errors.RUN_ALREADY_ACTIVE}
 
     account = ctx.db.one("SELECT * FROM accounts WHERE user_id = ?", (user_id,))
+    # R3 M-01 — 코인 줄과 A-1.2 대시보드가 각자 `_central_user()`를 불러
+    # `GET /v1/users/{id}`가 허브 하나에 두 번 나갔다. 여기서 한 번만 부르고
+    # 아래 두 곳 모두에 넘긴다.
+    profile = _central_user(ctx, user_id)
     note = None
     lines = []
     if expired is not None:
@@ -700,7 +704,7 @@ def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
         lines.append(note)
     lines += [
         "**덱아웃**",
-        f"{_coin_line(ctx, user_id)} · 카르타 {account['carta']} · "
+        f"{_coin_line(ctx, user_id, profile=profile)} · 카르타 {account['carta']} · "
         f"와일드카드 {account['wildcards']}",
         f"파티 슬롯 {account['party_slots']} · 패시브 슬롯 {account['passive_slots']}",
     ]
@@ -722,7 +726,7 @@ def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
         lines.append(f"출석 {daily['streak']}일째 — 오늘 것은 받았습니다.")
 
     # A-1.2 대시보드 — 닉네임·캐릭터 수·슬롯 진행·업적 진행을 한 번에 읽는다.
-    profile = _central_user(ctx, user_id)
+    # (profile은 위에서 이미 읽어 뒀다 — R3 M-01.)
     owned_characters = ctx.db.one(
         "SELECT COUNT(*) AS n FROM owned_characters WHERE user_id = ?", (user_id,))
     total_characters = ctx.db.one(
@@ -903,11 +907,31 @@ def handle_interaction(ctx: HandlerContext, event: ev.InteractionEvent) -> dict:
 
     try:
         return handler(ctx, event, parsed)
+    except RunExpiredError as error:
+        # R3 M-02 — the gate already settled the run as expired (§16.3); push
+        # the settled frame to its thread the same way `_expire_and_close`
+        # does for the hub/start entry points, so the thread doesn't keep a
+        # dead component with no explanation.
+        logger.info("run %s expired on component use", error.run_id)
+        surfaces.close_run_surface(
+            ctx.db, ctx.central, error.run_id,
+            summary="오래 조작이 없어 이 런을 정리했습니다. (§16.3)")
+        return _ephemeral(error.message)
+    except StaleComponentError as error:
+        # R3 B-02 — the click itself is legitimately stale (the run moved on
+        # since this component was rendered), but the message it's attached
+        # to is still the live one. Answer with the current screen instead of
+        # just "다시 시도해 주세요" and nothing to press.
+        replay = current_screen(ctx, error.run_id)
+        return replay if replay is not None else _ephemeral(error.message)
+    except lc.StaleRevisionError as error:
+        # Same situation, but lost the §16.7 CAS race instead of failing the
+        # gate's own revision check (concurrent clicks on the same button).
+        replay = current_screen(ctx, error.run_id) if error.run_id else None
+        return replay if replay is not None else _ephemeral(errors.STALE_REVISION)
     except GateError as error:
         logger.info("gate rejected %s: %s", parsed.action, error.reason)
         return _ephemeral(error.message)
-    except lc.StaleRevisionError:
-        return _ephemeral(errors.STALE_REVISION)
 
 
 def handle_modal_submit(ctx: HandlerContext, event: ev.ModalSubmitEvent) -> dict:
@@ -917,7 +941,7 @@ def handle_modal_submit(ctx: HandlerContext, event: ev.ModalSubmitEvent) -> dict
 def _on_node_choose(ctx: HandlerContext, event: ev.InteractionEvent,
                     parsed: cid.CustomId) -> dict:
     """맵 화면 → node buttons (branch width 2-3), then §3 node resolution."""
-    gate = check_gates(ctx.db, user_id=event.user_id, custom_id=parsed,
+    gate = check_gates(ctx.db, ctx.balance, user_id=event.user_id, custom_id=parsed,
                        allowed_states={lc.MAP_NAVIGATION})
     node_index = int(parsed.payload)
 
@@ -1021,6 +1045,77 @@ def _screen_art(ctx: HandlerContext, run, result: dict,
     return []
 
 
+def current_screen(ctx: HandlerContext, run_id: int) -> dict | None:
+    """R3 B-02 — the run's current authoritative screen, rebuilt purely from
+    already-committed rows.
+
+    Used to answer a duplicate `event_id` redelivery (and a stale-component
+    rejection) with something the player can actually act on, instead of only
+    `{"action": "ignore"}` or a bare error with no live controls — the local
+    state had already moved on to this screen; the player just never saw it.
+
+    Only reads committed state, never re-executes node/battle resolution —
+    the same rule `surfaces._current_screen_payload` uses for the startup
+    recovery path this mirrors. Returns None for a state it can't safely
+    reconstruct (mid-resolution nested pending-choice); the caller falls back
+    to today's plain rejection in that case.
+    """
+    run = ctx.db.one("SELECT * FROM runs WHERE run_id = ?", (run_id,))
+    if run is None:
+        return None
+    run = dict(run)
+    state = run["state"]
+    prefix = "(화면을 새로고침했습니다) "
+
+    if state == lc.MAP_NAVIGATION:
+        return {"action": "edit", "content": f"{prefix}지도에서 갈 곳을 고르세요.",
+                "components": controls.game_map(ctx.db, run_id),
+                "attachments": visuals.game_map(ctx.db, run)}
+
+    if state in (lc.BATTLE, lc.BOSS_BATTLE):
+        active = ctx.db.one(
+            "SELECT battle_id FROM battles WHERE run_id = ? AND state = 'active' "
+            "ORDER BY battle_id DESC LIMIT 1", (run_id,))
+        if active is None:
+            return None
+        battle_id = int(active["battle_id"])
+        return {"action": "edit", "content": f"{prefix}전투가 진행 중입니다.",
+                "components": _screen_controls(
+                    ctx, run, {"screen": "battle", "battle_id": battle_id}),
+                "attachments": visuals.battle(ctx.db, ctx.balance,
+                                              battle_id=battle_id, run=run)}
+
+    if state == lc.SHOP:
+        items = [dict(row) for row in ctx.db.query(
+            "SELECT * FROM run_shop_items WHERE run_id = ? AND node_index = ? "
+            "ORDER BY item_index", (run_id, run["current_node_index"]))]
+        return {"action": "edit",
+                "content": f"{prefix}상점입니다. {errors.LABEL_EXIT}",
+                "components": controls.shop(ctx.db, run_id, items),
+                "attachments": visuals.shop(ctx.db, run, items)}
+
+    if state in (lc.REWARD_SELECTION, lc.EVENT_CHOICE):
+        choice = ctx.db.one("SELECT * FROM pending_choices WHERE run_id = ? "
+                            "AND status = 'open'", (run_id,))
+        if choice is None:
+            return None
+        if choice["choice_type"] == "reward_card":
+            options = json.loads(choice["options_json"] or "[]")
+            return {"action": "edit", "content": f"{prefix}보상 카드를 고르세요.",
+                    "components": controls.reward(ctx.db, run_id, options,
+                                                   skip_available=True)}
+        if choice["choice_type"] == "event_branch":
+            options = json.loads(choice["options_json"] or "{}")
+            return {"action": "edit",
+                    "content": f"{prefix}이벤트: {options.get('name', '')}",
+                    "components": controls.event(ctx.db, run_id, options)}
+        # Other choice_type (nested operator halt) needs logic re-execution
+        # to reconstruct safely — not invented here either.
+        return None
+
+    return None
+
+
 def _screen_summary(node, result: dict) -> str:
     if result["screen"] == "battle":
         return f"{node['node_type']} — 전투 시작"
@@ -1069,7 +1164,7 @@ def _on_reward_pick(ctx: HandlerContext, event: ev.InteractionEvent,
     The payload carries `<card_id>|<party_slot>`; the recipient step is
     required because decks are per-character (§3.2).
     """
-    gate = check_gates(ctx.db, user_id=event.user_id, custom_id=parsed,
+    gate = check_gates(ctx.db, ctx.balance, user_id=event.user_id, custom_id=parsed,
                        allowed_states={lc.REWARD_SELECTION})
     choice = ctx.db.one(
         "SELECT choice_id FROM pending_choices WHERE run_id = ? AND status = 'open'",
@@ -1097,7 +1192,7 @@ def _on_reward_pick(ctx: HandlerContext, event: ev.InteractionEvent,
 def _on_shop_buy(ctx: HandlerContext, event: ev.InteractionEvent,
                  parsed: cid.CustomId) -> dict:
     """상점 화면 → item buttons. A purchase is a SELF-LOOP (§16.2)."""
-    gate = check_gates(ctx.db, user_id=event.user_id, custom_id=parsed,
+    gate = check_gates(ctx.db, ctx.balance, user_id=event.user_id, custom_id=parsed,
                        allowed_states={lc.SHOP})
     # 진열이 4~6줄이라 버튼(5개 한도)보다 선택 컴포넌트가 맞고, 그러면 값은
     # `values[0]` 로 온다. 카드 선택·보상 수령은 이미 둘 다 받는데 여기만
@@ -1132,7 +1227,7 @@ def _on_shop_buy(ctx: HandlerContext, event: ev.InteractionEvent,
 def _on_event_branch(ctx: HandlerContext, event: ev.InteractionEvent,
                      parsed: cid.CustomId) -> dict:
     """이벤트 화면 → branch buttons. A branch may transition into battle."""
-    gate = check_gates(ctx.db, user_id=event.user_id, custom_id=parsed,
+    gate = check_gates(ctx.db, ctx.balance, user_id=event.user_id, custom_id=parsed,
                        allowed_states={lc.EVENT_CHOICE})
     choice = ctx.db.one(
         "SELECT choice_id FROM pending_choices WHERE run_id = ? AND status = 'open'",
@@ -1219,7 +1314,7 @@ def _render_nested_choice(ctx: HandlerContext, run, parsed: cid.CustomId,
 def _on_cleanse_pick(ctx: HandlerContext, event: ev.InteractionEvent,
                      parsed: cid.CustomId) -> dict:
     """§2.7.4 — the player picks which 저주받은 카드 is removed."""
-    check_gates(ctx.db, user_id=event.user_id, custom_id=parsed,
+    check_gates(ctx.db, ctx.balance, user_id=event.user_id, custom_id=parsed,
                 allowed_states={lc.EVENT_CHOICE, lc.SHOP, lc.REWARD_SELECTION})
     raw = event.values[0] if event.values else parsed.payload
     with ctx.db.tx():
@@ -1239,7 +1334,7 @@ def _rng(ctx: HandlerContext, run) -> JournaledRng:
 def _on_card_select(ctx: HandlerContext, event: ev.InteractionEvent,
                     parsed: cid.CustomId) -> dict:
     """전투 화면 → card String Select, then the target select round-trip."""
-    gate = check_gates(ctx.db, user_id=event.user_id, custom_id=parsed,
+    gate = check_gates(ctx.db, ctx.balance, user_id=event.user_id, custom_id=parsed,
                        allowed_states={lc.BATTLE, lc.BOSS_BATTLE})
     engine = _engine_for(ctx, gate.run)
     unit = engine.acting_unit()
@@ -1276,7 +1371,7 @@ def _on_card_select(ctx: HandlerContext, event: ev.InteractionEvent,
 
 def _on_target_select(ctx: HandlerContext, event: ev.InteractionEvent,
                       parsed: cid.CustomId) -> dict:
-    gate = check_gates(ctx.db, user_id=event.user_id, custom_id=parsed,
+    gate = check_gates(ctx.db, ctx.balance, user_id=event.user_id, custom_id=parsed,
                        allowed_states={lc.BATTLE, lc.BOSS_BATTLE})
     engine = _engine_for(ctx, gate.run)
     unit = engine.acting_unit()
@@ -1388,7 +1483,7 @@ def _on_skip(ctx: HandlerContext, event: ev.InteractionEvent,
 
     Without it deck size only grows and deck-thinning becomes impossible.
     """
-    check_gates(ctx.db, user_id=event.user_id, custom_id=parsed,
+    check_gates(ctx.db, ctx.balance, user_id=event.user_id, custom_id=parsed,
                 allowed_states={lc.REWARD_SELECTION})
     with ctx.db.tx():
         lc.claim_mutation(ctx.db, parsed.run_id, parsed.revision)
@@ -1402,7 +1497,7 @@ def _on_skip(ctx: HandlerContext, event: ev.InteractionEvent,
 
 def _on_shop_exit(ctx: HandlerContext, event: ev.InteractionEvent,
                   parsed: cid.CustomId) -> dict:
-    gate = check_gates(ctx.db, user_id=event.user_id, custom_id=parsed,
+    gate = check_gates(ctx.db, ctx.balance, user_id=event.user_id, custom_id=parsed,
                        allowed_states={lc.SHOP})
     with ctx.db.tx():
         lc.claim_mutation(ctx.db, parsed.run_id, parsed.revision)

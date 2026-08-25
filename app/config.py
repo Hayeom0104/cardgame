@@ -32,6 +32,13 @@ REGISTER_COMMAND = (
 BUDGET_MESSAGE_SECONDS = 2.5
 BUDGET_INTERACTION_SECONDS = 2.0
 
+#: R3 M-01 — `CentralClient`'s per-call HTTP timeout. Must stay well under
+#: the smaller of the two budgets above (interaction: 2.0s) so a slow or
+#: dead Central still leaves room for this service's own DB/render work
+#: before the inbound event's own deadline; the previous 5.0s default could
+#: hold a handler for roughly the full 5s on its own, before any local work.
+CENTRAL_CLIENT_TIMEOUT_SECONDS = 1.5
+
 
 @dataclass
 class Settings:

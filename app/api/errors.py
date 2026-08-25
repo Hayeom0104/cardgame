@@ -9,6 +9,9 @@ NOT_OWNER = "본인의 게임이 아닙니다."
 STALE_REVISION = "화면이 갱신되었습니다. 다시 시도해 주세요."
 ILLEGAL_STATE = "지금은 할 수 없는 동작입니다."
 RUN_ALREADY_ACTIVE = "이미 진행 중인 런이 있습니다."
+# R3 M-02 — 오래 방치된 런의 예전 버튼을 눌렀을 때. 그냥 거절만 하면 왜
+# 안 되는지 알 수 없고, 계정은 여전히 죽은 런에 묶여 있게 된다.
+RUN_EXPIRED = "오래 조작이 없어 이 런은 정리되었습니다. `!덱아웃` 으로 새로 시작해 주세요."
 INSUFFICIENT_CURRENCY = "재화가 부족합니다."
 PAYMENT_FAILED = "결제에 실패했습니다. 차감된 금액은 환불됩니다."
 TUTORIAL_NOT_CLEARED = "튜토리얼을 먼저 완료해 주세요."
