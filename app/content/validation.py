@@ -16,7 +16,7 @@ from app.content import operators as ops
 from app.content.operators import ValidationError
 from app.db.connection import Database
 from app.engine import statuses as st
-from app.engine.stats import ALL_ELEMENTS
+from app.engine.stats import ALL_ELEMENTS, NEUTRAL_ELEMENT
 
 VALID_TARGET_SIDES = frozenset({"enemy", "ally", "self", "all"})
 VALID_STATUS_MODELS = frozenset({st.COUNTDOWN, st.STACK_DURATION, st.STACK_DECAY})
@@ -43,6 +43,7 @@ def validate_version(db: Database, version_id: int) -> None:
     _validate_card_upgrades(db, version_id)
     _validate_passives(db, version_id)
     _validate_constants(db, version_id)
+    _validate_card_batch1_shape(db, version_id)
 
 
 def _validate_passives(db: Database, version_id: int) -> None:
@@ -170,6 +171,7 @@ def _validate_constants(db: Database, version_id: int) -> None:
             f"gacha_band_rarity_tiers에 희귀도 {sorted(missing)}이(가) 어느 "
             "등급에도 없습니다 — 그 희귀도의 카드는 영영 뽑히지 않습니다")
 
+
     share = float(get("gacha_passive_share_of_cards"))
     if not 0.0 <= share <= 1.0:
         raise ValidationError(
@@ -199,6 +201,126 @@ def _validate_constants(db: Database, version_id: int) -> None:
         raise ValidationError(
             "equipment_drop_tier_by_depth의 마지막 줄이 최대 깊이를 덮지 "
             "못합니다 — 그 깊이에서 장비 등급이 정해지지 않습니다")
+
+
+def _validate_card_batch1_shape(db: Database, version_id: int) -> None:
+    """Design Addendum A-2 — Card Batch 1 pool shape.
+
+    Off by default (`config/12_카드_배치1.toml`'s `batch1_shape_enforced`):
+    turning this on before Batch 1 is actually authored would fail every
+    existing placeholder content version, including the one this repo ships
+    seeded with today. A content owner flips it on once the roster reaches
+    the addendum's 12 in-gacha-pool characters and Batch 1 is authored.
+
+    Checked in aggregate, not per specific character: cards have no
+    character_id column, only an element, and several launch characters
+    share an element (§2.10 lets any character play any card of its own
+    element) — A-2.2 itself says "no per-character variance in this batch",
+    so the population-level count is the actual claim being made.
+    """
+    balance = _balance(db, version_id)
+    if not bool(balance.get("batch1_shape_enforced", False)):
+        return
+
+    from app.content.seed import CARD_BASIC_ATTACK, CARD_BASIC_DEFENSE, CARD_STARTER_SKILL
+
+    bands = balance.get("gacha_band_rarity_tiers")
+    basic_tiers = set(bands["base"])
+    mid_tiers = set(bands["mid"])
+    top_tiers = set(bands["top"])
+
+    characters = [dict(row) for row in db.query(
+        "SELECT character_id, element FROM characters WHERE content_version_id = ? "
+        "AND in_gacha_pool = 1 AND is_retired = 0", (version_id,))]
+    char_count = len(characters)
+    valid_elements = {c["element"] for c in characters}
+
+    # A-2.1's "excludes pre-unlocked 평타/기본방어"; the starter's own skill
+    # line is excluded the same way its character is (§4.6.1 — outside the
+    # gacha pool entirely, so it was never one of the "12 characters" A-2.1
+    # is counting).
+    excluded_ids = {CARD_BASIC_ATTACK, CARD_BASIC_DEFENSE, CARD_STARTER_SKILL}
+    cards = [dict(row) for row in db.query(
+        "SELECT * FROM cards WHERE content_version_id = ? AND is_retired = 0",
+        (version_id,))]
+    # 최고등급은 이 배치에서 아예 빠진다 (A-2.4) — 검사 대상에서도 뺀다.
+    eligible = [c for c in cards if c["card_id"] not in excluded_ids
+               and int(c["rarity_tier"]) not in top_tiers]
+
+    universal = [c for c in eligible if c["element"] == NEUTRAL_ELEMENT]
+    char_exclusive = [c for c in eligible if c["element"] != NEUTRAL_ELEMENT]
+
+    for card in char_exclusive:
+        if card["element"] not in valid_elements:
+            raise ValidationError(
+                f"card {card['card_id']!r}: 원소 {card['element']!r}에 해당하는 "
+                "가챠풀 캐릭터가 없습니다 (Design Addendum A-2.2)")
+        if int(card["cost"]) not in (2, 3):
+            raise ValidationError(
+                f"card {card['card_id']!r}: 캐릭터 전용 카드는 비용 2 또는 3만 "
+                f"허용됩니다 (Design Addendum A-2.2), got {card['cost']}")
+
+    expected_total = char_count * (
+        int(balance.get("batch1_char_exclusive_cost2_basic_per_character"))
+        + int(balance.get("batch1_char_exclusive_cost3_mid_per_character")))
+    if len(char_exclusive) != expected_total:
+        raise ValidationError(
+            f"캐릭터 전용 카드 {len(char_exclusive)}장 — 가챠풀 캐릭터 "
+            f"{char_count}명 기준 {expected_total}장이어야 합니다 "
+            "(Design Addendum A-2.1/A-2.2)")
+
+    cost2_basic = sum(1 for c in char_exclusive
+                      if int(c["cost"]) == 2 and int(c["rarity_tier"]) in basic_tiers)
+    expected_cost2_basic = char_count * int(
+        balance.get("batch1_char_exclusive_cost2_basic_per_character"))
+    if cost2_basic != expected_cost2_basic:
+        raise ValidationError(
+            f"캐릭터 전용 비용2·기본등급 카드 {cost2_basic}장 — "
+            f"{expected_cost2_basic}장이어야 합니다 (Design Addendum A-2.2)")
+
+    cost3_mid = sum(1 for c in char_exclusive
+                    if int(c["cost"]) == 3 and int(c["rarity_tier"]) in mid_tiers)
+    expected_cost3_mid = char_count * int(
+        balance.get("batch1_char_exclusive_cost3_mid_per_character"))
+    if cost3_mid != expected_cost3_mid:
+        raise ValidationError(
+            f"캐릭터 전용 비용3·중간등급 카드 {cost3_mid}장 — "
+            f"{expected_cost3_mid}장이어야 합니다 (Design Addendum A-2.2)")
+
+    expected_universal_total = int(balance.get("batch1_universal_total"))
+    if len(universal) != expected_universal_total:
+        raise ValidationError(
+            f"무속성 카드 {len(universal)}장 — 정확히 {expected_universal_total}장이어야 "
+            "합니다 (Design Addendum A-2.3)")
+
+    for card in universal:
+        if int(card["cost"]) not in (1, 2, 3):
+            raise ValidationError(
+                f"card {card['card_id']!r}: 무속성 카드는 비용 1~3만 허용됩니다 "
+                f"(Design Addendum A-2.3), got {card['cost']}")
+
+    cost_split = {int(cost): int(count)
+                 for cost, count in balance.get("batch1_universal_cost_split").items()}
+    for cost, expected_count in cost_split.items():
+        actual = sum(1 for c in universal if int(c["cost"]) == cost)
+        if actual != expected_count:
+            raise ValidationError(
+                f"무속성 카드 중 비용 {cost} {actual}장 — {expected_count}장이어야 "
+                "합니다 (Design Addendum A-2.3)")
+
+    universal_basic = sum(1 for c in universal if int(c["rarity_tier"]) in basic_tiers)
+    expected_universal_basic = int(balance.get("batch1_universal_basic_count"))
+    if universal_basic != expected_universal_basic:
+        raise ValidationError(
+            f"무속성 기본등급 카드 {universal_basic}장 — "
+            f"{expected_universal_basic}장이어야 합니다 (Design Addendum A-2.3)")
+
+    universal_mid = sum(1 for c in universal if int(c["rarity_tier"]) in mid_tiers)
+    expected_universal_mid = int(balance.get("batch1_universal_mid_count"))
+    if universal_mid != expected_universal_mid:
+        raise ValidationError(
+            f"무속성 중간등급 카드 {universal_mid}장 — "
+            f"{expected_universal_mid}장이어야 합니다 (Design Addendum A-2.3)")
 
 
 def _effects(raw: str) -> list[dict]:
