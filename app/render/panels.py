@@ -915,8 +915,9 @@ def render_map(nodes: list[dict], edges: list[tuple[int, int]], *,
                                 outline=theme.color("color_selectable"), width=2)
 
         # 칸 이름은 한 글자로 안에, 전체 이름은 아래에 적는다.
-        # "보상"과 "보스"는 첫 글자가 겹쳐 구분이 되지 않으므로 보스만 따로 쓴다.
-        head_letter = "王" if is_boss else node_type[:1]
+        # "보상"과 "보스"는 첫 글자가 겹쳐 구분이 되지 않으므로 보스는
+        # 마지막 글자를 쓴다 — 한자를 섞지 않고 한글만으로 구분한다.
+        head_letter = node_type[-1] if is_boss else node_type[:1]
         offset = canvas.draw.textlength(head_letter, font=canvas.font("body")) / 2
         canvas.draw.text((x - offset, y - 11), head_letter, font=canvas.font("body"),
                          fill=theme.color("color_background")
@@ -1367,62 +1368,120 @@ def render_hub(dashboard: dict, *, coin: int | None, daily: dict,
     display_name, silver, characters_owned/total, party_slots_max,
     passive_slots_max, achievements_completed/total, portrait_character_id.
 
-    허브 화면은 원래 글자만 있었다. 다른 화면은 전부 그림 한 장을 붙이는데
-    여기만 빠져 있었던 이유는 그릴 만한 '내용물'(카드·캐릭터·지도)이 없기
-    때문이었다 — 그래서 대표 캐릭터 초상 하나와 숫자들을 패널로 그린다.
+    세 층으로 나눠 위계를 세운다 — ① 프로필(초상+이름+재화), ②
+    진행도(캐릭터·파티·패시브·업적, 게이지 포함), ③ 출석(하나의 배너
+    카드). 예전 판은 이 전부가 굵기·크기 구분 없는 텍스트 한 덩어리였다.
     """
-    canvas = Canvas(theme_module.load().size("panel_size"))
+    theme = theme_module.load()
+    canvas = Canvas(theme.size("hub_size"), tint="color_tint_hub")
     canvas.title("덱아웃", right=str(dashboard.get("display_name") or ""))
 
-    top = 56
+    top = 52
     if note:
-        canvas.label((canvas.pad, top), note[:60], role="small", color=canvas.muted)
+        canvas.label((canvas.pad, top), note[:70], role="small", color=canvas.muted)
         top += 22
 
-    portrait_size = (96, 96)
+    # ── ① 프로필 패널 — 원형 초상 + 이름 + 재화 배지 한 줄 ──────────────
+    profile_h = 96
+    profile_box = (canvas.pad, top, canvas.width - canvas.pad, top + profile_h)
+    kit.panel(canvas.image, profile_box, top=canvas.panel_top, bottom=canvas.panel,
+             radius=canvas.radius, border=canvas.border)
+
+    portrait_d = 72
+    px, py = canvas.pad + 14, top + (profile_h - portrait_d) // 2
     portrait = canvas.assets.art(
         "character", str(dashboard.get("portrait_character_id") or ""),
-        label="", size=portrait_size)
-    canvas.paste(portrait, (canvas.pad, top))
-    canvas.draw.rectangle(
-        [canvas.pad, top, canvas.pad + portrait_size[0] - 1,
-         top + portrait_size[1] - 1], outline=canvas.accent, width=2)
+        label="", size=(portrait_d, portrait_d))
+    disc = Image.new("RGBA", (portrait_d, portrait_d), (0, 0, 0, 0))
+    disc.paste(portrait, (0, 0))
+    disc.putalpha(kit.rounded_mask((portrait_d, portrait_d), portrait_d // 2))
+    canvas.paste(disc, (px, py))
+    canvas.draw.ellipse((px, py, px + portrait_d, py + portrait_d),
+                        outline=canvas.accent, width=2)
 
-    text_left = canvas.pad + portrait_size[0] + 18
+    name_left = px + portrait_d + 22
+    name = str(dashboard.get("display_name") or "플레이어")
+    name_font = canvas.theme.font(canvas.theme.int_("font_size_title") - 4)
+    canvas.draw.text((name_left, top + 14), kit.truncate(
+        canvas.draw, name, name_font, canvas.width - canvas.pad - name_left - 20),
+        font=name_font, fill=canvas.text)
+
     silver = dashboard.get("silver")
-    silver_text = f"실버 {silver}" if silver is not None else "실버 —"
-    coin_text = f"코인 {coin}" if coin is not None else "코인 —"
-    canvas.label((text_left, top), f"{coin_text} · {silver_text}", color=canvas.accent)
-    canvas.label((text_left, top + 24),
-                 f"카르타 {dashboard.get('carta', 0)} · "
-                 f"와일드카드 {dashboard.get('wildcards', 0)}")
-    canvas.label(
-        (text_left, top + 48),
-        f"캐릭터 {dashboard.get('characters_owned', 0)}/"
-        f"{dashboard.get('characters_total', 0)}", role="small", color=canvas.muted)
-    canvas.label(
-        (text_left, top + 70),
-        f"파티 슬롯 {dashboard.get('party_slots', 0)}/"
-        f"{dashboard.get('party_slots_max', 0)} 해금 · "
-        f"패시브 슬롯 {dashboard.get('passive_slots', 0)}/"
-        f"{dashboard.get('passive_slots_max', 0)} 해금", role="small",
-        color=canvas.muted)
-    canvas.label(
-        (text_left, top + 92),
-        f"업적 {dashboard.get('achievements_completed', 0)}/"
-        f"{dashboard.get('achievements_total', 0)}", role="small", color=canvas.muted)
+    currencies = [
+        ("코인", str(coin) if coin is not None else "—"),
+        ("실버", str(silver) if silver is not None else "—"),
+        ("카르타", str(dashboard.get("carta", 0))),
+        ("와일드카드", str(dashboard.get("wildcards", 0))),
+    ]
+    small = canvas.font("small")
+    cx = name_left
+    cy = top + profile_h - 34
+    for label, value in currencies:
+        w = canvas.pill((cx, cy), f"{label} {value}", role="small",
+                        color=canvas.accent, back=theme.color("color_accent_back"),
+                        border=theme.color("color_accent_dark"))
+        cx += w + 8
+        if cx > canvas.width - canvas.pad - 90:
+            break
 
-    daily_top = top + portrait_size[1] + 20
-    if daily.get("claimable"):
-        reward = daily.get("reward", {})
-        canvas.label((canvas.pad, daily_top),
-                     f"출석 {daily.get('streak', 0)}일째 — 받을 것: "
-                     f"코인 {reward.get('coin', 0)} · "
-                     f"카르타 {reward.get('carta', 0)}", color=canvas.accent)
+    # ── ② 진행도 — 캐릭터·파티·패시브·업적을 같은 모양 타일 네 개로 ───
+    stats_top = top + profile_h + canvas.gap
+    tiles = [
+        ("캐릭터", int(dashboard.get("characters_owned", 0)),
+         int(dashboard.get("characters_total", 0)) or 1),
+        ("파티 슬롯", int(dashboard.get("party_slots", 0)),
+         int(dashboard.get("party_slots_max", 0)) or 1),
+        ("패시브 슬롯", int(dashboard.get("passive_slots", 0)),
+         int(dashboard.get("passive_slots_max", 0)) or 1),
+        ("업적", int(dashboard.get("achievements_completed", 0)),
+         int(dashboard.get("achievements_total", 0)) or 1),
+    ]
+    tile_h = 78
+    tile_w = (canvas.width - canvas.pad * 2 - canvas.gap * (len(tiles) - 1)) // len(tiles)
+    for index, (label, owned, total) in enumerate(tiles):
+        tx = canvas.pad + index * (tile_w + canvas.gap)
+        box = (tx, stats_top, tx + tile_w, stats_top + tile_h)
+        kit.panel(canvas.image, box, top=canvas.panel_top, bottom=canvas.panel,
+                 radius=canvas.radius, border=canvas.border, shadow=False)
+        canvas.label((tx + 12, stats_top + 10), label, role="small", color=canvas.muted)
+        value_font = canvas.theme.font(canvas.theme.int_("font_size_title") - 6)
+        canvas.draw.text((tx + 12, stats_top + 28), f"{owned}/{total}",
+                         font=value_font, fill=canvas.text)
+        gauge_box = (tx + 12, stats_top + tile_h - 16, tx + tile_w - 12,
+                    stats_top + tile_h - 10)
+        kit.gauge(canvas.image, gauge_box, owned / total,
+                 high=theme.color("color_hp_full"), low=theme.color("color_hp_full_low"),
+                 back=theme.color("color_gauge_back"))
+
+    # ── ③ 출석 배너 — 받을 게 있으면 강조, 아니면 눌러 앉힌다 ──────────
+    daily_top = stats_top + tile_h + canvas.gap
+    daily_h = canvas.height - canvas.pad - daily_top
+    daily_box = (canvas.pad, daily_top, canvas.width - canvas.pad,
+                daily_top + max(48, daily_h))
+    claimable = bool(daily.get("claimable"))
+    if claimable:
+        kit.panel(canvas.image, daily_box, top=kit.mix(canvas.panel_top, canvas.accent, 0.22),
+                 bottom=kit.mix(canvas.panel, canvas.accent, 0.10),
+                 radius=canvas.radius, border=canvas.accent)
     else:
-        canvas.label((canvas.pad, daily_top),
-                     f"출석 {daily.get('streak', 0)}일째 — 오늘 것은 받았습니다.",
-                     role="small", color=canvas.muted)
+        kit.panel(canvas.image, daily_box, top=canvas.panel_top, bottom=canvas.panel,
+                 radius=canvas.radius, border=canvas.border, shadow=False)
+
+    streak = daily.get("streak", 0)
+    if claimable:
+        reward = daily.get("reward", {})
+        canvas.draw.text((canvas.pad + 16, daily_top + 12), f"출석 {streak}일째",
+                         font=canvas.font("body"), fill=canvas.text)
+        canvas.draw.text(
+            (canvas.pad + 16, daily_top + 34),
+            f"받을 것 — 코인 {reward.get('coin', 0)} · 카르타 {reward.get('carta', 0)}",
+            font=canvas.font("small"), fill=canvas.accent)
+    else:
+        canvas.draw.text(
+            (canvas.pad + 16, daily_top + (daily_box[3] - daily_top) // 2 - 9),
+            f"출석 {streak}일째 — 오늘 것은 받았습니다.",
+            font=canvas.font("small"), fill=canvas.muted)
+
     return canvas.finish("deckout_hub.png")
 
 
