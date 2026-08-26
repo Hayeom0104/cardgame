@@ -158,28 +158,67 @@ def test_display_name_falls_back_when_central_has_no_known_key(db, balance, vers
     assert handlers.display_name(ctx, 999) == "플레이어 999"
 
 
-def test_quick_action_buttons_cover_every_documented_action(ctx, graduated_user):
+def _tree_codes(screen: dict) -> set[str]:
+    """트리 버튼 코드만 — 출석 보상 등 트리 밖 버튼은 뺀다."""
+    tree_codes = {"st", "mg", "shc"} | set(handlers._HUB_CATEGORIES) \
+        | {code for children in handlers._HUB_CATEGORIES.values()
+           for code, _ in children} | {handlers._HUB_BACK_ACTION}
+    return {c["custom_id"].split(":")[2] for c in screen["components"]
+           if c["custom_id"].startswith(hub.HUB_PREFIX)
+           and c["custom_id"].split(":")[2] in tree_codes}
+
+
+def test_the_hub_tree_top_level_is_start_and_two_categories(ctx, graduated_user):
+    """오너 지시로 짠 트리 — [시작]은 최상위, 나머지는 [관리]/[상점] 밑에."""
     screen = handlers.hub_screen(ctx, graduated_user)
-    codes = {c["custom_id"].split(":")[2] for c in screen["components"]
-            if c["custom_id"].startswith(hub.HUB_PREFIX)
-            and c["custom_id"].split(":")[2] in dict(handlers._QUICK_ACTION_BUTTONS)}
-    assert codes == {"st", "dk", "gc", "ch", "rs", "sp", "ac"}
+    assert _tree_codes(screen) == {"st", "mg", "shc"}
 
 
-def test_someone_else_cannot_click_your_quick_action_button(ctx, graduated_user):
+def test_every_documented_leaf_action_is_reachable_through_the_tree(ctx, graduated_user):
+    screen = handlers.hub_screen(ctx, graduated_user)
+    mg_button = next(c["custom_id"] for c in screen["components"]
+                     if c["custom_id"].startswith(f"{hub.HUB_PREFIX}mg:"))
+    management = handlers.handle_interaction(ctx, _interaction(graduated_user, mg_button))
+    mg_codes = {c["custom_id"].split(":")[2] for c in management["components"]}
+    assert mg_codes == {"dk", "ch", "rs", "eq", "ac", "hb"}
+
+    shc_button = next(c["custom_id"] for c in screen["components"]
+                      if c["custom_id"].startswith(f"{hub.HUB_PREFIX}shc:"))
+    shop = handlers.handle_interaction(ctx, _interaction(graduated_user, shc_button))
+    shop_codes = {c["custom_id"].split(":")[2] for c in shop["components"]}
+    assert shop_codes == {"sp", "gc", "hb"}
+
+
+def test_the_back_button_restores_the_top_level_tree(ctx, graduated_user):
+    screen = handlers.hub_screen(ctx, graduated_user)
+    mg_button = next(c["custom_id"] for c in screen["components"]
+                     if c["custom_id"].startswith(f"{hub.HUB_PREFIX}mg:"))
+    management = handlers.handle_interaction(ctx, _interaction(graduated_user, mg_button))
+    back_button = next(c["custom_id"] for c in management["components"]
+                       if c["custom_id"].startswith(f"{hub.HUB_PREFIX}hb:"))
+
+    restored = handlers.handle_interaction(ctx, _interaction(graduated_user, back_button))
+    assert _tree_codes(restored) == {"st", "mg", "shc"}
+
+
+def test_someone_else_cannot_click_your_category_button(ctx, graduated_user):
     other_id = graduated_user + 1
     screen = handlers.hub_screen(ctx, graduated_user)
-    deck_button = next(c["custom_id"] for c in screen["components"]
-                       if c["custom_id"].startswith(f"{hub.HUB_PREFIX}dk:"))
+    mg_button = next(c["custom_id"] for c in screen["components"]
+                     if c["custom_id"].startswith(f"{hub.HUB_PREFIX}mg:"))
 
-    reply = handlers.handle_interaction(ctx, _interaction(other_id, deck_button))
+    reply = handlers.handle_interaction(ctx, _interaction(other_id, mg_button))
     assert reply["action"] == "reply_ephemeral"
     assert reply["content"] == errors.NOT_OWNER
 
 
 def test_the_deck_quick_action_matches_the_text_command(ctx, graduated_user):
+    """[관리] 하위의 [덱 관리]가 `!덱아웃 덱`과 같은 화면을 부르는지."""
     screen = handlers.hub_screen(ctx, graduated_user)
-    deck_button = next(c["custom_id"] for c in screen["components"]
+    mg_button = next(c["custom_id"] for c in screen["components"]
+                     if c["custom_id"].startswith(f"{hub.HUB_PREFIX}mg:"))
+    management = handlers.handle_interaction(ctx, _interaction(graduated_user, mg_button))
+    deck_button = next(c["custom_id"] for c in management["components"]
                        if c["custom_id"].startswith(f"{hub.HUB_PREFIX}dk:"))
 
     via_button = handlers.handle_interaction(ctx, _interaction(graduated_user, deck_button))
@@ -223,3 +262,30 @@ def test_other_commands_stay_blocked_even_with_a_tutorial_run_active(ctx, db):
     screen = handlers.handle_message(ctx, _message(fresh_id, "뽑기"))
     assert screen["action"] == "reply_ephemeral"
     assert screen["content"] == errors.TUTORIAL_NOT_CLEARED
+
+
+def test_the_hub_only_shows_start_before_the_tutorial_is_cleared(ctx, db):
+    """`_ALLOWED_BEFORE_TUTORIAL`은 텍스트 명령만 막는다 — 허브 버튼은
+    `hub.handle_hub`가 화면 함수를 직접 불러 그 게이트를 건너뛰므로, 화면
+    자체가 [관리]/[상점] 카테고리를 아예 보여주지 않아야 한다.
+
+    진행 중인 튜토리얼 런이 있으면 허브는 대시보드가 아니라 스레드로
+    redirect한다(§16.3) — 그 화면엔 애초에 버튼이 없다. 여기서 보려는 건
+    런이 없는 상태(예: 튜토리얼을 포기한 뒤)의 대시보드 버튼이다.
+    """
+    fresh_id = 810202
+    create_account(db, fresh_id, ctx.content_version_id)
+
+    screen = handlers.hub_screen(ctx, fresh_id)
+    assert _tree_codes(screen) == {"st"}
+
+
+def test_a_forged_category_button_is_still_rejected_before_the_tutorial(ctx, db):
+    """화면이 안 보여줘도 custom_id는 위조할 수 있으니 서버에서도 막는다."""
+    fresh_id = 810203
+    create_account(db, fresh_id, ctx.content_version_id)
+    forged = f"{hub.HUB_PREFIX}mg:{cid.to_base36(fresh_id)}"
+
+    reply = handlers.handle_interaction(ctx, _interaction(fresh_id, forged))
+    assert reply["action"] == "reply_ephemeral"
+    assert reply["content"] == errors.TUTORIAL_NOT_CLEARED

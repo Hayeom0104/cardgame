@@ -646,21 +646,69 @@ def help_screen() -> dict:
     return _reply(_HELP_TEXT)
 
 
-#: A-1.2 허브 대시보드의 빠른 실행 버튼. 순서가 그대로 화면 순서다 — 문서는
-#: 4+3 두 줄로 나누지만, 버튼을 실제 액션 로우로 나누는 `to_action_rows`는
-#: 5개씩 자동으로 채운다(§1.3.7). 순서는 그대로 지키고 정확한 줄 나눔은
-#: 눈으로 보는 사소한 차이로 남겨 둔다.
-_QUICK_ACTION_BUTTONS = (
-    ("st", "시작"), ("dk", "덱 관리"), ("gc", "뽑기"), ("ch", "캐릭터"),
-    ("rs", "연구"), ("sp", "상점"), ("ac", "업적"),
+#: A-1.2 허브 대시보드의 버튼 트리. 오너 지시로 UI를 트리 구조로 다시 짰다 —
+#: [시작]만 최상위에 바로 서고, 나머지는 [관리]/[상점] 두 카테고리를 눌러야
+#: 펼쳐진다. 예전엔 7개(장비·업적 포함하면 사실상 9개가 되어야 했던 것을
+#: 7개까지만 넣고 장비는 아예 빠져 있었다) 버튼이 한 줄에 쭉 늘어서 있었다.
+#:
+#:     시작
+#:     관리     → 덱 관리 · 캐릭터 · 연구 · 장비 · 업적
+#:     상점     → 상점 · 뽑기
+#:
+#: 각 항목은 (코드, 라벨, 자식들). 자식이 None이면 최상위에서 곧장 화면을
+#: 부르는 잎(leaf)이고, 자식이 있으면 카테고리라 눌러도 화면을 부르지
+#: 않고 하위 버튼 목록만 보여준다 (`hub.handle_hub`의 `_CATEGORY_LABELS`).
+#: 코드는 `hub._QUICK_ACTIONS`의 키와 정확히 맞아야 한다 — 카테고리 밑에
+#: 있든 최상위에 있든, 눌렸을 때 어느 화면을 부를지는 코드 하나로 정해진다.
+_HUB_TREE: tuple[tuple[str, str, tuple[tuple[str, str], ...] | None], ...] = (
+    ("st", "시작", None),
+    ("mg", "관리", (
+        ("dk", "덱 관리"), ("ch", "캐릭터"), ("rs", "연구"),
+        ("eq", "장비"), ("ac", "업적"),
+    )),
+    ("shc", "상점", (
+        ("sp", "상점"), ("gc", "뽑기"),
+    )),
 )
 
+#: 카테고리 코드 → 자식 목록. `hub.py`가 다시 뒤지지 않도록 미리 뽑아 둔다.
+_HUB_CATEGORIES: dict[str, tuple[tuple[str, str], ...]] = {
+    code: children for code, _, children in _HUB_TREE if children is not None
+}
 
-def _quick_action_components(user_id: int) -> list[dict]:
+#: 카테고리 코드 → 표시 라벨("관리", "상점"). 하위 화면 프롬프트에 쓴다.
+_HUB_CATEGORY_LABELS: dict[str, str] = {
+    code: label for code, label, children in _HUB_TREE if children is not None
+}
+
+#: 뒤로 가기 버튼의 코드. 허브 트리 코드와 겹치지 않아야 한다.
+_HUB_BACK_ACTION = "hb"
+
+
+def _quick_action_components(user_id: int, *, tutorial_cleared: bool = True) -> list[dict]:
+    """최상위 트리 — [시작]과 두 카테고리 버튼.
+
+    튜토리얼을 마치기 전에는 [시작]만 남긴다 — `handle_message`의
+    `_ALLOWED_BEFORE_TUTORIAL` 게이트는 텍스트 명령만 막고, 허브 버튼은
+    `hub.handle_hub`가 화면 함수를 직접 불러 그 게이트를 건너뛴다. 버튼을
+    안 보여주지 않으면 강제 튜토리얼이 클릭 한 번으로 뚫린다.
+    """
     target = cid.to_base36(user_id)
-    return [{"type": "button", "custom_id": f"{hub.HUB_PREFIX}{action}:{target}",
-            "label": label}
-            for action, label in _QUICK_ACTION_BUTTONS]
+    tree = _HUB_TREE if tutorial_cleared else _HUB_TREE[:1]
+    return [{"type": "button", "custom_id": f"{hub.HUB_PREFIX}{code}:{target}",
+            "label": label} for code, label, _ in tree]
+
+
+def _hub_category_components(user_id: int, category_code: str) -> list[dict]:
+    """카테고리를 펼쳤을 때의 하위 버튼 + 맨 끝에 뒤로 가기."""
+    target = cid.to_base36(user_id)
+    children = _HUB_CATEGORIES[category_code]
+    buttons = [{"type": "button", "custom_id": f"{hub.HUB_PREFIX}{code}:{target}",
+               "label": label} for code, label in children]
+    buttons.append({"type": "button",
+                    "custom_id": f"{hub.HUB_PREFIX}{_HUB_BACK_ACTION}:{target}",
+                    "label": "◀ 뒤로"})
+    return buttons
 
 
 def gacha_screen_action(ctx: HandlerContext, user_id: int) -> dict:
@@ -712,7 +760,8 @@ def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
         lines.append("튜토리얼이 아직 남아 있습니다. `!덱아웃 시작`")
 
     daily = att.status(ctx.db, ctx.balance, user_id=user_id)
-    components = list(_quick_action_components(user_id))
+    components = list(_quick_action_components(
+        user_id, tutorial_cleared=account["tutorial_completed_at"] is not None))
     if daily["claimable"]:
         reward = daily["reward"]
         lines.append(

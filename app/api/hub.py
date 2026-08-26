@@ -41,7 +41,7 @@ HUB_PREFIX = "dko:hub:"
 _QUICK_ACTIONS = {
     "st": "start_run", "dk": "deck_screen", "gc": "gacha_screen_action",
     "ch": "characters_screen", "rs": "research_screen", "sp": "hub_shop_screen",
-    "ac": "achievements_screen",
+    "ac": "achievements_screen", "eq": "equipment_screen",
 }
 
 
@@ -71,12 +71,35 @@ def handle_hub(ctx, user_id: int, custom_id: str, values: list[str], *,
     chosen = values[0] if values else argument
 
     # A-1.1/A-1.2 — 공개 메시지에 뜨는 버튼이므로 소유권을 직접 대조한다.
-    if action == "join" or action in _QUICK_ACTIONS:
+    # 트리 버튼(카테고리 열기·뒤로 가기)도 같은 공개 메시지 위에 있으므로
+    # 여기서 함께 대조한다.
+    is_tree_nav = (action in handlers._HUB_CATEGORIES
+                   or action == handlers._HUB_BACK_ACTION)
+    if action == "join" or action in _QUICK_ACTIONS or is_tree_nav:
         target = _user_from_payload(argument)
         if target is None or target != user_id:
             return {"action": "reply_ephemeral", "content": errors.NOT_OWNER}
         if action == "join":
             return handlers.handle_join(ctx, user_id)
+        if action == handlers._HUB_BACK_ACTION:
+            # 카테고리를 펼친 뒤 취소 — 대시보드 화면 전체를 다시 그린다.
+            screen = handlers.hub_screen(ctx, user_id)
+            return {**screen, "action": "edit"} if screen.get("action") == "reply" \
+                else screen
+        # 강제 튜토리얼 (§4.6.5) — 화면은 튜토리얼을 마치기 전엔 [시작]만
+        # 보여주지만(handlers._quick_action_components), custom_id는 위조할
+        # 수 있으니 여기서도 다시 막는다. [시작] 자체는 예외다.
+        if action != "st":
+            account = ctx.db.one("SELECT tutorial_completed_at FROM accounts "
+                                 "WHERE user_id = ?", (user_id,))
+            if account is None or account["tutorial_completed_at"] is None:
+                return {"action": "reply_ephemeral", "content": errors.TUTORIAL_NOT_CLEARED}
+        if action in handlers._HUB_CATEGORIES:
+            # 카테고리 버튼 — 화면은 그대로 두고(그림도 다시 그리지 않는다)
+            # 버튼 줄만 하위 목록 + 뒤로 가기로 바꿔 끼운다.
+            label = handlers._HUB_CATEGORY_LABELS[action]
+            return {"action": "edit", "content": f"**{label}** — 하나를 고르세요.",
+                    "components": handlers._hub_category_components(user_id, action)}
         screen = getattr(handlers, _QUICK_ACTIONS[action])(ctx, user_id)
         # 대부분의 대상 화면은 공개 응답이라 눌린 메시지를 그대로 바꿔
         # 끼운다. [시작]만은 준비 흐름이 ephemeral일 수 있다(§16.2.2) —
