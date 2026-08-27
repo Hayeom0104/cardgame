@@ -278,6 +278,104 @@ def stars(draw: ImageDraw.ImageDraw, xy: tuple[int, int], count: int, cap: int,
 
 
 # ---------------------------------------------------------------------------
+# 작은 아이콘 — 글자 대신 쓰는 단순 도형
+#
+# 번들 글꼴에 없는 유니코드 심볼(⚑✓◆ 등)은 `sanitize()`가 걸러 내므로
+# 텍스트로 아이콘을 흉내 낼 수 없다. 대신 선·원·다각형만으로 작게 그린다.
+# ---------------------------------------------------------------------------
+
+
+def icon_person(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int],
+                color: Color) -> None:
+    """사람 하나 — 머리(원) + 어깨(반원)."""
+    x0, y0, x1, y1 = box
+    w, h = x1 - x0, y1 - y0
+    cx = x0 + w / 2
+    head_r = w * 0.19
+    head_cy = y0 + h * 0.30
+    draw.ellipse((cx - head_r, head_cy - head_r, cx + head_r, head_cy + head_r),
+                 fill=color)
+    shoulder_w = w * 0.62
+    draw.pieslice((cx - shoulder_w / 2, y0 + h * 0.46,
+                  cx + shoulder_w / 2, y0 + h * 1.15), 180, 360, fill=color)
+
+
+def icon_group(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int],
+               color: Color) -> None:
+    """사람 둘 — 겹친 원 두 개로 "파티"를 나타낸다."""
+    x0, y0, x1, y1 = box
+    w, h = x1 - x0, y1 - y0
+    r = w * 0.22
+    ly, ry = y0 + h * 0.62, y0 + h * 0.62
+    draw.ellipse((x0 + w * 0.18 - r, ly - r, x0 + w * 0.18 + r, ly + r), fill=color)
+    draw.ellipse((x0 + w * 0.62 - r, ry - r, x0 + w * 0.62 + r, ry + r), fill=color)
+    small = r * 0.72
+    top = y0 + h * 0.20
+    draw.ellipse((x0 + w * 0.40 - small, top - small,
+                 x0 + w * 0.40 + small, top + small), fill=color)
+
+
+def icon_gem(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int],
+            color: Color) -> None:
+    """마름모 — 와일드카드처럼 "재료"를 나타내는 범용 보석 모양."""
+    x0, y0, x1, y1 = box
+    w, h = x1 - x0, y1 - y0
+    cx, cy = x0 + w / 2, y0 + h / 2
+    draw.polygon([(cx, y0), (x1, cy), (cx, y1), (x0, cy)], fill=color)
+
+
+def icon_flag(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int],
+             color: Color) -> None:
+    """깃발 — 장대(세로 선) + 삼각 깃발."""
+    x0, y0, x1, y1 = box
+    w, h = x1 - x0, y1 - y0
+    pole_x = x0 + w * 0.22
+    draw.line((pole_x, y0, pole_x, y1), fill=color, width=max(1, round(w * 0.09)))
+    draw.polygon([(pole_x, y0), (x1, y0 + h * 0.32), (pole_x, y0 + h * 0.58)],
+                fill=color)
+
+
+def icon_shield(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int],
+                color: Color) -> None:
+    """방패 — 슬롯·강화처럼 "지키는 자리"를 나타낸다."""
+    x0, y0, x1, y1 = box
+    w, h = x1 - x0, y1 - y0
+    cx = x0 + w / 2
+    draw.polygon([
+        (cx, y0), (x1, y0 + h * 0.18), (x1, y0 + h * 0.55),
+        (cx, y1), (x0, y0 + h * 0.55), (x0, y0 + h * 0.18),
+    ], fill=color)
+
+
+def icon_check_badge(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int],
+                     color: Color, *, ring: Color | None = None) -> None:
+    """원 안에 체크 — 업적처럼 "완료"를 나타낸다."""
+    x0, y0, x1, y1 = box
+    draw.ellipse(box, fill=color, outline=ring, width=1 if ring else 0)
+    w, h = x1 - x0, y1 - y0
+    draw.line([(x0 + w * 0.26, y0 + h * 0.52), (x0 + w * 0.44, y0 + h * 0.70),
+              (x0 + w * 0.76, y0 + h * 0.30)],
+             fill=(255, 255, 255), width=max(1, round(w * 0.12)), joint="curve")
+
+
+def icon_calendar(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int],
+                  color: Color, *, back: Color) -> None:
+    """달력 — 몸통 + 위쪽 탭 둘 + 머리띠 줄. 출석에 쓴다."""
+    x0, y0, x1, y1 = box
+    w, h = x1 - x0, y1 - y0
+    body_top = y0 + h * 0.22
+    draw.rounded_rectangle((x0, body_top, x1, y1), radius=max(1, round(w * 0.12)),
+                           fill=back, outline=color, width=max(1, round(w * 0.07)))
+    draw.line((x0, body_top + h * 0.20, x1, body_top + h * 0.20),
+             fill=color, width=max(1, round(w * 0.05)))
+    tab_w = max(1, round(w * 0.07))
+    draw.line((x0 + w * 0.24, y0, x0 + w * 0.24, body_top + h * 0.05),
+             fill=color, width=tab_w)
+    draw.line((x1 - w * 0.24, y0, x1 - w * 0.24, body_top + h * 0.05),
+             fill=color, width=tab_w)
+
+
+# ---------------------------------------------------------------------------
 # 그림이 없을 때
 # ---------------------------------------------------------------------------
 

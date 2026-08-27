@@ -143,6 +143,59 @@ def test_the_dashboard_shows_the_nickname_from_central(ctx, graduated_user):
     assert name == "테스트유저"
 
 
+def test_the_hub_fetches_the_profile_picture_when_central_provides_one(
+        ctx, db, monkeypatch):
+    """오너 요청 — 대표 캐릭터 그림 대신 실제 프로필 사진을 초상으로 쓴다."""
+    from PIL import Image
+
+    from app.central import avatar as av
+
+    user_id = 810105
+    create_account(db, user_id, ctx.content_version_id)
+    db.execute("UPDATE accounts SET tutorial_completed_at = ? WHERE user_id = ?",
+              ("2026-01-01T00:00:00+00:00", user_id))
+    ctx.central.profile = {"balance": 500, "username": "테스트유저",
+                           "avatar_url": "https://cdn.example/a.png"}
+
+    calls = []
+
+    def fake_fetch(url):
+        calls.append(url)
+        return Image.new("RGBA", (32, 32), (10, 20, 30, 255))
+
+    monkeypatch.setattr(av, "fetch_avatar", fake_fetch)
+    screen = handlers.hub_screen(ctx, user_id)
+
+    assert calls == ["https://cdn.example/a.png"]
+    assert screen["attachments"], "프로필 사진이 있어도 화면 그림은 나가야 합니다"
+
+
+def test_the_hub_falls_back_silently_when_the_profile_has_no_avatar(ctx, graduated_user):
+    """흔한 후보 키 중 아무것도 없으면(연동 가이드 필드 미확인) 조용히
+    기존 캐릭터 그림으로 물러난다 — 예외를 올리지 않는다."""
+    screen = handlers.hub_screen(ctx, graduated_user)
+    assert screen["attachments"]
+
+
+def test_a_broken_avatar_fetch_never_breaks_the_hub_screen(ctx, db, monkeypatch):
+    """§11 — 그림 준비 중 무엇이 터져도 화면은 나가야 한다."""
+    from app.central import avatar as av
+
+    user_id = 810106
+    create_account(db, user_id, ctx.content_version_id)
+    db.execute("UPDATE accounts SET tutorial_completed_at = ? WHERE user_id = ?",
+              ("2026-01-01T00:00:00+00:00", user_id))
+    ctx.central.profile = {"balance": 500, "username": "테스트유저",
+                           "avatar_url": "https://cdn.example/a.png"}
+
+    def boom(url):
+        raise RuntimeError("network is on fire")
+
+    monkeypatch.setattr(av, "fetch_avatar", boom)
+    screen = handlers.hub_screen(ctx, user_id)
+    assert screen["attachments"]
+
+
 def test_the_hub_fetches_the_central_profile_only_once(ctx, graduated_user, central):
     """R3 M-01 — the coin line and the A-1.2 dashboard used to each call
     `GET /v1/users/{id}` separately, pushing a slow Central over the 2.5s

@@ -20,6 +20,7 @@ from app.api import controls, errors, hub, visuals
 from app.api import events as ev
 from app.api.gates import GateError, RunExpiredError, StaleComponentError, check_gates
 from app.api import screens
+from app.central import avatar as av
 from app.central import delivery, surfaces
 from app.config import settings
 from app.content.balance import Balance
@@ -795,10 +796,21 @@ def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
         "portrait_character_id": STARTER_CHARACTER_ID,   # A-1.4 — 대표 캐릭터 미도입
     }
 
+    # 오너 요청 — 대표 캐릭터 그림 대신 실제 프로필 사진을 초상으로 쓴다.
+    # 못 받아도(연동 가이드에 필드가 없거나, 응답이 느리거나, 그림이 아니면)
+    # 조용히 기존 캐릭터 그림으로 물러난다 — 화면은 항상 나가야 한다(§11).
+    avatar_image = None
+    try:
+        url = av.avatar_url(profile)
+        if url:
+            avatar_image = av.fetch_avatar(url)
+    except Exception:                                        # noqa: BLE001
+        logger.info("프로필 사진을 준비하지 못했습니다 (user %s)", user_id)
+
     screen = _reply("\n".join(lines), components)
     screen["attachments"] = visuals.hub(
         dashboard, coin=coin_balance(ctx, user_id, profile=profile), daily=daily,
-        note=note)
+        note=note, avatar_image=avatar_image)
     return screen
 
 

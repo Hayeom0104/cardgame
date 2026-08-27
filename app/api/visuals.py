@@ -404,9 +404,9 @@ def join_promo() -> list[dict]:
 # 허브 — 요약, 캐릭터, 장비, 연구, 업적
 # =====================================================================
 def hub(dashboard: dict, *, coin: int | None, daily: dict,
-       note: str | None = None) -> list[dict]:
+       note: str | None = None, avatar_image=None) -> list[dict]:
     return safely(lambda: attach(panels.render_hub(
-        dashboard, coin=coin, daily=daily, note=note)))
+        dashboard, coin=coin, daily=daily, note=note, avatar_image=avatar_image)))
 
 
 def characters(rows: list[dict]) -> list[dict]:
