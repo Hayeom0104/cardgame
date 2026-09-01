@@ -701,34 +701,37 @@ def render_battle_screen(ally_units: list[dict], enemy_units: list[dict],
                          ) -> list[Attachment]:
     """§1.3.7 — 중앙봇은 한 action 에 PNG 두 장까지만 받는다.
 
-    한 장은 **전투 참가자**(적·아군, 그 아래 최근 로그), 다른 한 장은
-    **이번 턴에 쓸 것**(손패·장착 패시브·자원)으로 나눈다 — "누가
-    싸우는가"와 "내가 뭘 낼 수 있는가"는 서로 다른 질문이라, 한 장에
-    아군과 손패를 섞어 두면 어느 쪽을 보려는지 매번 다시 찾아야 했다."""
+    한 장은 **전황**(적 + 최근 로그) — "누가 싸우는가, 무슨 일이 있었는가".
+    다른 한 장은 **내 턴**(아군 + 손패·장착 패시브·자원) — "내가 뭘 낼 수
+    있는가". 오너 지시로 이 두 장을 이 조합으로 다시 나눴다 — 아군 상태와
+    손을 같은 장에 두어야 "지금 이 카드로 뭘 할 수 있나"를 한 장만 보고
+    판단할 수 있다.
+    """
     theme = theme_module.load()
     assets = AssetLibrary(theme)
     size = theme.size("panel_size")
 
     enemy_image = render_enemy_panel(
         enemy_units, telegraphs, canvas=Canvas(size, theme, assets))
+    log_image = _render_log_strip(theme, size[0], log or [])
+    situation = Image.new("RGB", (size[0], size[1] + log_image.height),
+                          theme.color("color_background"))
+    situation.paste(enemy_image, (0, 0))
+    situation.paste(log_image, (0, size[1]))
+
     ally_image = render_ally_panel(
         ally_units, resource=resource, round_no=round_no,
         canvas=Canvas(size, theme, assets))
-    log_image = _render_log_strip(theme, size[0], log or [])
-
-    combatants = Image.new("RGB", (size[0], size[1] * 2 + log_image.height),
-                           theme.color("color_background"))
-    combatants.paste(enemy_image, (0, 0))
-    combatants.paste(ally_image, (0, size[1]))
-    combatants.paste(log_image, (0, size[1] * 2))
-
     hand_image = render_hand(
         hand or [], resource=resource, passives=passives,
         canvas=Canvas(size, theme, assets))
+    turn = Image.new("RGB", (size[0], size[1] * 2), theme.color("color_background"))
+    turn.paste(ally_image, (0, 0))
+    turn.paste(hand_image, (0, size[1]))
 
     return [
-        to_attachment(combatants, "deckout_combatants.png"),
-        to_attachment(hand_image, "deckout_hand.png"),
+        to_attachment(situation, "deckout_situation.png"),
+        to_attachment(turn, "deckout_turn.png"),
     ]
 
 

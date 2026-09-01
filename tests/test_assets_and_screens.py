@@ -353,8 +353,8 @@ def test_a_real_battle_response_carries_the_panels(db, balance, version, user_id
     engine.advance()
 
     art = visuals.battle(db, balance, battle_id=battle_id, run=run)
-    assert [entry["filename"] for entry in art][:2] == ["deckout_combatants.png",
-                                                        "deckout_hand.png"]
+    assert [entry["filename"] for entry in art][:2] == ["deckout_situation.png",
+                                                        "deckout_turn.png"]
     for entry in art:
         assert base64.b64decode(entry["data_b64"])[:8] == b"\x89PNG\r\n\x1a\n"
 

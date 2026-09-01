@@ -11,6 +11,28 @@
 - 커밋 또는 PR이 있으면 식별자를 함께 적습니다.
 - 비밀값(API 키, 토큰, 비밀번호, 개인 정보)은 이 파일에 기록하지 않습니다.
 
+## 2026-09-01
+
+### 13:59 KST — UI 전면 개편 4탄: 전투 화면 첨부 두 장을 다시 나눔
+
+오너 지시로 전투 화면의 PNG 두 장(§1.3.7 한도) 구성을 바꿨다.
+
+- **고치기 전**: [적+아군+전투기록을 세로로 합친 1장(`deckout_combatants.png`)] +
+  [손패 1장(`deckout_hand.png`)].
+- **고친 후**: [적 상태 + 전투 기록(`deckout_situation.png`, "누가 싸우는가·
+  무슨 일이 있었는가")] + [아군 상태 + 손패·장착 패시브·자원
+  (`deckout_turn.png`, "내가 뭘 낼 수 있는가")].
+
+아군 상태와 손패를 같은 장에 묶은 이유: 카드를 낼지 말지 판단하려면 내
+카드뿐 아니라 지금 내 체력·방어막·상태이상도 같이 봐야 한다 — 둘이
+다른 장에 떨어져 있으면 매번 오가며 봐야 했다.
+
+검증: 하드코딩된 옛 파일명(`deckout_combatants.png`/`deckout_hand.png`)을
+쓰던 테스트 세 개(`tests/test_render_and_api.py`,
+`tests/test_assets_and_screens.py`, `tests/test_battle_render_playthrough.py`)를
+새 이름에 맞춰 고침. 렌더한 PNG 두 장을 오너에게 전달해 확인. 전체
+pytest 848 passed. bootstrap/check_content 통과.
+
 ## 2026-08-27
 
 ### 15:56 KST — UI 전면 개편 3탄: 허브를 오너 참고 이미지대로 재설계 (프로필 사진 + 아이콘)

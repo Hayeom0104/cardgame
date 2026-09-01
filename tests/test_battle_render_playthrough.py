@@ -77,7 +77,7 @@ def _assert_battle_screen_is_valid(db, balance, run_id: int) -> None:
         f"전투 화면은 항상 PNG 두 장이어야 합니다 (§1.3.7) — "
         f"실제로는 {len(attachments)}장")
     names = [attachment.filename for attachment in attachments]
-    assert names == ["deckout_combatants.png", "deckout_hand.png"], names
+    assert names == ["deckout_situation.png", "deckout_turn.png"], names
     for attachment in attachments:
         attachment.validate()
         assert attachment.decoded_size > 0
