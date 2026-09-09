@@ -145,6 +145,7 @@ def _seed_threat_weights(db: Database, version: int) -> None:
 # =====================================================================
 def _seed_cards(db: Database, version: int) -> None:
     from app.content.balance import Balance
+    from app.content.batch1_cards import cards as batch1_cards
 
     card_cost_min = int(Balance(db, version).get("card_cost_min"))
     cards = [
@@ -212,7 +213,7 @@ def _seed_cards(db: Database, version: int) -> None:
         ("card_지_성벽", "불괴의 성벽", "지", 3, "방어", "self", 6,
          [{"operator": "grant_block", "params": {"mode": "multiplier", "value": 2.2}},
           {"operator": "apply_status", "params": {"status_id": st.TAUNT}}]),
-    ]
+    ] + batch1_cards(card_cost_min)
     for card_id, name, element, cost, category, target_side, tier, effects in cards:
         db.execute(
             "INSERT OR REPLACE INTO cards (content_version_id, card_id, name, element, "
@@ -283,22 +284,29 @@ def _seed_characters(db: Database, version: int) -> None:
         (version, STARTER_CHARACTER_ID, "루야"),   # P-2, resolved v7
     )
     # §4.5.2 seed examples — gacha-pool characters.
-    for character_id, name, element, role, rarity in [
-        ("char_ignis", "이그니스", "화", "공격형", 2),
-        ("char_aquel", "아쿠엘", "수", "서포터형", 3),
-        ("char_terradon", "테라돈", "지", "방어형", 1),
-        ("char_umbra", "움브라", "암", "디버퍼형", 1),
+    for character_id, name, element, role, rarity, special_cap in [
+        ("char_ignis", "이그니스", "화", "공격형", 2, 1),
+        ("char_aquel", "아쿠엘", "수", "서포터형", 3, 0),
+        ("char_terradon", "테라돈", "지", "방어형", 1, 0),
+        ("char_umbra", "움브라", "암", "공격형", 2, 0),
         # §15.4의 등급별 성급(top 3 / mid 2 / base 1)에 셋 다 후보가 있어야
         # 그 등급이 나왔을 때 같은 캐릭터만 반복해서 뽑히지 않는다.
-        ("char_ventus", "벤투스", "풍", "딜서포트형", 2),
-        ("char_lumen", "루멘", "광", "서포터형", 3),
-        ("char_silva", "실바", "지", "공격형", 1),
+        ("char_ventus", "벤투스", "풍", "디버퍼형", 1, 0),
+        ("char_lumen", "루멘", "광", "딜서포트형", 3, 1),
+        ("char_silva", "실바", "지", "공격형", 1, 0),
+        # A-2의 12명 로스터를 완성한다. 기존에 한 명뿐이던 다섯 속성을
+        # 보강해 여섯 속성마다 정확히 두 명의 가챠 캐릭터가 존재한다.
+        ("char_pyra", "파이라", "화", "디버퍼형", 1, 0),
+        ("char_marea", "마레아", "수", "방어형", 2, 0),
+        ("char_zephyr", "제피르", "풍", "공격형", 3, 0),
+        ("char_noctis", "녹티스", "암", "딜서포트형", 2, 0),
+        ("char_solenne", "솔렌", "광", "방어형", 1, 0),
     ]:
         db.execute(
             "INSERT OR REPLACE INTO characters (content_version_id, character_id, "
             "name, element, job_role, base_rarity, special_cap, in_gacha_pool, "
-            "art_asset, is_retired) VALUES (?, ?, ?, ?, ?, ?, 0, 1, NULL, 0)",
-            (version, character_id, name, element, role, rarity),
+            "art_asset, is_retired) VALUES (?, ?, ?, ?, ?, ?, ?, 1, NULL, 0)",
+            (version, character_id, name, element, role, rarity, special_cap),
         )
 
 

@@ -78,9 +78,9 @@ def _seed_valid_batch(db, version):
               "AND card_id LIKE 'b1_uni_c3_%'", (version,))
 
 
-def test_the_check_is_off_by_default(db, version, balance):
-    assert bool(balance.get("batch1_shape_enforced")) is False
-    validation.validate_version(db, version)  # 터지지 않아야 한다 (기존 콘텐츠)
+def test_the_published_batch_is_enforced_and_valid(db, version, balance):
+    assert bool(balance.get("batch1_shape_enforced")) is True
+    validation.validate_version(db, version)
 
 
 def test_a_correctly_shaped_batch_passes(db, version, balance):
@@ -112,13 +112,14 @@ def test_a_character_exclusive_card_with_no_matching_character_is_rejected(
     """카드가 붙은 원소를 쓰는 가챠풀 캐릭터가 하나도 없으면 (예: 그
     캐릭터를 은퇴시킨 뒤에도 카드는 남아 있는 경우) 걸려야 한다.
 
-    `char_ignis`(화)를 은퇴시킨다 — 시드 로스터에서 화 원소를 쓰는 유일한
-    캐릭터라, 은퇴 즉시 화 카드가 검사 대상 원소 집합에서 완전히 빠진다.
+    화속성 캐릭터 둘을 모두 은퇴시키면 화 카드가 연결될 캐릭터가 사라진다.
     """
     _enable(db, version)
     _seed_valid_batch(db, version)
     db.execute("UPDATE characters SET is_retired = 1 WHERE content_version_id = ? "
               "AND character_id = 'char_ignis'", (version,))
+    db.execute("UPDATE characters SET is_retired = 1 WHERE content_version_id = ? "
+              "AND character_id = 'char_pyra'", (version,))
     db.execute("UPDATE cards SET element = '화' WHERE content_version_id = ? "
               "AND card_id = 'b1_char_0_a'", (version,))
     with pytest.raises(ValidationError, match="가챠풀 캐릭터가 없습니다"):
