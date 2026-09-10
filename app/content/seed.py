@@ -301,6 +301,9 @@ def _seed_characters(db: Database, version: int) -> None:
         ("char_zephyr", "제피르", "풍", "공격형", 3, 0),
         ("char_noctis", "녹티스", "암", "딜서포트형", 2, 0),
         ("char_solenne", "솔렌", "광", "방어형", 1, 0),
+        # 일러스트는 아직 받지 않는다. NULL art_asset은 렌더러의 속성색
+        # 실루엣으로 자연스럽게 대체되어, 캐릭터가 먼저 콘텐츠에 합류할 수 있다.
+        ("char_lyra", "리라", "수", "딜서포트형", 2, 0),
     ]:
         db.execute(
             "INSERT OR REPLACE INTO characters (content_version_id, character_id, "
@@ -479,8 +482,9 @@ def _seed_enemies(db: Database, version: int) -> None:
          "cooldown_turns": 1},
     ]
     rows = [
-        # tutorial band — §15.9: HP 30-42 / 공격 9-13 / 방어 2-4 / 속도 80-100
-        ("enemy_tut_슬라임", "훈련용 슬라임", "일반", "무속성", "공격형", 36, 10, 3, 90,
+        # 첫 런은 규칙을 익히는 구간이다. 적 하나·낮은 수치로 카드와 표적 선택을
+        # 안전하게 반복하게 한다.
+        ("enemy_tut_슬라임", "훈련용 슬라임", "일반", "무속성", "공격형", 26, 7, 1, 82,
          common_rules),
         # R3 B-01 fix: was '암' — §15.9's own worked tempo math (skill
         # floor(10×1.8−4)=14, boss dmg 11.5−6=5.5) carries no elemental
@@ -491,7 +495,7 @@ def _seed_enemies(db: Database, version: int) -> None:
         # the player's skill card (×0.75) and advantaging every enemy hit
         # against the player (×1.5). Fixed to 무속성 to match 슬라임 and
         # restore the doc's own arithmetic exactly.
-        ("enemy_tut_박쥐", "동굴 박쥐", "일반", "무속성", "공격형", 30, 11, 2, 100,
+        ("enemy_tut_박쥐", "동굴 박쥐", "일반", "무속성", "공격형", 22, 8, 1, 86,
          common_rules),
         # main campaign 일반 band — HP 45-70 / 공격 8-12 / 방어 3-6 / 속도 80-110
         ("enemy_w1_고블린", "고블린", "일반", "지", "공격형", 55, 11, 4, 95, common_rules),
@@ -604,7 +608,7 @@ def _seed_enemies(db: Database, version: int) -> None:
              _json(rules)),
         )
 
-    # §15.9 tutorial boss: HP 100, 공격 10-13, 방어 4, 속도 95, 2 phases.
+    # 튜토리얼 보스는 승부보다 페이즈/텔레그래프 소개가 목적이다.
     #
     # R3 B-01 fix: this used to also carry a phase-2 "act_boss_기절" rule
     # (14 dmg + a full stun on the player) that §15.9 never specifies — its
@@ -629,14 +633,14 @@ def _seed_enemies(db: Database, version: int) -> None:
         "INSERT OR REPLACE INTO enemies (content_version_id, enemy_id, name, tier, "
         "element, role, hp, atk, def, spd, strategy_override, action_rules_json, "
         "art_asset, is_retired) VALUES (?, 'enemy_tut_boss', '각인된 수호자', '보스', "
-        "'무속성', '방어형', 100, 11, 4, 95, NULL, ?, NULL, 0)",
+        "'무속성', '방어형', 72, 8, 2, 88, NULL, ?, NULL, 0)",
         (version, _json(boss_rules)),
     )
     # Tutorial boss transition: 무적 1 round on entering phase 2 (50%).
     db.execute(
         "INSERT OR REPLACE INTO boss_phases (content_version_id, boss_phase_id, "
         "enemy_id, phase_index, hp_threshold_pct, effect_ids_json) "
-        "VALUES (?, 'phase_tut_boss_2', 'enemy_tut_boss', 2, 0.50, ?)",
+        "VALUES (?, 'phase_tut_boss_2', 'enemy_tut_boss', 2, 0.45, ?)",
         (version, _json(["trans_무적"])),
     )
 
