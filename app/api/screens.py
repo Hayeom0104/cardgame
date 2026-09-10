@@ -473,7 +473,9 @@ def surface_request(db: Database, run_id: int, user_id: int) -> dict:
     from app.api import controls
 
     return {
-        "content": "런을 시작합니다. 갈 칸을 고르세요.",
+        # 스레드가 생성됐다는 사실을 플레이어가 즉시 알아차리도록 첫 메시지에서
+        # 소유자를 멘션한다. 비공개 스레드의 멤버 추가와 별개인 UX 신호다.
+        "content": f"<@{user_id}> 런이 준비됐어요. 아래 지도에서 갈 칸을 골라 주세요.",
         "components": controls.game_map(db, run_id),
         "metadata": {"request_id": request_id},
         # 응답 경로의 `create_thread`가 아니라 서비스 주도 API를 쓴다 —
