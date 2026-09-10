@@ -79,6 +79,31 @@ def test_the_map_renders_as_one_image():
                                    available={1, 2})
     attachment.validate()
     assert attachment.filename == "deckout_map.png"
+    assert attachment.height > attachment.width, "모바일 지도는 세로형이어야 합니다"
+
+
+def test_battle_images_are_split_into_two_messages(db, balance, version, user_id):
+    """내 턴은 조작 메시지에, 전황은 별도 메시지에 붙는다."""
+    from app.api import server
+    # 분리기는 활성 런의 표면 세대/리비전을 delivery intent에 고정한다.
+    db.execute(
+        "INSERT INTO runs (user_id, world_id, state, content_version_id, "
+        "logical_session_id, surface_generation, presentation_revision, "
+        "map_seed, rng_seed, run_currency, created_at, updated_at, last_activity_at) "
+        "VALUES (?, 'tutorial', 'battle', ?, 'split-test', 1, 2, 11, 12, 0, "
+        "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        (user_id, version))
+    response = {
+        "action": "edit", "content": "전투", "components": [],
+        "attachments": [
+            {"filename": "deckout_situation.png", "data_b64": "a", "content_type": "image/png"},
+            {"filename": "deckout_turn.png", "data_b64": "b", "content_type": "image/png"},
+        ],
+    }
+    result = server._split_battle_images(db, response, user_id)
+    assert result["action"] == "multi_action"
+    assert [child["attachments"][0]["filename"] for child in result["actions"]] == [
+        "deckout_turn.png", "deckout_situation.png"]
 
 
 def test_the_settlement_screen_shows_kept_and_lost():
@@ -256,7 +281,9 @@ def test_a_duplicate_event_after_a_committed_node_click_replays_the_live_screen(
     payload = {"type": "interaction", "user_id": 55510, "guild_id": 1, "channel_id": 2,
                "custom_id": node_id, "values": [], "event_id": "evt-node-committed"}
     first = client_with_central.post("/event", json=payload).json()
-    assert first["action"] == "edit"
+    assert first["action"] == "multi_action"
+    assert first["actions"][0]["action"] == "edit"
+    assert first["actions"][1]["action"] == "post_channel_message"
 
     run = server.state["db"].one("SELECT run_id, state FROM runs WHERE user_id = ?",
                                  (55510,))
