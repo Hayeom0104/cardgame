@@ -26,26 +26,26 @@ tutorial_reward_party_slot = 2
 
 # 튜토리얼 보스가 페이즈를 바꾸는 체력 비율입니다.
 # 본편 보스(2단계)보다 단순하게 한 번만 바뀝니다.
-tutorial_boss_thresholds = [0.50]
+tutorial_boss_thresholds = [0.45]
 
 # 튜토리얼의 전투 한 칸에 나오는 적의 수 범위입니다. [최저, 최고].
-tutorial_enemies_per_node = [1, 2]
+tutorial_enemies_per_node = [1, 1]
 
 # 튜토리얼 일반 적의 능력치 범위입니다. 본편의 일반 적(enemy_bands)보다
 # 확실히 약하게 두어, 캐릭터 한 명으로도 이길 수 있어야 합니다.
 [tutorial_enemy_band]
-hp  = [30, 42]
-atk = [9, 13]
-def = [2, 4]
-spd = [80, 100]
+hp  = [22, 30]
+atk = [6, 8]
+def = [1, 2]
+spd = [75, 90]
 
 # 튜토리얼 보스의 능력치입니다. 값 하나만 적으면 항상 그 값이고,
 # [최저, 최고] 로 적으면 그 사이에서 정해집니다.
 [tutorial_boss]
-hp  = 100
-atk = [10, 13]
-def = 4
-spd = 95
+hp  = 72
+atk = [7, 9]
+def = 2
+spd = 88
 
 # 런을 시작할 때 만들어지는 기본 덱의 구성입니다.
 #   평타          아무 캐릭터나 낼 수 있는 기본 공격 카드
