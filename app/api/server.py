@@ -19,7 +19,8 @@ from fastapi.responses import JSONResponse
 from app.api import events as ev
 from app.api import handlers
 from app.central import delivery, surfaces
-from app.central.client import CapabilityError, CentralClient, to_action_rows
+from app.central.client import (CapabilityError, CentralClient, to_action_rows,
+                                validate_multi_action)
 from app.config import settings
 from app.content.balance import Balance
 from app.content.versioning import current_version_id
@@ -29,6 +30,49 @@ from app.engine import lifecycle
 logger = logging.getLogger(__name__)
 
 state: dict = {}
+
+
+def _split_battle_images(db: Database, response: dict, user_id: int) -> dict:
+    """전투의 `내 턴`과 `전황`을 서로 다른 디스코드 메시지로 보낸다.
+
+    컴포넌트 클릭 응답만 multi_action을 쓸 수 있다. 기존(첫) 메시지는 조작과
+    직접 연결된 내 턴 패널을 유지하고, 전황/기록은 뒤따르는 새 메시지다.
+    """
+    attachments = response.get("attachments") or []
+    names = {item.get("filename") for item in attachments}
+    if names != {"deckout_situation.png", "deckout_turn.png"}:
+        return response
+    run_id = lifecycle.most_relevant_run_id(db, user_id)
+    run = db.one("SELECT * FROM runs WHERE run_id = ?", (run_id,)) if run_id else None
+    if run is None:
+        return response
+
+    turn = next(item for item in attachments if item["filename"] == "deckout_turn.png")
+    situation = next(item for item in attachments
+                     if item["filename"] == "deckout_situation.png")
+    turn_id = delivery.mint_request_id("battle-turn")
+    situation_id = delivery.mint_request_id("battle-situation")
+    for request_id, purpose in ((turn_id, "battle_turn"),
+                                (situation_id, "battle_situation")):
+        delivery.record_intent(
+            db, request_id=request_id, run_id=run_id, purpose=purpose,
+            surface_generation=int(run["surface_generation"]),
+            presentation_revision=int(run["presentation_revision"]))
+
+    first = dict(response)
+    first["action"] = "edit"
+    first["attachments"] = [turn]
+    first["metadata"] = {"request_id": turn_id}
+    second = {
+        "action": "post_channel_message",
+        "content": "**전황 · 전투 기록**",
+        "attachments": [situation],
+        "components": [],
+        "metadata": {"request_id": situation_id},
+    }
+    children = [first, second]
+    validate_multi_action(children)
+    return {"action": "multi_action", "actions": children}
 
 
 @asynccontextmanager
@@ -333,6 +377,11 @@ async def event(request: Request) -> JSONResponse:
     # with numeric types right here, at the very last step before it leaves.
     if "components" in response:
         response["components"] = to_action_rows(response["components"])
+
+    # 전투 그림은 파일 두 개가 아니라 메시지 두 개로 분리한다. multi_action은
+    # 컴포넌트 상호작용에서만 허용되므로 그 경우에만 적용한다.
+    if isinstance(parsed, ev.InteractionEvent) and response.get("action") == "edit":
+        response = _split_battle_images(db, response, parsed.user_id)
 
     # Recorded only after the handler returns. Marking it up front would make a
     # handler exception permanently swallow Central's redelivery of an event
