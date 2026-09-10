@@ -51,19 +51,20 @@ def _boss(db, engine):
 
 
 def test_the_tutorial_boss_matches_its_published_stat_block(db, engine, balance):
-    """§15.9 — HP 100, 방어 4, 속도 95, recomputed in v6.2."""
+    """§15.9 v8.2 — 튜토리얼 보스는 규칙 소개용으로 낮은 수치다."""
     boss = _boss(db, engine)
-    assert boss.hp_max == 100
-    assert boss.base_def == 4
-    assert boss.base_spd == 95
+    assert boss.hp_max == 72
+    assert boss.base_def == 2
+    assert boss.base_spd == 88
     assert boss.boss_phase == 1
 
 
-def test_the_starter_ties_the_boss_on_speed_and_allies_win_ties(db, engine):
-    """§2.1 tie-break: allies before enemies on equal speed."""
+def test_the_starter_acts_before_the_slower_tutorial_boss(db, engine):
+    """v8.2: 첫 보스전은 플레이어가 먼저 행동해 텔레그래프를 읽는다."""
     ally = un.load_units(db, engine.battle_id, side=un.ALLY)[0]
     boss = _boss(db, engine)
-    assert ally.base_spd == boss.base_spd == 95
+    assert ally.base_spd == 95
+    assert boss.base_spd == 88
 
     order = db.query(
         "SELECT battle_unit_id FROM battle_round_order WHERE battle_id = ? "
@@ -76,8 +77,8 @@ def test_crossing_fifty_percent_fires_invulnerable_and_it_covers_the_next_round(
     """The whole point of B-02: a 무적 created in round N survives round N's
     boundary and covers the whole of round N+1."""
     boss = _boss(db, engine)
-    # Drop the boss to 45% — below the phase-2 threshold, still alive.
-    db.execute("UPDATE battle_units SET hp_current = 45 WHERE battle_unit_id = ?",
+    # 32/72 = 44.4% — v8.2 phase-2 threshold(45%) below, still alive.
+    db.execute("UPDATE battle_units SET hp_current = 32 WHERE battle_unit_id = ?",
                (boss.battle_unit_id,))
 
     engine._evaluate_boss_phases(round_no=1)
@@ -96,7 +97,7 @@ def test_crossing_fifty_percent_fires_invulnerable_and_it_covers_the_next_round(
 
 def test_invulnerable_actually_nullifies_damage(db, engine):
     boss = _boss(db, engine)
-    db.execute("UPDATE battle_units SET hp_current = 45 WHERE battle_unit_id = ?",
+    db.execute("UPDATE battle_units SET hp_current = 32 WHERE battle_unit_id = ?",
                (boss.battle_unit_id,))
     engine._evaluate_boss_phases(round_no=1)
 
@@ -106,7 +107,7 @@ def test_invulnerable_actually_nullifies_damage(db, engine):
                   if entry["card"]["category"] == "공격")
     engine.play_card(unit, attack["card_instance_id"], [boss.battle_unit_id])
 
-    assert un.load_unit(db, boss.battle_unit_id).hp_current == 45
+    assert un.load_unit(db, boss.battle_unit_id).hp_current == 32
 
 
 def test_a_boss_killed_outright_fires_no_transition(db, engine):
@@ -131,7 +132,7 @@ def test_a_phase_transition_discards_only_that_unit_s_plan(db, engine, balance,
     assert db.one("SELECT 1 FROM enemy_plans WHERE battle_id = ? AND enemy_unit_id = ?",
                   (engine.battle_id, other)) is not None
 
-    db.execute("UPDATE battle_units SET hp_current = 45 WHERE battle_unit_id = ?",
+    db.execute("UPDATE battle_units SET hp_current = 32 WHERE battle_unit_id = ?",
                (boss.battle_unit_id,))
     engine._evaluate_boss_phases(round_no=1)
 
@@ -143,7 +144,7 @@ def test_a_phase_transition_discards_only_that_unit_s_plan(db, engine, balance,
 
 def test_a_phase_is_entered_exactly_once(db, engine):
     boss = _boss(db, engine)
-    db.execute("UPDATE battle_units SET hp_current = 45 WHERE battle_unit_id = ?",
+    db.execute("UPDATE battle_units SET hp_current = 32 WHERE battle_unit_id = ?",
                (boss.battle_unit_id,))
 
     engine._evaluate_boss_phases(round_no=1)
