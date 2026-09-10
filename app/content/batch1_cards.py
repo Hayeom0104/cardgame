@@ -48,6 +48,14 @@ def cards(card_cost_min: int) -> list[tuple]:
         ("card_수_생명의샘", "생명의 샘", "수", 3, "회복", "ally", 5,
          [heal("percent_max_hp", 0.18),
           {"operator": "remove_status", "params": {"category": "debuff", "count": 1}}]),
+        # 리라 합류: 수 속성의 딜서포트가 선택할 수 있는 세 장을 함께 넣어
+        # 캐릭터 수와 전용 카드 풀이 항상 같은 규칙을 지키게 한다.
+        ("card_수_유리파편", "유리 파편", "수", 2, "공격", "enemy", 1,
+         damage(1.35) + [status(st.HEAL_DOWN)]),
+        ("card_수_파도수호", "파도 수호", "수", 2, "방어", "ally", 2,
+         [block("multiplier", 1.75), status(st.ATTACK_UP)]),
+        ("card_수_월류", "월류의 합창", "수", 3, "회복", "ally", 4,
+         [heal("percent_max_hp", 0.16), status(st.ATTACK_UP, target="all_allies")]),
 
         # 풍: 속도, 드로우, 치명타
         ("card_풍_질풍", "질풍베기", "풍", 2, "공격", "enemy", 1,
