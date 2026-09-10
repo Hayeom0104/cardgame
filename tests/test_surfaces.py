@@ -84,6 +84,7 @@ def test_the_request_becomes_a_real_call(ctx, db, central, user_id):
     assert call["parent_channel_id"] == PARENT_CHANNEL
     assert call["owner_user_id"] == user_id
     assert call["surface_generation"] >= 1
+    assert f"<@{user_id}>" in call["content"]
 
 
 def test_the_run_is_bound_to_the_thread_that_was_created(ctx, db, central,
