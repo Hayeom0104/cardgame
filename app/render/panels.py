@@ -814,8 +814,8 @@ def render_map(nodes: list[dict], edges: list[tuple[int, int]], *,
     그리고 아직 닿지 않은 칸. 지나온 칸과 닿지 않은 칸을 같은 색으로 그리면
     지도가 어디까지 왔는지 말해 주지 못한다.
 
-    진행 방향은 **왼쪽에서 오른쪽**이다. 층이 깊어질수록 세로로 늘리면
-    디스코드에서 이미지가 축소되어 칸 글씨가 뭉개진다.
+    모바일에서 스크롤 방향과 같은 **위에서 아래**로 진행한다. 각 깊이는
+    가로 한 줄이고, 갈림길은 좌우로 펼쳐져 작은 화면에서도 경로가 겹치지 않는다.
     """
     canvas = Canvas(theme_module.load().size("map_size"), tint="color_tint_map")
     available = available or set()
@@ -839,23 +839,32 @@ def render_map(nodes: list[dict], edges: list[tuple[int, int]], *,
     max_depth = max(by_depth) if by_depth else 1
     widest = max((len(row) for row in by_depth.values()), default=1)
 
-    head = 58
-    foot = 26
-    radius = 22
-    boss_radius = 28
-    span_x = canvas.width - canvas.pad * 2 - boss_radius * 2
-    band = canvas.height - head - foot
-    center_y = head + band / 2
+    head = 94
+    foot = 44
+    radius = 25
+    boss_radius = 32
+    span_y = canvas.height - head - foot - boss_radius * 2
+    center_x = canvas.width / 2
 
     positions: dict[int, tuple[int, int]] = {}
     for depth, row in sorted(by_depth.items()):
-        x = canvas.pad + boss_radius + int(
-            span_x * (depth - 1) / max(1, max_depth - 1))
-        step = band / max(2, widest + 1)
+        y = head + boss_radius + int(
+            span_y * (depth - 1) / max(1, max_depth - 1))
+        usable_width = canvas.width - canvas.pad * 2 - boss_radius * 2
+        step = usable_width / max(2, widest)
         ordered = sorted(row, key=lambda n: n["node_index"])
-        top = center_y - step * (len(ordered) - 1) / 2
+        left = center_x - step * (len(ordered) - 1) / 2
         for index, node in enumerate(ordered):
-            positions[node["node_index"]] = (x, int(top + index * step))
+            positions[node["node_index"]] = (int(left + index * step), y)
+
+    # 빈 배경에도 탐험 지도다운 깊이를 준다. 장식선은 경로보다 훨씬 어둡게
+    # 그려져 실제 선택 가능 경로와 혼동되지 않는다.
+    decorative = kit.mix(theme.color("color_tint_map"), theme.color("color_border"), .45)
+    for inset in (18, 34, 50):
+        canvas.draw.rounded_rectangle(
+            (inset, 66 + inset // 2, canvas.width - inset,
+             canvas.height - 20 - inset // 2), radius=28,
+            outline=decorative, width=1)
 
     # ---- 길 ----
     walked = theme.color("color_visited")
@@ -870,7 +879,7 @@ def render_map(nodes: list[dict], edges: list[tuple[int, int]], *,
             color, width = walked, 3
         else:
             color, width = theme.color("color_border"), 2
-        canvas.draw.line(_curve(positions[source], positions[target]),
+        canvas.draw.line(_curve_vertical(positions[source], positions[target]),
                          fill=color, width=width, joint="curve")
 
     # ---- 칸 ----
@@ -904,18 +913,20 @@ def render_map(nodes: list[dict], edges: list[tuple[int, int]], *,
             top, bottom = kit.mix(color, (255, 255, 255), 0.18), kit.shade(color, 0.62)
             outline = kit.mix(color, (255, 255, 255), 0.30)
 
-        disc = kit.linear_gradient((r * 2, r * 2), top, bottom)
-        disc.putalpha(kit.rounded_mask((r * 2, r * 2), r))
-        canvas.image.alpha_composite(disc, (x - r, y - r))
-        canvas.draw.ellipse((x - r, y - r, x + r, y + r), outline=outline, width=2)
+        # 원 대신 팔각 보석 메달. 멀리서도 일반 경로점과 확실히 구분된다.
+        points = [(x, y-r), (x+int(r*.72), y-int(r*.72)), (x+r, y),
+                  (x+int(r*.72), y+int(r*.72)), (x, y+r),
+                  (x-int(r*.72), y+int(r*.72)), (x-r, y),
+                  (x-int(r*.72), y-int(r*.72))]
+        canvas.draw.polygon(points, fill=bottom, outline=outline)
+        inner = [(x + int((px-x)*.72), y + int((py-y)*.72)) for px, py in points]
+        canvas.draw.polygon(inner, fill=top, outline=kit.mix(outline, (255,255,255), .25))
 
         if state == "current":
             # 지금 서 있는 칸 — 칸 색은 그대로 두고 둘레에 이중 링을 두른다.
             # 색만 바꾸면 "보상 칸"처럼 보여 칸 종류를 잘못 읽게 된다.
-            canvas.draw.ellipse((x - r - 3, y - r - 3, x + r + 3, y + r + 3),
-                                outline=theme.color("color_text"), width=2)
-            canvas.draw.ellipse((x - r - 7, y - r - 7, x + r + 7, y + r + 7),
-                                outline=theme.color("color_selectable"), width=2)
+            canvas.draw.ellipse((x-r-7, y-r-7, x+r+7, y+r+7),
+                                outline=theme.color("color_selectable"), width=3)
 
         # 칸 이름은 한 글자로 안에, 전체 이름은 아래에 적는다.
         # "보상"과 "보스"는 첫 글자가 겹쳐 구분이 되지 않으므로 보스는
@@ -938,7 +949,9 @@ def render_map(nodes: list[dict], edges: list[tuple[int, int]], *,
 
     depth_now = next((n["depth"] for n in nodes
                       if n["node_index"] == current_node_index), 0)
-    canvas.title("지도", right=f"{depth_now} / {max_depth} 층")
+    canvas.title("탐험 지도", right=f"깊이 {depth_now} / {max_depth}")
+    canvas.label((canvas.pad, 60), "아래로 내려갈수록 보스에 가까워집니다",
+                 role="small", color=canvas.muted)
     return canvas.finish("deckout_map.png")
 
 
@@ -953,6 +966,21 @@ def _curve(start: tuple[int, int], end: tuple[int, int], steps: int = 24
         inv = 1 - t
         x = inv**3 * x0 + 3 * inv**2 * t * mid + 3 * inv * t**2 * mid + t**3 * x1
         y = inv**3 * y0 + 3 * inv**2 * t * y0 + 3 * inv * t**2 * y1 + t**3 * y1
+        points.append((int(x), int(y)))
+    return points
+
+
+def _curve_vertical(start: tuple[int, int], end: tuple[int, int], steps: int = 24
+                    ) -> list[tuple[int, int]]:
+    """세로 진행용 S자 곡선. 같은 깊이의 가지가 서로 덜 엉킨다."""
+    (x0, y0), (x1, y1) = start, end
+    mid = (y0 + y1) / 2
+    points = []
+    for step in range(steps + 1):
+        t = step / steps
+        inv = 1 - t
+        x = inv**3*x0 + 3*inv**2*t*x0 + 3*inv*t**2*x1 + t**3*x1
+        y = inv**3*y0 + 3*inv**2*t*mid + 3*inv*t**2*mid + t**3*y1
         points.append((int(x), int(y)))
     return points
 
@@ -1039,13 +1067,14 @@ def render_banner(banner: dict, *, rates: dict, pity: dict | None = None,
                   carta: int = 0) -> Attachment:
     """배너 화면 — 픽업 대상, 확률, 천장까지 남은 횟수 (§5).
 
-    확률과 천장은 반드시 보여준다. 플레이어가 무엇에 돈을 쓰는지 알 수
-    없으면 안 된다. 카드·전투 화면과 같은 언어로 그린다 — 그림을 안쪽
+    무료 플레이로 모은 카르타의 사용처와 천장을 명확히 보여준다. 카드·전투
+    화면과 같은 언어로 그린다 — 그림을 안쪽
     가득 채우고, 위아래만 어둡게 깔아 그 위에 글자를 얹는다.
     """
     theme = theme_module.load()
     canvas = Canvas(theme.size("banner_size"), theme, tint="color_tint_gacha")
     banner_id = str(banner.get("banner_id", ""))
+    pickup = banner.get("pickup_name") or banner.get("pickup_target_id")
 
     inset = 6
     radius = theme.int_("corner_radius")
@@ -1055,10 +1084,45 @@ def render_banner(banner: dict, *, rates: dict, pity: dict | None = None,
                     art, fade_top=True, fade_bottom=True,
                     outline=canvas.accent)
 
+    # 실제 배너 원화가 아직 없어도 '이벤트 화면'처럼 보이도록 빛줄기와
+    # 별 조각을 얹는다. 캐릭터 삽화가 들어오면 그대로 그 뒤 배경이 된다.
+    glow = kit.with_alpha(canvas.accent, 55)
+    cx, cy = canvas.width // 2, canvas.height // 2 + 18
+    for angle in range(0, 180, 18):
+        import math
+        dx, dy = math.cos(math.radians(angle)) * canvas.width, math.sin(math.radians(angle)) * canvas.height
+        canvas.draw.line((cx, cy, cx + dx, cy + dy), fill=glow, width=2)
+    for x, y, size in ((86, 112, 5), (canvas.width-110, 92, 4),
+                       (canvas.width-154, canvas.height-108, 6), (126, canvas.height-130, 3)):
+        canvas.draw.regular_polygon((x, y, size), n_sides=4, rotation=45,
+                                    fill=canvas.accent)
+
+    # 원화가 아직 없는 신규 캐릭터도 빈 배너처럼 보이지 않게, 이름과 속성
+    # 크레스트를 중앙의 주인공으로 둔다. 이후 원화를 넣어도 이 레이어는
+    # 배너 타이포그래피로 남는다.
+    if pickup:
+        crest = theme.element_color("수")
+        canvas.draw.ellipse((cx - 54, cy - 54, cx + 54, cy + 54),
+                            outline=crest, width=3)
+        canvas.draw.ellipse((cx - 39, cy - 39, cx + 39, cy + 39),
+                            outline=kit.with_alpha(canvas.accent, 160), width=2)
+        wave_font = theme.font(36)
+        wave = "水"
+        wave_w = canvas.draw.textlength(wave, font=wave_font)
+        canvas.draw.text((cx - wave_w / 2, cy - 29), wave, font=wave_font,
+                         fill=crest, stroke_width=1,
+                         stroke_fill=theme.color("color_background"))
+        name_font = theme.font(48)
+        pickup_short = str(pickup).split("·")[0].strip()
+        name_w = canvas.draw.textlength(pickup_short, font=name_font)
+        canvas.draw.text((cx - name_w / 2, cy + 64), pickup_short,
+                         font=name_font, fill=canvas.text,
+                         stroke_width=2, stroke_fill=theme.color("color_background"))
+
     name = str(banner.get("name", banner_id))
     canvas.draw.text((canvas.pad, canvas.pad - 4), name,
                      font=canvas.font("title"), fill=canvas.text)
-    right = f"카르타 {carta}"
+    right = f"무료 카르타  {carta}"
     width = canvas.draw.textlength(right, font=canvas.font("body"))
     canvas.draw.text((canvas.width - canvas.pad - width, canvas.pad),
                      right, font=canvas.font("body"), fill=canvas.accent)
@@ -1084,12 +1148,12 @@ def render_banner(banner: dict, *, rates: dict, pity: dict | None = None,
                               color=theme.color("color_background"),
                               back=kit.with_alpha(color, 235)) + 6
 
-    pickup = banner.get("pickup_name") or banner.get("pickup_target_id")
     if pickup:
-        bottom -= 34
-        kit.pill(canvas.image, (canvas.pad, bottom), f"픽업 · {pickup}",
-                theme.font(max(9, round(theme.int_("font_size_body") * 0.9))),
-                fg=theme.color("color_background"), bg=kit.with_alpha(canvas.accent, 235))
+        bottom -= 48
+        pickup_font = theme.font(max(13, round(theme.int_("font_size_body") * 1.15)))
+        kit.pill(canvas.image, (canvas.pad, bottom), f"PICK UP  ·  {pickup}",
+                pickup_font, fg=theme.color("color_background"),
+                bg=kit.with_alpha(canvas.accent, 245))
 
     return canvas.finish("deckout_banner.png")
 
