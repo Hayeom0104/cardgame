@@ -74,7 +74,7 @@ class Balance:
 
 
 def seed_constants(db: Database, content_version_id: int) -> None:
-    """설정 파일의 값을 콘텐츠 버전에 심는다. 여러 번 호출해도 안전하다."""
+    """설정 파일의 값과 Deckout 기본 확장 콘텐츠를 새 버전에 심는다."""
     with db.tx() as conn:
         for key, value in DEFAULT_CONSTANTS.items():
             conn.execute(
@@ -83,6 +83,14 @@ def seed_constants(db: Database, content_version_id: int) -> None:
                 "value_json = excluded.value_json",
                 (content_version_id, key, json.dumps(value, ensure_ascii=False)),
             )
+
+    # 확장팩 데이터는 기존 seed 함수들이 실행되기 전에 넣어도 안전하다.
+    # JSON 내부 참조는 seed_all의 최종 publish 검증 시점에 확인되고,
+    # INSERT OR REPLACE라 개발 DB 초기화를 반복해도 중복되지 않는다.
+    from app.content.expansion_v1 import seed_expansion
+
+    card_cost_min = int(DEFAULT_CONSTANTS.get("card_cost_min", 1))
+    seed_expansion(db, content_version_id, card_cost_min=card_cost_min)
     seed_metadata(db)
 
 
