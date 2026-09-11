@@ -81,6 +81,26 @@ class Theme:
         return _load_font(tuple(self.get("font_candidates")), size)
 
 
+class PaletteTheme(Theme):
+    """기존 크기/표 설정은 공유하면서 색만 별도 팔레트로 덮는 뷰.
+
+    지도와 뽑기 화면은 기존 어두운 팔레트를 유지하고, 나머지 화면만 밝은
+    오로라 팔레트를 쓰기 위해 Theme 전체를 복제하지 않고 이 얇은 래퍼를
+    사용한다. ``aurora_color_text``가 있으면 ``color_text`` 대신 고른다.
+    """
+
+    def __init__(self, base: Theme, palette: str):
+        self._base = base
+        self.palette = palette
+        super().__init__(base._values)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        override = f"{self.palette}_{key}"
+        if override in self._values:
+            return self._values[override]
+        return self._base.get(key, default)
+
+
 #: 글꼴에 한글이 실제로 들어 있는지 확인할 때 그려 보는 글자.
 _HANGUL_PROBE = "한글"
 

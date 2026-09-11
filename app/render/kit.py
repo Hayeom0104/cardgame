@@ -160,6 +160,25 @@ def background(size: tuple[int, int], base: Color, tint: Color,
     return image
 
 
+def aurora_background(size: tuple[int, int], base: Color, tint: Color,
+                      *, secondary: Color) -> Image.Image:
+    """밝은 UI용 배경 — 흰 바탕에 청록·보랏빛이 얇게 번지는 유리 질감."""
+    width, height = size
+    image = linear_gradient(size, mix(base, tint, 0.18), mix(base, secondary, 0.13))
+    first = radial_glow((max(1, int(width * .72)), max(1, int(height * .75))),
+                        tint, .22)
+    second = radial_glow((max(1, int(width * .55)), max(1, int(height * .62))),
+                         secondary, .16)
+    image.alpha_composite(first, (-int(width * .10), -int(height * .22)))
+    image.alpha_composite(second, (int(width * .53), int(height * .48)))
+    # 화면 가장자리 안쪽의 얇은 선은 장식이면서 흰 배경과 Discord 배경을
+    # 분리한다. 강한 비네트는 다시 칙칙해지므로 사용하지 않는다.
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((5, 5, width - 6, height - 6), 18,
+                           outline=with_alpha(mix(tint, secondary, .35), 105), width=1)
+    return image
+
+
 # ---------------------------------------------------------------------------
 # 패널 / 그림자 / 발광
 # ---------------------------------------------------------------------------

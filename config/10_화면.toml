@@ -72,9 +72,10 @@ font_size_small = 14
 # 글꼴을 우선합니다 — 설치는 되어 있지만 한글 글리프가 없는 글꼴(DejaVu 등)을
 # 골라 이름이 전부 네모로 나오는 일을 막기 위해서입니다.
 #
-# 원하는 글꼴을 쓰려면 .ttf 파일을 `assets/fonts/main.ttf` 로 넣으면 됩니다.
-# 맨 위에 이미 적혀 있으므로 그 자리에 두기만 하면 바로 적용됩니다.
+# 기본 글꼴은 저장소에 포함한 Neo둥근모입니다. 다른 글꼴을 쓰려면 .ttf 파일을
+# `assets/fonts/main.ttf` 로 넣고 아래 목록에서 그 경로를 맨 위로 옮기면 됩니다.
 font_candidates = [
+  "assets/fonts/neodgm.ttf",
   "assets/fonts/main.ttf",
   "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
   "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
@@ -82,6 +83,77 @@ font_candidates = [
   "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
   "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 ]
+
+
+# ─────────────────────────────────────────────────────────────
+#  A 스타일 — 오로라 글라스
+#
+#  지도·뽑기 배너·뽑기 결과는 위의 기존 팔레트를 유지하고,
+#  나머지 화면만 이 접두사 색을 사용합니다.
+# ─────────────────────────────────────────────────────────────
+
+# A 스타일 화면의 가장 바깥 청백색 바탕입니다.
+aurora_color_background = [239, 246, 255]
+# 내용 카드의 아래쪽 흰색입니다.
+aurora_color_panel = [247, 250, 255]
+# 내용 카드의 위쪽 흰색입니다.
+aurora_color_panel_top = [255, 255, 255]
+# 제목과 본문에 쓰는 짙은 남색입니다.
+aurora_color_text = [29, 40, 70]
+# 설명과 보조 정보에 쓰는 회청색입니다.
+aurora_color_muted = [94, 112, 148]
+# 카드와 화면 가장자리의 옅은 파란 테두리입니다.
+aurora_color_border = [178, 196, 232]
+# 선택·재화·제목 장식에 쓰는 보라색입니다.
+aurora_color_accent = [86, 94, 235]
+# 강조색의 어두운 면과 그림자에 쓰는 보라색입니다.
+aurora_color_accent_dark = [61, 69, 190]
+# 강조 배지 뒤에 까는 아주 옅은 보라색입니다.
+aurora_color_accent_back = [229, 232, 255]
+# 메인 허브 배경의 푸른 광원색입니다.
+aurora_color_tint_hub = [132, 160, 255]
+# 전투 화면 배경의 푸른 광원색입니다.
+aurora_color_tint_battle = [116, 146, 255]
+# 상점 화면 배경의 청록 광원색입니다.
+aurora_color_tint_shop = [91, 205, 213]
+# 모든 A 스타일 배경 오른쪽에 섞는 청록색입니다.
+aurora_color_tint_secondary = [80, 196, 205]
+
+# 체력이 충분할 때 막대의 밝은 초록색입니다.
+aurora_color_hp_full = [44, 190, 139]
+# 체력이 충분할 때 막대의 어두운 초록색입니다.
+aurora_color_hp_full_low = [24, 156, 115]
+# 체력이 줄었을 때 막대의 밝은 주황색입니다.
+aurora_color_hp_hurt = [245, 174, 74]
+# 체력이 줄었을 때 막대의 어두운 주황색입니다.
+aurora_color_hp_hurt_low = [224, 132, 42]
+# 체력이 위험할 때 막대의 밝은 붉은색입니다.
+aurora_color_hp_crit = [238, 91, 112]
+# 체력이 위험할 때 막대의 어두운 붉은색입니다.
+aurora_color_hp_crit_low = [203, 55, 82]
+# 비어 있는 체력·진행도 막대의 바탕색입니다.
+aurora_color_gauge_back = [218, 227, 243]
+# 방어막 수치와 막대에 쓰는 파란색입니다.
+aurora_color_block = [62, 155, 225]
+# 방어막 글자에 쓰는 짙은 파란색입니다.
+aurora_color_block_text = [32, 104, 170]
+# 방어막 배지의 옅은 파란 바탕색입니다.
+aurora_color_block_back = [218, 240, 255]
+
+# 비활성 카드 위쪽의 옅은 회색입니다.
+aurora_color_disabled_top = [235, 239, 248]
+# 비활성 카드 아래쪽의 옅은 회색입니다.
+aurora_color_disabled = [222, 228, 240]
+# 비활성 카드 테두리의 회청색입니다.
+aurora_color_disabled_border = [169, 179, 201]
+# 적 번호와 위험 표시에 쓰는 붉은색입니다.
+aurora_color_enemy = [238, 92, 119]
+# 적 표시의 어두운 면에 쓰는 붉은색입니다.
+aurora_color_enemy_dark = [210, 65, 94]
+# 판매 완료 덮개에 쓰는 회보라색입니다.
+aurora_color_sold_out = [117, 104, 128]
+# A 스타일 카드 그림자의 불투명도입니다.
+aurora_shadow_opacity = 48
 
 
 # ─────────────────────────────────────────────────────────────

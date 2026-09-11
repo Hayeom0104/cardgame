@@ -39,8 +39,11 @@ class Canvas:
     """
 
     def __init__(self, size: tuple[int, int], theme=None, assets=None,
-                 *, tint: str = "color_tint_hub"):
-        self.theme = theme or theme_module.load()
+                 *, tint: str = "color_tint_hub", palette: str | None = None):
+        base_theme = theme or theme_module.load()
+        self.palette = palette
+        self.theme = (theme_module.PaletteTheme(base_theme, palette)
+                      if palette else base_theme)
         self.assets = assets or AssetLibrary(self.theme)
         self.width, self.height = size
         self.pad = self.theme.int_("screen_padding")
@@ -48,11 +51,16 @@ class Canvas:
         self.radius = self.theme.int_("corner_radius")
 
         # 평면 단색 대신 그라데이션 + 광원 + 비네트로 바탕을 깐다.
-        self.image = kit.background(
-            size, self.theme.color("color_background"), self.theme.color(tint),
-            glow=float(self.theme.get("background_glow_strength", 0.42)),
-            veil=float(self.theme.get("background_vignette_strength", 0.55)),
-        )
+        if palette == "aurora":
+            self.image = kit.aurora_background(
+                size, self.theme.color("color_background"), self.theme.color(tint),
+                secondary=self.theme.color("color_tint_secondary"))
+        else:
+            self.image = kit.background(
+                size, self.theme.color("color_background"), self.theme.color(tint),
+                glow=float(self.theme.get("background_glow_strength", 0.42)),
+                veil=float(self.theme.get("background_vignette_strength", 0.55)),
+            )
         self.draw = ImageDraw.Draw(self.image)
 
     # -- 자주 쓰는 색 ---------------------------------------------------
@@ -100,7 +108,16 @@ class Canvas:
         return self.theme.font(role=role)
 
     def title(self, text: str, *, right: str = "", subtitle: str = "") -> None:
-        self.draw.text((self.pad, self.pad // 2), kit.sanitize(text),
+        title_x = self.pad
+        if self.palette == "aurora":
+            cy = self.pad // 2 + self.theme.int_("font_size_title") // 2
+            self.draw.polygon([(self.pad, cy), (self.pad + 7, cy - 7),
+                               (self.pad + 14, cy), (self.pad + 7, cy + 7)],
+                              fill=self.accent)
+            title_x += 22
+            self.draw.line((self.pad, 47, self.width - self.pad, 47),
+                           fill=self.border, width=1)
+        self.draw.text((title_x, self.pad // 2), kit.sanitize(text),
                        font=self.font("title"), fill=self.text)
         if subtitle:
             self.draw.text((self.pad, self.pad // 2 + self.theme.int_("font_size_title") + 2),
@@ -131,6 +148,11 @@ class Canvas:
         kit.panel(self.image, box, top=top, bottom=bottom, radius=self.radius,
                   border=outline or self.border, border_width=max(1, width),
                   shadow=not dimmed)
+        if self.palette == "aurora" and not dimmed:
+            x0, y0, x1, _ = box
+            self.draw.line((x0 + self.radius, y0 + 1,
+                            min(x1 - self.radius, x0 + 52), y0 + 1),
+                           fill=self.accent, width=2)
 
     def label(self, position: tuple[int, int], text: str, *, role: str = "body",
               color=None) -> None:
@@ -458,7 +480,7 @@ def render_ally_panel(units: list[dict], *, resource: int, round_no: int,
     쌓아 작은 초상화만 보이면 손패의 카드보다도 정보가 적어진다.
     """
     canvas = canvas or Canvas(theme_module.load().size("panel_size"),
-                              tint="color_tint_battle")
+                              tint="color_tint_battle", palette="aurora")
     theme = canvas.theme
     canvas.title(f"라운드 {round_no}")
     _resource_orbs(canvas, resource)
@@ -563,7 +585,7 @@ def render_enemy_panel(units: list[dict], telegraphs: dict[int, dict],
     적 수는 스테이지마다 다르고 상한이 없으므로(§2.6) 칸을 격자로 배치한다.
     """
     canvas = canvas or Canvas(theme_module.load().size("panel_size"),
-                              tint="color_tint_battle")
+                              tint="color_tint_battle", palette="aurora")
     theme = canvas.theme
     canvas.title("적")
 
@@ -708,24 +730,25 @@ def render_battle_screen(ally_units: list[dict], enemy_units: list[dict],
     판단할 수 있다.
     """
     theme = theme_module.load()
-    assets = AssetLibrary(theme)
     size = theme.size("panel_size")
 
+    enemy_canvas = Canvas(size, theme, tint="color_tint_battle", palette="aurora")
     enemy_image = render_enemy_panel(
-        enemy_units, telegraphs, canvas=Canvas(size, theme, assets))
-    log_image = _render_log_strip(theme, size[0], log or [])
+        enemy_units, telegraphs, canvas=enemy_canvas)
+    ui_theme = enemy_canvas.theme
+    log_image = _render_log_strip(ui_theme, size[0], log or [])
     situation = Image.new("RGB", (size[0], size[1] + log_image.height),
-                          theme.color("color_background"))
+                          ui_theme.color("color_background"))
     situation.paste(enemy_image, (0, 0))
     situation.paste(log_image, (0, size[1]))
 
     ally_image = render_ally_panel(
         ally_units, resource=resource, round_no=round_no,
-        canvas=Canvas(size, theme, assets))
+        canvas=Canvas(size, theme, tint="color_tint_battle", palette="aurora"))
     hand_image = render_hand(
         hand or [], resource=resource, passives=passives,
-        canvas=Canvas(size, theme, assets))
-    turn = Image.new("RGB", (size[0], size[1] * 2), theme.color("color_background"))
+        canvas=Canvas(size, theme, tint="color_tint_battle", palette="aurora"))
+    turn = Image.new("RGB", (size[0], size[1] * 2), ui_theme.color("color_background"))
     turn.paste(ally_image, (0, 0))
     turn.paste(hand_image, (0, size[1]))
 
@@ -747,7 +770,7 @@ def render_hand(hand: list[dict], *, resource: int,
     무엇을 뽑았는지 알 수 없게 되어 선택 자체가 성립하지 않는다.
     """
     canvas = canvas or Canvas(theme_module.load().size("panel_size"),
-                              tint="color_tint_battle")
+                              tint="color_tint_battle", palette="aurora")
     canvas.title("손패", right=f"자원 {resource}")
 
     hand_top = 56
@@ -995,7 +1018,8 @@ def render_shop(items: list[dict], *, currency: int, title: str = "상점",
     이미 산 물건은 목록에서 빼지 않고 `판매 완료` 로 덮는다. 무엇이 있었는지
     알 수 없게 되면 다시 왔을 때 헷갈린다.
     """
-    canvas = Canvas(theme_module.load().size("shop_size"))
+    canvas = Canvas(theme_module.load().size("shop_size"),
+                    tint="color_tint_shop", palette="aurora")
     canvas.title(title, right=f"{currency_label} {currency}")
 
     card_size = canvas.theme.size("card_size")
@@ -1038,10 +1062,11 @@ def _effect_tile(item: dict, canvas: Canvas, size: tuple[int, int],
                  *, dimmed: bool) -> Image.Image:
     """카드가 아닌 상점 물건 (즉시 회복, 저주 제거 …)."""
     theme = canvas.theme
-    image = Image.new("RGBA", size, (*theme.color("color_panel"), 255))
+    image = Image.new("RGBA", size, (0, 0, 0, 0))
+    kit.panel(image, (1, 1, size[0] - 2, size[1] - 2),
+              top=theme.color("color_panel_top"), bottom=theme.color("color_panel"),
+              radius=canvas.radius, border=theme.color("color_border"), shadow=False)
     draw = ImageDraw.Draw(image)
-    draw.rectangle([0, 0, size[0] - 1, size[1] - 1],
-                   outline=theme.color("color_border"), width=2)
     name = str(item.get("name", ""))
     font = theme.font(role="body")
     y = size[1] // 2 - 20
@@ -1243,29 +1268,33 @@ def render_prep(party: list[dict], *, world: str, deck: list[dict] | None = None
 
     여기 보이는 값이 런 시작 시점에 고정되는 바로 그 값이다.
     """
-    canvas = Canvas(theme_module.load().size("prep_size"))
+    canvas = Canvas(theme_module.load().size("prep_size"), palette="aurora")
     canvas.title("준비", right=world)
 
-    portrait = canvas.theme.size("portrait_size")
+    portrait = (112, 112)
+    count = max(1, min(len(party), 3))
+    slot_width = (canvas.width - canvas.pad * 2 - canvas.gap * (count - 1)) // count
     for index, member in enumerate(party[:3]):
-        left = canvas.pad + index * (portrait[0] + canvas.gap + 150)
+        left = canvas.pad + index * (slot_width + canvas.gap)
+        canvas.tile((left, 56, left + slot_width, 200))
         art = canvas.assets.art("character", str(member.get("character_id", "")),
                                 label=str(member.get("name", "")),
                                 rarity=member.get("star_rank"), size=portrait)
-        canvas.paste(art, (left, 56))
+        canvas.art_tile((left + 8, 64, left + 8 + portrait[0], 64 + portrait[1]), art,
+                        outline=canvas.accent)
 
-        text_left = left + portrait[0] + 10
+        text_left = left + portrait[0] + 20
         star = "★" * int(member.get("star_rank", 1))
-        canvas.label((text_left, 60), f"{member.get('name', '')} {star}")
-        canvas.label((text_left, 84),
+        canvas.label((text_left, 66), f"{member.get('name', '')} {star}")
+        canvas.label((text_left, 90),
                      f"{member.get('element', '')} · {member.get('job_role', '')}",
                      role="small", color=canvas.muted)
         for row, (key, name) in enumerate(
                 (("hp", "HP"), ("atk", "공"), ("def", "방"), ("spd", "속"))):
-            canvas.label((text_left, 106 + row * 18),
+            canvas.label((text_left, 114 + row * 18),
                          f"{name} {member.get(key, 0)}", role="small")
 
-    top = 56 + portrait[1] + canvas.gap * 2
+    top = 214
     if deck:
         canvas.label((canvas.pad, top), f"덱 {len(deck)}장", color=canvas.accent)
         top += 26
@@ -1296,7 +1325,7 @@ def render_deck(cards: list[dict], *, character: dict, title: str,
     같은 카드가 여러 장이면 한 장만 그리고 오른쪽 위에 장수를 적는다. 18장을
     낱장으로 늘어놓으면 무엇이 몇 장인지가 오히려 안 보인다.
     """
-    canvas = Canvas(theme_module.load().size("prep_size"))
+    canvas = Canvas(theme_module.load().size("prep_size"), palette="aurora")
     canvas.title(title, right=f"{total}장")
 
     portrait = canvas.theme.size("portrait_size")
@@ -1344,7 +1373,7 @@ def render_collection(cards: list[dict], *, title: str) -> Attachment:
     캐릭터도 카드이므로 같은 화면에 같은 모양으로 놓는다. 다만 파티 자리를
     차지하는 쪽이라 먼저 보여준다.
     """
-    canvas = Canvas(theme_module.load().size("prep_size"))
+    canvas = Canvas(theme_module.load().size("prep_size"), palette="aurora")
     canvas.title(title)
 
     card_size = canvas.theme.size("card_size")
@@ -1391,7 +1420,7 @@ def render_compendium(cards: list[dict], *, title: str) -> Attachment:
     `render_card(masked=True)`로 가려서 그대로 둔다. 읽기 전용이라
     번호표를 달지 않는다 — 여기서는 아무것도 고를 수 없다.
     """
-    canvas = Canvas(theme_module.load().size("prep_size"))
+    canvas = Canvas(theme_module.load().size("prep_size"), palette="aurora")
     canvas.title(title)
 
     card_size = canvas.theme.size("card_size")
@@ -1444,7 +1473,8 @@ def render_hub(dashboard: dict, *, coin: int | None, daily: dict,
     플레이어 ID 같은 내부 식별자는 넣지 않는다.
     """
     theme = theme_module.load()
-    canvas = Canvas(theme.size("hub_size"), tint="color_tint_hub")
+    canvas = Canvas(theme.size("hub_size"), tint="color_tint_hub", palette="aurora")
+    theme = canvas.theme
     canvas.title("덱아웃", right=str(dashboard.get("display_name") or ""))
 
     top = 52
@@ -1524,10 +1554,12 @@ def render_hub(dashboard: dict, *, coin: int | None, daily: dict,
         (kit.icon_check_badge, "업적", int(dashboard.get("achievements_completed", 0)),
          int(dashboard.get("achievements_total", 0))),
     ]
-    stat_w = (canvas.width - canvas.pad * 2) // len(stats)
+    stat_gap = 10
+    stat_w = (canvas.width - canvas.pad * 2 - stat_gap * (len(stats) - 1)) // len(stats)
     icon_d = 30
     for index, (icon_fn, label, owned, total) in enumerate(stats):
-        sx = canvas.pad + index * stat_w
+        sx = canvas.pad + index * (stat_w + stat_gap)
+        canvas.tile((sx, stats_top - 4, sx + stat_w, stats_top + 48))
         icon_box = (sx, stats_top + 4, sx + icon_d, stats_top + 4 + icon_d)
         if icon_fn is kit.icon_check_badge:
             icon_fn(canvas.draw, icon_box, kit.mix(canvas.panel_top, canvas.accent, 0.5))
@@ -1537,9 +1569,6 @@ def render_hub(dashboard: dict, *, coin: int | None, daily: dict,
         canvas.label((text_left, stats_top + 2), label, role="small", color=canvas.muted)
         canvas.draw.text((text_left, stats_top + 20), f"{owned}/{total}",
                          font=canvas.font("body"), fill=canvas.text)
-        if index > 0:
-            canvas.draw.line((sx, stats_top, sx, stats_top + 46),
-                             fill=canvas.border, width=1)
 
     # ── ③ 출석 배너 — 원형 아이콘 배지 + 화살표. 받을 게 있으면 강조 ────
     daily_top = stats_top + 46 + canvas.gap + 6
@@ -1591,7 +1620,7 @@ def render_hub(dashboard: dict, *, coin: int | None, daily: dict,
 
 def render_characters(rows: list[dict]) -> Attachment:
     """보유 캐릭터 명단 — 성급과 다음 성급 비용 (§4.4)."""
-    canvas = Canvas(theme_module.load().size("prep_size"))
+    canvas = Canvas(theme_module.load().size("prep_size"), palette="aurora")
     canvas.title("캐릭터", right=f"보유 {len(rows)}")
 
     portrait = (64, 64)
@@ -1606,12 +1635,13 @@ def render_characters(rows: list[dict]) -> Attachment:
         column, slot = index % columns, index // columns
         left = canvas.pad + column * (item_width + canvas.gap)
         top = 56 + slot * (row_height + canvas.gap)
+        canvas.tile((left, top, left + item_width, top + row_height))
         art = canvas.assets.art("character", str(entry.get("character_id", "")),
                                 label=str(entry.get("name", "")),
                                 rarity=entry.get("star_rank"), size=portrait)
-        canvas.paste(art, (left, top))
+        canvas.paste(art, (left + 8, top + 8))
 
-        text_left = left + portrait[0] + 10
+        text_left = left + portrait[0] + 18
         star = "★" * int(entry.get("star_rank", 1))
         canvas.label((text_left, top), f"{entry.get('name', '')} {star}"[:20])
         canvas.label((text_left, top + 22),
@@ -1632,7 +1662,7 @@ def render_characters(rows: list[dict]) -> Attachment:
 
 def render_equipment(rows: list[dict], *, stones: list[dict] | None = None) -> Attachment:
     """보유 장비 명단 — 티어, 장착 대상, 다음 강화 비용 (§8.4)."""
-    canvas = Canvas(theme_module.load().size("shop_size"))
+    canvas = Canvas(theme_module.load().size("shop_size"), palette="aurora")
     canvas.title("장비", right=f"보유 {len(rows)}")
 
     top0 = 56
@@ -1654,11 +1684,12 @@ def render_equipment(rows: list[dict], *, stones: list[dict] | None = None) -> A
         column, slot = index % columns, index // columns
         left = canvas.pad + column * (item_width + canvas.gap)
         top = top0 + slot * (row_height + canvas.gap)
+        canvas.tile((left, top, left + item_width, top + row_height))
         art = canvas.assets.art("equipment", str(entry.get("equipment_def_id", "")),
                                 label=str(entry.get("name", "")), size=icon)
-        canvas.paste(art, (left, top))
+        canvas.paste(art, (left + 8, top + 8))
 
-        text_left = left + icon[0] + 10
+        text_left = left + icon[0] + 18
         canvas.label((text_left, top),
                      f"{entry.get('name', '')} T{entry.get('tier', 1)}"[:22])
         equipped = entry.get("equipped_character_id")
@@ -1679,7 +1710,8 @@ def render_equipment(rows: list[dict], *, stones: list[dict] | None = None) -> A
 def render_hub_shop(equipment: list[dict], stones: list[dict], *,
                     currency: int | None) -> Attachment:
     """허브 상점 진열 — 장비와 강화석 (§7.2)."""
-    canvas = Canvas(theme_module.load().size("shop_size"))
+    canvas = Canvas(theme_module.load().size("shop_size"),
+                    tint="color_tint_shop", palette="aurora")
     canvas.title("허브 상점", right=f"코인 {currency}" if currency is not None else "")
 
     icon = (56, 56)
@@ -1692,10 +1724,11 @@ def render_hub_shop(equipment: list[dict], stones: list[dict], *,
         top = 56 + slot * (row_height + canvas.gap)
         if top + row_height > canvas.height - 60:
             break
+        canvas.tile((left, top, left + item_width, top + row_height))
         art = canvas.assets.art("equipment", str(entry.get("equipment_def_id", "")),
                                 label=str(entry.get("name", "")), size=icon)
-        canvas.paste(art, (left, top))
-        text_left = left + icon[0] + 10
+        canvas.paste(art, (left + 8, top + 8))
+        text_left = left + icon[0] + 18
         canvas.label((text_left, top), str(entry.get("name", ""))[:22])
         canvas.label((text_left, top + 22),
                      f"{entry.get('slot', '')} · 코인 {entry.get('price_coin', 0)}",
@@ -1711,13 +1744,14 @@ def render_hub_shop(equipment: list[dict], stones: list[dict], *,
 
 def render_research(listing: list[dict]) -> Attachment:
     """연구 목록 — 잠김·해금 가능·완료와 다음 비용 (§20.5)."""
-    canvas = Canvas(theme_module.load().size("prep_size"))
+    canvas = Canvas(theme_module.load().size("prep_size"), palette="aurora")
     canvas.title("연구")
 
     row_height = 44
     capacity = max(1, (canvas.height - 56 - canvas.pad + canvas.gap) // row_height)
     for index, entry in enumerate(listing[:capacity]):
         top = 56 + index * row_height
+        canvas.tile((canvas.pad, top - 4, canvas.width - canvas.pad, top + 36))
         completed = bool(entry.get("completed"))
         available = bool(entry.get("available"))
         locked = not completed and not available
@@ -1747,13 +1781,14 @@ def render_research(listing: list[dict]) -> Attachment:
 
 def render_achievements(listing: list[dict]) -> Attachment:
     """업적 목록 — 진행도 막대 (§20.5)."""
-    canvas = Canvas(theme_module.load().size("prep_size"))
+    canvas = Canvas(theme_module.load().size("prep_size"), palette="aurora")
     canvas.title("업적")
 
     row_height = 40
     capacity = max(1, (canvas.height - 56 - canvas.pad + canvas.gap) // row_height)
     for index, entry in enumerate(listing[:capacity]):
         top = 56 + index * row_height
+        canvas.tile((canvas.pad, top - 4, canvas.width - canvas.pad, top + 34))
         completed = bool(entry.get("completed"))
         canvas.label((canvas.pad, top), str(entry.get("name", ""))[:36],
                      color=canvas.theme.color("color_hp_full") if completed
@@ -1771,12 +1806,13 @@ def render_achievements(listing: list[dict]) -> Attachment:
 
 def render_run_deck(rows: list[dict]) -> Attachment:
     """런 중 덱 — 캐릭터별 뽑을 더미·버린 더미·손패·저주 (§16.2.3)."""
-    canvas = Canvas(theme_module.load().size("panel_size"))
+    canvas = Canvas(theme_module.load().size("panel_size"), palette="aurora")
     canvas.title("덱 — 진행 중인 런")
 
     row_height = 48
     for index, entry in enumerate(rows[:6]):
         top = 56 + index * row_height
+        canvas.tile((canvas.pad, top - 4, canvas.width - canvas.pad, top + 40))
         canvas.label((canvas.pad, top), str(entry.get("name", ""))[:20])
         line = (f"뽑을 더미 {entry.get('draw', 0)} · "
                f"버린 더미 {entry.get('discard', 0)} · "
@@ -1793,10 +1829,12 @@ def render_run_deck(rows: list[dict]) -> Attachment:
 # =====================================================================
 def render_settlement(report: dict) -> Attachment:
     """런 인벤토리 / 정산 화면 — 무엇을 지키고 무엇을 잃었는지 (§8.6.3, §11)."""
-    canvas = Canvas(theme_module.load().size("panel_size"))
+    canvas = Canvas(theme_module.load().size("panel_size"), palette="aurora")
     canvas.title("정산")
 
     inventory = report.get("inventory", {})
+    canvas.tile((canvas.pad, 52, 450, canvas.height - canvas.pad))
+    canvas.tile((470, 52, canvas.width - canvas.pad, 112))
     rows = [
         ("보관", inventory.get("kept", []), canvas.theme.color("color_hp_full")),
         ("등급 하락", inventory.get("tiered_down", []), canvas.accent),

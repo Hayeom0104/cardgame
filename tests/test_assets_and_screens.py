@@ -230,6 +230,27 @@ def test_the_font_falls_back_without_crashing(monkeypatch):
     assert theme.font(role="body") is not None
 
 
+def test_aurora_palette_overrides_only_declared_colors():
+    """A 스타일은 크기·표 설정을 공유하고 선언한 색만 밝게 바꾼다."""
+    base = theme_module.load()
+    aurora = theme_module.PaletteTheme(base, "aurora")
+
+    assert aurora.color("color_background") == (239, 246, 255)
+    assert aurora.color("color_text") == (29, 40, 70)
+    assert aurora.size("hub_size") == base.size("hub_size")
+    assert aurora.element_color("화") == base.element_color("화")
+
+
+def test_bundled_pixel_font_is_the_first_candidate_and_supports_hangul():
+    """선택한 Neo둥근모가 시스템 글꼴보다 먼저, 실제 한글 글꼴로 로드된다."""
+    from app.render.theme import _supports_hangul
+
+    theme = theme_module.load()
+    assert theme.get("font_candidates")[0] == "assets/fonts/neodgm.ttf"
+    assert (theme_module.ROOT / "assets/fonts/neodgm.ttf").is_file()
+    assert _supports_hangul(theme.font(role="body"))
+
+
 def test_a_font_without_hangul_is_passed_over_when_one_exists():
     """설치돼 있다는 것과 한글이 그려진다는 것은 다르다.
 

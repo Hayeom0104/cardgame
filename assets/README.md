@@ -67,5 +67,10 @@ python -m app.cli.assets 문제      # 넣긴 했는데 못 쓰는 파일만
 
 ## 한글이 네모로 나올 때
 
-한글을 지원하는 `.ttf` 파일을 `fonts/main.ttf` 로 넣으면 됩니다. 설정에 이미
-맨 위 후보로 적혀 있어서 파일만 두면 바로 적용됩니다.
+기본 글꼴로 Neo둥근모 v1.601(`fonts/neodgm.ttf`)가 들어 있습니다. 다른 한글
+글꼴을 쓰려면 `.ttf` 파일을 `fonts/main.ttf` 로 넣고
+`config/10_화면.toml`의 `font_candidates`에서 그 경로를 맨 위로 옮기면 됩니다.
+
+Neo둥근모는 SIL Open Font License 1.1에 따라 포함했습니다. 전문은
+`fonts/NEODGM_LICENSE.txt`에 있고, 원본 프로젝트는
+<https://github.com/neodgm/neodgm>입니다.
