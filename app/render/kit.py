@@ -324,14 +324,16 @@ def icon_group(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int],
     """사람 둘 — 겹친 원 두 개로 "파티"를 나타낸다."""
     x0, y0, x1, y1 = box
     w, h = x1 - x0, y1 - y0
-    r = w * 0.22
+    # 기존 중심값은 왼쪽 원이 x0 바깥으로 1px가량 튀어나가 작은 카드에서
+    # 아이콘 전체가 왼쪽으로 밀려 보였다. 양쪽 여백을 같은 값으로 고정한다.
+    r = w * 0.20
     ly, ry = y0 + h * 0.62, y0 + h * 0.62
-    draw.ellipse((x0 + w * 0.18 - r, ly - r, x0 + w * 0.18 + r, ly + r), fill=color)
-    draw.ellipse((x0 + w * 0.62 - r, ry - r, x0 + w * 0.62 + r, ry + r), fill=color)
+    draw.ellipse((x0 + w * 0.28 - r, ly - r, x0 + w * 0.28 + r, ly + r), fill=color)
+    draw.ellipse((x0 + w * 0.72 - r, ry - r, x0 + w * 0.72 + r, ry + r), fill=color)
     small = r * 0.72
     top = y0 + h * 0.20
-    draw.ellipse((x0 + w * 0.40 - small, top - small,
-                 x0 + w * 0.40 + small, top + small), fill=color)
+    draw.ellipse((x0 + w * 0.50 - small, top - small,
+                 x0 + w * 0.50 + small, top + small), fill=color)
 
 
 def icon_gem(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int],

@@ -1556,16 +1556,21 @@ def render_hub(dashboard: dict, *, coin: int | None, daily: dict,
     ]
     stat_gap = 10
     stat_w = (canvas.width - canvas.pad * 2 - stat_gap * (len(stats) - 1)) // len(stats)
-    icon_d = 30
+    icon_d = 28
     for index, (icon_fn, label, owned, total) in enumerate(stats):
         sx = canvas.pad + index * (stat_w + stat_gap)
-        canvas.tile((sx, stats_top - 4, sx + stat_w, stats_top + 48))
-        icon_box = (sx, stats_top + 4, sx + icon_d, stats_top + 4 + icon_d)
+        tile_top, tile_bottom = stats_top - 4, stats_top + 48
+        canvas.tile((sx, tile_top, sx + stat_w, tile_bottom))
+        # 네 아이콘 모두 카드 왼쪽에서 10px, 세로 중앙이라는 같은 기준선을
+        # 쓴다. 도형마다 자체 여백이 달라도 카드가 밀려 보이지 않는다.
+        icon_x = sx + 10
+        icon_y = tile_top + (tile_bottom - tile_top - icon_d) // 2
+        icon_box = (icon_x, icon_y, icon_x + icon_d, icon_y + icon_d)
         if icon_fn is kit.icon_check_badge:
             icon_fn(canvas.draw, icon_box, kit.mix(canvas.panel_top, canvas.accent, 0.5))
         else:
             icon_fn(canvas.draw, icon_box, canvas.muted)
-        text_left = sx + icon_d + 12
+        text_left = icon_x + icon_d + 10
         canvas.label((text_left, stats_top + 2), label, role="small", color=canvas.muted)
         canvas.draw.text((text_left, stats_top + 20), f"{owned}/{total}",
                          font=canvas.font("body"), fill=canvas.text)
