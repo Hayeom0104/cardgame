@@ -111,6 +111,15 @@ def publish(db: Database, version_id: int) -> str:
     never disturbs a run in progress.
     """
     from app.content.validation import validate_version
+    from app.content.v85_gimmicks import apply_if_legacy_seed
+
+    # v8.5 — 현재 저장소의 옛 월드 1 기본 시드에만 한 번 적용한다.
+    # 이미 v8.5가 적용됐거나 대시보드에서 별도로 수정한 보스는 가드가 false라
+    # 그대로 보존된다. 검증/지문 생성 전에 실행해야 이 변경도 콘텐츠 스냅샷의
+    # 일부가 된다.
+    if apply_if_legacy_seed(db, version_id):
+        logger.info("Deckout v8.5 world-1 gimmick overlay applied to content version %s",
+                    version_id)
 
     validate_version(db, version_id)
     stamp = fingerprint(db, version_id)
