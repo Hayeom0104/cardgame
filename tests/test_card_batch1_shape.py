@@ -1,10 +1,8 @@
 """Design Addendum A-2 — Card Batch 1 pool shape (§10.5 gated check).
 
-`batch1_shape_enforced` is off by default (`config/12_카드_배치1.toml`) — the
-roster is 7 in-gacha-pool characters today, not the addendum's 12, and no
-Batch 1 cards have been authored yet. These tests turn the flag on directly
-against a synthetic card set, independent of when the real roster/authoring
-catches up.
+`batch1_shape_enforced` is currently off (`config/12_카드_배치1.toml`) because
+the expansion pool no longer has Addendum A-2's exact fixed shape. Shape tests
+turn the flag on directly against a synthetic card set.
 """
 
 from __future__ import annotations
@@ -78,8 +76,9 @@ def _seed_valid_batch(db, version):
               "AND card_id LIKE 'b1_uni_c3_%'", (version,))
 
 
-def test_the_published_batch_is_enforced_and_valid(db, version, balance):
-    assert bool(balance.get("batch1_shape_enforced")) is True
+def test_the_published_expansion_keeps_the_legacy_shape_gate_off(
+        db, version, balance):
+    assert bool(balance.get("batch1_shape_enforced")) is False
     validation.validate_version(db, version)
 
 

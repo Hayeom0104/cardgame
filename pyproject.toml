@@ -8,6 +8,8 @@ dependencies = [
     "uvicorn>=0.27",
     "httpx>=0.26",
     "pillow>=10.0",
+    "jinja2>=3.1",
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -16,3 +18,10 @@ dev = ["pytest>=8.0"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = ["ignore::DeprecationWarning"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]

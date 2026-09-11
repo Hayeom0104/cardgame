@@ -69,6 +69,11 @@ class Database:
 
     def __init__(self, path: str | Path):
         self.path = str(path)
+        if self.path != ":memory:":
+            # `runtime/data/deckout.db`처럼 아직 없는 배포 경로도 첫 기동에서
+            # 바로 사용할 수 있게 한다. SQLite는 파일은 만들지만 부모 폴더는
+            # 만들어 주지 않는다.
+            Path(self.path).expanduser().parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
 
     # -- connection ----------------------------------------------------

@@ -17,6 +17,14 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# 배포 명령을 어느 디렉터리에서 실행하더라도 저장소 루트의 `.env`를 읽는다.
+# 이미 프로세스 환경에 설정된 값은 운영자가 명시한 값이므로 덮어쓰지 않는다.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 #: §1.3.9 API key scopes. `achievement:grant` is deliberately excluded —
 #: achievements are local (§20.1) — and `xp:add` too, because Central runs its

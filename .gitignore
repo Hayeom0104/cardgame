@@ -2,7 +2,11 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
-deckout.db
-deckout.db-wal
-deckout.db-shm
+# 배포 비밀값과 실행 중 생성되는 SQLite 파일은 어떤 위치에 생겨도 올리지 않는다.
+.env
+.env.*
+!.env.example
+*.db
+*.db-wal
+*.db-shm
 .venv/

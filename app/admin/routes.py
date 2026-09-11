@@ -88,6 +88,13 @@ def _ok(message: str, **extra) -> JSONResponse:
     return JSONResponse({"ok": True, "message": message, **extra})
 
 
+def _is_https(request: Request) -> bool:
+    """직접 HTTPS이거나 신뢰된 ingress가 HTTPS로 전달한 요청인지 판별한다."""
+    forwarded = request.headers.get("x-forwarded-proto", "")
+    forwarded_scheme = forwarded.split(",", 1)[0].strip().lower()
+    return request.url.scheme == "https" or forwarded_scheme == "https"
+
+
 # =====================================================================
 # 로그인
 # =====================================================================
@@ -116,16 +123,16 @@ async def login(request: Request):
     response.set_cookie(
         auth.COOKIE_NAME, auth.issue(), httponly=True, samesite="lax",
         max_age=settings.admin_session_hours * 3600,
-        # HTTPS 뒤에 두는 것이 정상이지만, 로컬에서도 쓸 수 있어야 하므로
-        # secure 는 배포에서 리버스 프록시가 담당한다.
+        secure=_is_https(request),
     )
     return response
 
 
 @router.get("/logout")
-async def logout():
+async def logout(request: Request):
     response = RedirectResponse("/admin/login", status_code=303)
-    response.delete_cookie(auth.COOKIE_NAME)
+    response.delete_cookie(auth.COOKIE_NAME, secure=_is_https(request),
+                           httponly=True, samesite="lax")
     return response
 
 

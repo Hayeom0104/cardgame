@@ -106,6 +106,20 @@ def test_a_valid_cookie_passes(client):
     assert auth.verify(auth.issue())
 
 
+def test_https_login_marks_the_admin_cookie_secure(client):
+    response = client.post(
+        "/admin/login", json={"password": PASSWORD},
+        headers={"x-forwarded-proto": "https"})
+    cookie = response.headers["set-cookie"].lower()
+    assert "secure" in cookie
+    assert "httponly" in cookie
+
+
+def test_local_http_login_keeps_the_admin_cookie_usable(client):
+    response = client.post("/admin/login", json={"password": PASSWORD})
+    assert "secure" not in response.headers["set-cookie"].lower()
+
+
 def test_logging_out_clears_the_session(signed_in):
     signed_in.get("/admin/logout", follow_redirects=False)
     assert signed_in.get("/admin/", follow_redirects=False).status_code == 303

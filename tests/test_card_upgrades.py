@@ -424,9 +424,10 @@ def test_an_upgraded_card_actually_hits_harder(db, balance, version, upgraded_ru
     hp_before = enemy.hp_current
     engine.play_card(unit, skill["card_instance_id"], [enemy.battle_unit_id])
 
-    # T0의 1.8배가 아니라 T2의 2.0배로 계산된다: floor(10 × 2.0 − 3) = 17.
+    # T0의 1.8배가 아니라 T2의 2.0배로 계산된다. 튜토리얼
+    # 난이도 하향으로 슬라임 방어력이 1이므로 floor(10 × 2.0 − 1) = 19.
     dealt = hp_before - un.load_unit(db, enemy.battle_unit_id).hp_current
-    assert dealt == 17
+    assert dealt == 19
     # 그리고 T2가 추가한 집중이 실제로 걸린다.
     assert st.has_status(db, unit.battle_unit_id, "집중")
 
