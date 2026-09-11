@@ -155,21 +155,11 @@ def test_a_phase_is_entered_exactly_once(db, engine):
     assert len(effects) == 1
 
 
-def test_the_boss_uses_its_phase_gated_action_only_in_phase_two(db, engine, balance,
-                                                                 version):
-    """§2.8.5 — `min_phase` / `max_phase` replace or extend the active rule
-    list on a phase change.
-
-    R3 B-01 fix: the tutorial boss's own phase-2 rule (`act_boss_기절`) was
-    removed — §15.9's worked tempo math never accounted for it, and it
-    turned "player crosses 50%" into "boss becomes briefly invulnerable AND
-    unlocks its hardest attack" (see this file's module docstring). The
-    `min_phase` engine mechanism this test actually cares about is still
-    real content on the main-campaign bosses, so it's exercised there
-    instead of on the tutorial boss.
-    """
+def test_world1_boss_switches_to_war_drum_rhythm_in_phase_two(db, engine, balance,
+                                                               version):
+    """v8.5 — 월드 1 보스는 2페이즈에서 기존 랜덤 돌진이 아니라
+    `전쟁북 고동 → 다음 턴 대돌진`을 예고하는 리듬으로 바뀐다."""
     from app.engine import enemy_ai as ai
-    from app.engine import encounter as enc
 
     unit_id = enc.summon_enemy(db, engine.battle_id, "enemy_w1_boss", version, balance)
     boss = un.load_unit(db, unit_id)
@@ -177,12 +167,12 @@ def test_the_boss_uses_its_phase_gated_action_only_in_phase_two(db, engine, bala
     action = ai.select_action(db, engine.action_registry, actor=boss,
                               battle_id=engine.battle_id, round_no=1,
                               rng=engine.rng, rng_key="k1")
-    assert action.action_id != "act_boss_돌진"      # phase 1 — gated rule filtered out
+    assert action.action_id not in {"act_w1_전쟁북", "act_w1_대돌진"}
 
     db.execute("UPDATE battle_units SET boss_phase = 2 WHERE battle_unit_id = ?",
-              (boss.battle_unit_id,))
+               (boss.battle_unit_id,))
     boss = un.load_unit(db, unit_id)
     action = ai.select_action(db, engine.action_registry, actor=boss,
                               battle_id=engine.battle_id, round_no=1,
                               rng=engine.rng, rng_key="k2")
-    assert action.action_id == "act_boss_돌진"
+    assert action.action_id == "act_w1_전쟁북"
