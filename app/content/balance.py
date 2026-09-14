@@ -90,15 +90,9 @@ def seed_constants(db: Database, content_version_id: int) -> None:
     from app.content.expansion_v1 import seed_expansion
 
     card_cost_min = int(DEFAULT_CONSTANTS.get("card_cost_min", 1))
-    card_cost_max = int(DEFAULT_CONSTANTS.get("card_cost_max", 3))
     seed_expansion(db, content_version_id, card_cost_min=card_cost_min)
-    # 확장팩의 고등급 원안 중 비용 4로 설계된 카드는 현재 전투 규칙의 상한(3)에
-    # 맞춰 저장한다. 1인 파티 자원이 3이므로 비용 4를 그대로 두면 사용 불능이다.
-    db.execute(
-        "UPDATE cards SET cost = ? WHERE content_version_id = ? "
-        "AND card_id LIKE 'card_x1_%' AND cost > ?",
-        (card_cost_max, content_version_id, card_cost_max),
-    )
+    # v8.51: 원본 카드부터 비용 1~3으로 저작한다. 잘못된 비용은 조용히
+    # 보정하지 않고 publish 시 공용 콘텐츠 검증에서 거절한다.
     seed_metadata(db)
 
 

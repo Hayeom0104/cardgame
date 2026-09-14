@@ -78,7 +78,7 @@ def _seed_status(db: Database, version_id: int) -> None:
         "INSERT OR REPLACE INTO statuses (content_version_id, status_id, name, kind, "
         "model, clock, stack_cap, base_duration, magnitude, cleansable, "
         "persists_through_boss_phase, icon_asset, scope) "
-        "VALUES (?, ?, '전쟁북 준비', 'buff', ?, ?, 1, 2, 0, 0, 1, NULL, ?)",
+        "VALUES (?, ?, '전쟁북 준비', 'buff', ?, ?, NULL, 2, 0, 0, 1, NULL, ?)",
         (version_id, WAR_DRUM_READY, st.COUNTDOWN, st.OWNER_TURN_COUNTDOWN,
          st.UNIVERSAL),
     )

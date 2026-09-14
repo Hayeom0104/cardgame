@@ -57,13 +57,14 @@ def test_v85_loot_goblin_and_war_drum_content_exist(db, version):
     assert (looter["hp"], looter["atk"], looter["def"], looter["spd"]) == (38, 6, 2, 84)
 
     status = db.one(
-        "SELECT base_duration, cleansable FROM statuses "
+        "SELECT base_duration, cleansable, stack_cap FROM statuses "
         "WHERE content_version_id = ? AND status_id = ?",
         (version, WAR_DRUM_READY),
     )
     assert status is not None
     assert status["base_duration"] == 2
     assert status["cleansable"] == 0
+    assert status["stack_cap"] is None
 
     actions = {
         row["action_id"] for row in db.query(

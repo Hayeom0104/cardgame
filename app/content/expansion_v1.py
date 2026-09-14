@@ -72,7 +72,7 @@ def skill_cards(card_cost_min: int = 1) -> list[tuple]:
          _damage(2.1, crit_chance=0.10, crit_multiplier=2.2)),
         ("card_x1_화_불사조호흡", "불사조의 호흡", "화", 3, "공격", "enemy", 5,
          _damage(1.8) + [_status(st.BURN, 3), _status(st.ATTACK_UP, target="self")]),
-        ("card_x1_화_종말화", "종말화", "화", 4, "공격", "enemy", 6,
+        ("card_x1_화_종말화", "종말화", "화", 3, "공격", "enemy", 6,
          _damage(3.2, crit_chance=0.15, crit_multiplier=2.5) + [_status(st.BURN, 4)]),
 
         # 수 — 회복 / 보호막 / 감속 / 정화
@@ -90,7 +90,7 @@ def skill_cards(card_cost_min: int = 1) -> list[tuple]:
          _damage(1.75) + [_status(st.HEAL_DOWN)]),
         ("card_x1_수_푸른성역", "푸른 성역", "수", 3, "방어", "ally", 5,
          [_block("multiplier", 2.4), _heal("percent_max_hp", 0.10)]),
-        ("card_x1_수_대해의은총", "대해의 은총", "수", 4, "회복", "ally", 6,
+        ("card_x1_수_대해의은총", "대해의 은총", "수", 3, "회복", "ally", 6,
          [_heal("percent_max_hp", 0.30),
           {"operator": "remove_status", "params": {"category": "debuff", "count": 2}}]),
 
@@ -109,7 +109,7 @@ def skill_cards(card_cost_min: int = 1) -> list[tuple]:
          [_draw(1), _resource(1)]),
         ("card_x1_풍_청람", "청람", "풍", 3, "공격", "enemy", 5,
          _damage(2.3, crit_chance=0.30, crit_multiplier=2.5)),
-        ("card_x1_풍_천풍일섬", "천풍일섬", "풍", 4, "공격", "enemy", 6,
+        ("card_x1_풍_천풍일섬", "천풍일섬", "풍", 3, "공격", "enemy", 6,
          _damage(2.9, crit_chance=0.38, crit_multiplier=2.6)),
 
         # 지 — 방어 / 도발 / 방어 붕괴 / 안정적 피해
@@ -126,7 +126,7 @@ def skill_cards(card_cost_min: int = 1) -> list[tuple]:
          _damage(2.05) + [_status(st.DEFENSE_DOWN)]),
         ("card_x1_지_산맥의수호", "산맥의 수호", "지", 3, "방어", "ally", 5,
          [_block("multiplier", 2.65), _stat("def", 4, 2)]),
-        ("card_x1_지_천지붕괴", "천지 붕괴", "지", 4, "공격", "enemy", 6,
+        ("card_x1_지_천지붕괴", "천지 붕괴", "지", 3, "공격", "enemy", 6,
          _damage(2.75, ignores_defense=True) + [_status(st.SPEED_DOWN, 2)]),
 
         # 광 — 회복 / 정화 / 아군 강화 / 안정성
@@ -143,7 +143,7 @@ def skill_cards(card_cost_min: int = 1) -> list[tuple]:
          _damage(1.9) + [_status(st.DEFENSE_DOWN)]),
         ("card_x1_광_성역", "성역", "광", 3, "방어", "ally", 5,
          [_block("multiplier", 2.1), _heal("percent_max_hp", 0.15)]),
-        ("card_x1_광_백야", "백야", "광", 4, "버프디버프", "ally", 6,
+        ("card_x1_광_백야", "백야", "광", 3, "버프디버프", "ally", 6,
          [_status(st.ATTACK_UP, 3),
           {"operator": "remove_status", "params": {"category": "debuff", "count": 2}},
           _heal("percent_max_hp", 0.12)]),
@@ -163,7 +163,7 @@ def skill_cards(card_cost_min: int = 1) -> list[tuple]:
          _damage(1.8) + [_status(st.ATTACK_UP, target="self")]),
         ("card_x1_암_심연인", "심연의 인", "암", 3, "버프디버프", "enemy", 5,
          [_status(st.DEFENSE_DOWN, 2), _status(st.HEAL_DOWN, 2)]),
-        ("card_x1_암_무월", "무월", "암", 4, "공격", "enemy", 6,
+        ("card_x1_암_무월", "무월", "암", 3, "공격", "enemy", 6,
          _damage(2.8, ignores_defense=True, crit_chance=0.18, crit_multiplier=2.4)
          + [_status(st.BLEED, 3)]),
 
@@ -190,7 +190,7 @@ def skill_cards(card_cost_min: int = 1) -> list[tuple]:
          [_status(st.ATTACK_UP, 2)]),
         ("card_x1_무_완전재정비", "완전 재정비", "무속성", 3, "버프디버프", "self", 6,
          [_draw(2), _resource(1)]),
-        ("card_x1_무_결사항전", "결사항전", "무속성", 4, "방어", "self", 6,
+        ("card_x1_무_결사항전", "결사항전", "무속성", 3, "방어", "self", 6,
          [_block("multiplier", 2.7), _status(st.ATTACK_UP, 2)]),
     ]
 
