@@ -1,0 +1,632 @@
+[
+  {
+    "boss": "boss",
+    "seed": 71000,
+    "state": "lost",
+    "rounds": 20,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71001,
+    "state": "lost",
+    "rounds": 25,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71002,
+    "state": "lost",
+    "rounds": 27,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71003,
+    "state": "lost",
+    "rounds": 19,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71004,
+    "state": "lost",
+    "rounds": 26,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71005,
+    "state": "lost",
+    "rounds": 20,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71006,
+    "state": "lost",
+    "rounds": 25,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71007,
+    "state": "lost",
+    "rounds": 24,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71008,
+    "state": "lost",
+    "rounds": 25,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71009,
+    "state": "lost",
+    "rounds": 28,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71010,
+    "state": "lost",
+    "rounds": 27,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71011,
+    "state": "lost",
+    "rounds": 27,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71012,
+    "state": "lost",
+    "rounds": 18,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71013,
+    "state": "lost",
+    "rounds": 16,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71014,
+    "state": "lost",
+    "rounds": 24,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71015,
+    "state": "lost",
+    "rounds": 25,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71016,
+    "state": "lost",
+    "rounds": 21,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71017,
+    "state": "lost",
+    "rounds": 27,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71018,
+    "state": "lost",
+    "rounds": 24,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71019,
+    "state": "lost",
+    "rounds": 25,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71020,
+    "state": "lost",
+    "rounds": 24,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71021,
+    "state": "lost",
+    "rounds": 26,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71022,
+    "state": "lost",
+    "rounds": 28,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71023,
+    "state": "lost",
+    "rounds": 23,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71024,
+    "state": "lost",
+    "rounds": 20,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71025,
+    "state": "lost",
+    "rounds": 21,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71026,
+    "state": "lost",
+    "rounds": 25,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71027,
+    "state": "lost",
+    "rounds": 22,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71028,
+    "state": "lost",
+    "rounds": 21,
+    "hp": 0
+  },
+  {
+    "boss": "boss",
+    "seed": 71029,
+    "state": "lost",
+    "rounds": 26,
+    "hp": 0
+  },
+  {
+    "boss": "shaman",
+    "seed": 71000,
+    "state": "won",
+    "rounds": 25,
+    "hp": 144
+  },
+  {
+    "boss": "shaman",
+    "seed": 71001,
+    "state": "won",
+    "rounds": 24,
+    "hp": 123
+  },
+  {
+    "boss": "shaman",
+    "seed": 71002,
+    "state": "won",
+    "rounds": 25,
+    "hp": 151
+  },
+  {
+    "boss": "shaman",
+    "seed": 71003,
+    "state": "won",
+    "rounds": 25,
+    "hp": 142
+  },
+  {
+    "boss": "shaman",
+    "seed": 71004,
+    "state": "won",
+    "rounds": 23,
+    "hp": 132
+  },
+  {
+    "boss": "shaman",
+    "seed": 71005,
+    "state": "won",
+    "rounds": 25,
+    "hp": 144
+  },
+  {
+    "boss": "shaman",
+    "seed": 71006,
+    "state": "won",
+    "rounds": 25,
+    "hp": 151
+  },
+  {
+    "boss": "shaman",
+    "seed": 71007,
+    "state": "won",
+    "rounds": 27,
+    "hp": 144
+  },
+  {
+    "boss": "shaman",
+    "seed": 71008,
+    "state": "won",
+    "rounds": 26,
+    "hp": 152
+  },
+  {
+    "boss": "shaman",
+    "seed": 71009,
+    "state": "won",
+    "rounds": 22,
+    "hp": 141
+  },
+  {
+    "boss": "shaman",
+    "seed": 71010,
+    "state": "won",
+    "rounds": 25,
+    "hp": 143
+  },
+  {
+    "boss": "shaman",
+    "seed": 71011,
+    "state": "won",
+    "rounds": 23,
+    "hp": 134
+  },
+  {
+    "boss": "shaman",
+    "seed": 71012,
+    "state": "won",
+    "rounds": 25,
+    "hp": 153
+  },
+  {
+    "boss": "shaman",
+    "seed": 71013,
+    "state": "won",
+    "rounds": 25,
+    "hp": 151
+  },
+  {
+    "boss": "shaman",
+    "seed": 71014,
+    "state": "won",
+    "rounds": 23,
+    "hp": 134
+  },
+  {
+    "boss": "shaman",
+    "seed": 71015,
+    "state": "won",
+    "rounds": 24,
+    "hp": 133
+  },
+  {
+    "boss": "shaman",
+    "seed": 71016,
+    "state": "won",
+    "rounds": 25,
+    "hp": 153
+  },
+  {
+    "boss": "shaman",
+    "seed": 71017,
+    "state": "won",
+    "rounds": 24,
+    "hp": 144
+  },
+  {
+    "boss": "shaman",
+    "seed": 71018,
+    "state": "won",
+    "rounds": 26,
+    "hp": 141
+  },
+  {
+    "boss": "shaman",
+    "seed": 71019,
+    "state": "won",
+    "rounds": 24,
+    "hp": 134
+  },
+  {
+    "boss": "shaman",
+    "seed": 71020,
+    "state": "won",
+    "rounds": 25,
+    "hp": 133
+  },
+  {
+    "boss": "shaman",
+    "seed": 71021,
+    "state": "won",
+    "rounds": 23,
+    "hp": 133
+  },
+  {
+    "boss": "shaman",
+    "seed": 71022,
+    "state": "won",
+    "rounds": 25,
+    "hp": 133
+  },
+  {
+    "boss": "shaman",
+    "seed": 71023,
+    "state": "won",
+    "rounds": 24,
+    "hp": 142
+  },
+  {
+    "boss": "shaman",
+    "seed": 71024,
+    "state": "won",
+    "rounds": 27,
+    "hp": 151
+  },
+  {
+    "boss": "shaman",
+    "seed": 71025,
+    "state": "won",
+    "rounds": 27,
+    "hp": 144
+  },
+  {
+    "boss": "shaman",
+    "seed": 71026,
+    "state": "won",
+    "rounds": 26,
+    "hp": 152
+  },
+  {
+    "boss": "shaman",
+    "seed": 71027,
+    "state": "won",
+    "rounds": 20,
+    "hp": 140
+  },
+  {
+    "boss": "shaman",
+    "seed": 71028,
+    "state": "won",
+    "rounds": 25,
+    "hp": 144
+  },
+  {
+    "boss": "shaman",
+    "seed": 71029,
+    "state": "won",
+    "rounds": 24,
+    "hp": 142
+  },
+  {
+    "boss": "armored",
+    "seed": 71000,
+    "state": "won",
+    "rounds": 34,
+    "hp": 133
+  },
+  {
+    "boss": "armored",
+    "seed": 71001,
+    "state": "won",
+    "rounds": 38,
+    "hp": 149
+  },
+  {
+    "boss": "armored",
+    "seed": 71002,
+    "state": "won",
+    "rounds": 37,
+    "hp": 140
+  },
+  {
+    "boss": "armored",
+    "seed": 71003,
+    "state": "won",
+    "rounds": 37,
+    "hp": 126
+  },
+  {
+    "boss": "armored",
+    "seed": 71004,
+    "state": "won",
+    "rounds": 34,
+    "hp": 134
+  },
+  {
+    "boss": "armored",
+    "seed": 71005,
+    "state": "won",
+    "rounds": 31,
+    "hp": 133
+  },
+  {
+    "boss": "armored",
+    "seed": 71006,
+    "state": "won",
+    "rounds": 34,
+    "hp": 144
+  },
+  {
+    "boss": "armored",
+    "seed": 71007,
+    "state": "won",
+    "rounds": 34,
+    "hp": 152
+  },
+  {
+    "boss": "armored",
+    "seed": 71008,
+    "state": "won",
+    "rounds": 37,
+    "hp": 151
+  },
+  {
+    "boss": "armored",
+    "seed": 71009,
+    "state": "won",
+    "rounds": 34,
+    "hp": 152
+  },
+  {
+    "boss": "armored",
+    "seed": 71010,
+    "state": "won",
+    "rounds": 34,
+    "hp": 133
+  },
+  {
+    "boss": "armored",
+    "seed": 71011,
+    "state": "won",
+    "rounds": 38,
+    "hp": 152
+  },
+  {
+    "boss": "armored",
+    "seed": 71012,
+    "state": "won",
+    "rounds": 37,
+    "hp": 150
+  },
+  {
+    "boss": "armored",
+    "seed": 71013,
+    "state": "won",
+    "rounds": 32,
+    "hp": 143
+  },
+  {
+    "boss": "armored",
+    "seed": 71014,
+    "state": "won",
+    "rounds": 31,
+    "hp": 142
+  },
+  {
+    "boss": "armored",
+    "seed": 71015,
+    "state": "won",
+    "rounds": 37,
+    "hp": 146
+  },
+  {
+    "boss": "armored",
+    "seed": 71016,
+    "state": "won",
+    "rounds": 36,
+    "hp": 140
+  },
+  {
+    "boss": "armored",
+    "seed": 71017,
+    "state": "won",
+    "rounds": 37,
+    "hp": 150
+  },
+  {
+    "boss": "armored",
+    "seed": 71018,
+    "state": "won",
+    "rounds": 30,
+    "hp": 120
+  },
+  {
+    "boss": "armored",
+    "seed": 71019,
+    "state": "won",
+    "rounds": 37,
+    "hp": 146
+  },
+  {
+    "boss": "armored",
+    "seed": 71020,
+    "state": "won",
+    "rounds": 39,
+    "hp": 134
+  },
+  {
+    "boss": "armored",
+    "seed": 71021,
+    "state": "won",
+    "rounds": 37,
+    "hp": 141
+  },
+  {
+    "boss": "armored",
+    "seed": 71022,
+    "state": "won",
+    "rounds": 34,
+    "hp": 143
+  },
+  {
+    "boss": "armored",
+    "seed": 71023,
+    "state": "won",
+    "rounds": 39,
+    "hp": 141
+  },
+  {
+    "boss": "armored",
+    "seed": 71024,
+    "state": "won",
+    "rounds": 31,
+    "hp": 131
+  },
+  {
+    "boss": "armored",
+    "seed": 71025,
+    "state": "won",
+    "rounds": 34,
+    "hp": 131
+  },
+  {
+    "boss": "armored",
+    "seed": 71026,
+    "state": "won",
+    "rounds": 40,
+    "hp": 146
+  },
+  {
+    "boss": "armored",
+    "seed": 71027,
+    "state": "won",
+    "rounds": 39,
+    "hp": 143
+  },
+  {
+    "boss": "armored",
+    "seed": 71028,
+    "state": "won",
+    "rounds": 34,
+    "hp": 134
+  },
+  {
+    "boss": "armored",
+    "seed": 71029,
+    "state": "won",
+    "rounds": 31,
+    "hp": 141
+  }
+]

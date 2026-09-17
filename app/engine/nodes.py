@@ -138,6 +138,8 @@ def _pick_encounter(db: Database, balance: Balance, rng: JournaledRng, run,
     #
     # 확률의 기본값은 0이다. 문서가 이 규칙을 정해 두지 않았으므로 켜고 끄는
     # 것은 오너의 몫이고, 0이면 동작이 종전과 정확히 같다.
+    if kind == "boss" and run["boss_encounter_id"]:
+        return run["boss_encounter_id"]
     if kind == "normal":
         chance = float(balance.get("elite_encounter_chance"))
         depth_from = int(balance.get("elite_encounter_from_depth"))
@@ -602,6 +604,25 @@ def leave_shop(db: Database, run_id: int) -> dict:
 # =====================================================================
 # 이벤트
 # =====================================================================
+def _event_matches_world(db: Database, run, branches) -> bool:
+    """A fixed combat event belongs to its encounter's world.
+
+    Noncombat events remain shared. Inspect nested effects too so a conditional
+    branch cannot put a solo tutorial party into a campaign encounter.
+    """
+    if isinstance(branches, list):
+        return all(_event_matches_world(db, run, value) for value in branches)
+    if not isinstance(branches, dict):
+        return True
+    if branches.get("operator") == "start_combat":
+        encounter_id = branches.get("params", {}).get("encounter_id")
+        return db.one(
+            "SELECT 1 FROM encounters WHERE content_version_id=? "
+            "AND encounter_id=? AND world_id=?",
+            (run["content_version_id"], encounter_id, run["world_id"])) is not None
+    return all(_event_matches_world(db, run, value) for value in branches.values())
+
+
 def _open_event(db: Database, balance: Balance, rng: JournaledRng, run,
                 node) -> dict:
     """§3.3 — every event outcome is persisted before it is presented."""
@@ -614,6 +635,8 @@ def _open_event(db: Database, balance: Balance, rng: JournaledRng, run,
     events = db.query(
         "SELECT * FROM events WHERE content_version_id = ? ORDER BY event_id",
         (run["content_version_id"],))
+    events = [event for event in events if _event_matches_world(
+        db, run, json.loads(event["branches_json"]))]
     if not events:
         _set_state(db, run["run_id"], lc.MAP_NAVIGATION)
         return {"screen": "map", "reason": "no events authored"}
@@ -904,3 +927,19 @@ def _drop_stone(db: Database, run, amount: int) -> dict:
         "acquired_at_depth, acquired_at) VALUES (?, 'stone', ?, ?, ?, ?, ?)",
         (run["run_id"], tier, tier, amount, run["deepest_depth_reached"], utcnow()))
     return {"kind": "stone", "tier": tier, "amount": amount}
+
+
+def materialize_trial_card(db, run_id, choice):
+    """A designated event grants a run-only copy through the normal recipient UI."""
+    run = _run(db, run_id)
+    params = json.loads(choice["options_json"])
+    card = db.one("SELECT card_id,name,element,rarity_tier FROM cards "
+                  "WHERE content_version_id=? AND card_id=? AND is_retired=0",
+                  (run["content_version_id"], params.get("card_id")))
+    recipients = _legal_recipients(db, run, card["element"]) if card else []
+    options = [{**dict(card), "recipients": recipients, "temporary_trial": True}] if recipients else []
+    with db.tx():
+        db.execute("UPDATE pending_choices SET choice_type=?,options_json=? WHERE choice_id=?",
+                   (CHOICE_REWARD, json.dumps(options, ensure_ascii=False), choice["choice_id"]))
+        _set_state(db, run_id, lc.REWARD_SELECTION)
+    return {"options": options}

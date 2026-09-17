@@ -106,7 +106,7 @@ def test_the_confirm_screen_shows_what_will_be_snapshotted(db, balance, version,
     assert "공 7" in screen["content"]
     # 스타터는 1★ 딜서포트형이라 기본값 그대로.
     assert "HP 75" in screen["content"]
-    assert [button["label"] for button in screen["components"]] == ["확정", "취소"]
+    assert [button["label"] for button in screen["components"]] == ["확정", "덱 다시 편성", "취소"]
 
 
 def test_the_confirm_values_match_the_run_snapshot(db, balance, version, graduate):
@@ -117,6 +117,8 @@ def test_the_confirm_values_match_the_run_snapshot(db, balance, version, graduat
                         [WORLD_1_ID], version)
     screens.handle_prep(db, balance, graduate, f"{screens.PREP_PREFIX}party",
                         [STARTER_CHARACTER_ID, "char_aquel"], version)
+    screens.handle_prep(db, balance, graduate, f"{screens.PREP_PREFIX}deck_auto:1", [], version)
+    screens.handle_prep(db, balance, graduate, f"{screens.PREP_PREFIX}deck_auto:2", [], version)
     result = screens.handle_prep(db, balance, graduate,
                                  f"{screens.PREP_PREFIX}confirm", [], version)
 
@@ -245,6 +247,8 @@ def test_the_draft_is_cleared_once_the_run_exists(db, balance, version, graduate
                         [WORLD_1_ID], version)
     screens.handle_prep(db, balance, graduate, f"{screens.PREP_PREFIX}party",
                         [STARTER_CHARACTER_ID, "char_aquel"], version)
+    screens.handle_prep(db, balance, graduate, f"{screens.PREP_PREFIX}deck_auto:1", [], version)
+    screens.handle_prep(db, balance, graduate, f"{screens.PREP_PREFIX}deck_auto:2", [], version)
     screens.handle_prep(db, balance, graduate, f"{screens.PREP_PREFIX}confirm",
                         [], version)
     assert screens.load_draft(db, graduate)["world_id"] is None

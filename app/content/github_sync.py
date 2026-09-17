@@ -80,7 +80,7 @@ class PushResult:
 def _run_git(repo_path: str, *args: str) -> str:
     result = subprocess.run(
         ["git", "-C", repo_path, *args],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, encoding="utf-8", timeout=30,
     )
     if result.returncode != 0:
         raise GitSyncError(

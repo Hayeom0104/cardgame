@@ -1,0 +1,26 @@
+# 한 번 해금하면 보유 매수와 무관하게 같은 스킬을 최대 7장 편성한다.
+deck_skill_copy_limit = 7
+
+# 기존 저등급 스킬을 제공한다. 이미 보유한 카드는 강화나 조각으로 전환하지 않는다.
+# 루야는 튜토리얼의 기존 6/5/7 덱을 유지한다.
+[character_starter_skills]
+starter_001 = ["card_starter_화염참"]
+char_ignis = ["card_화_불씨", "card_화_불꽃장막", "card_무_응급처치"]
+char_pyra = ["card_화_불씨", "card_화_불꽃장막", "card_무_응급처치"]
+char_aquel = ["card_수_물결", "card_수_보호막", "card_수_치유"]
+char_marea = ["card_수_물결", "card_수_보호막", "card_수_치유"]
+char_lyra = ["card_수_유리파편", "card_수_파도수호", "card_수_치유"]
+char_terradon = ["card_지_암석타", "card_지_석갑", "card_무_응급처치"]
+char_silva = ["card_지_암석타", "card_지_석갑", "card_무_응급처치"]
+char_ventus = ["card_풍_질풍", "card_무_엄호", "card_무_응급처치"]
+char_zephyr = ["card_풍_질풍", "card_무_엄호", "card_무_응급처치"]
+char_umbra = ["card_암_출혈", "card_무_엄호", "card_무_응급처치"]
+char_noctis = ["card_암_출혈", "card_무_엄호", "card_무_응급처치"]
+char_lumen = ["card_광_섬광", "card_무_엄호", "card_광_온기"]
+char_solenne = ["card_광_섬광", "card_무_엄호", "card_광_온기"]
+
+# 출발 전 공개하는 보스별 공략 안내. 보스 추첨 결과는 준비를 닫아도 유지된다.
+[boss_preview_hints]
+enc_w1_boss = "전리품꾼을 먼저 처리하고, 전쟁북 다음 대돌진에는 방어를 준비하세요."
+enc_w1_shaman = "쇠약 주술 뒤 저주 폭발을 예고합니다. 약화는 짧게 끝나므로 방어로 버틴 뒤 공격하세요."
+enc_w1_armored = "철갑 방어 → 방패 강타 → 갑옷 정비. 강타에는 방어하고 정비 중에는 공격하세요."

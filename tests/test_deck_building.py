@@ -135,7 +135,7 @@ def test_the_chosen_cards_reach_the_run_deck(db, balance, version, graduate):
     _reach_deck_step(db, balance, graduate, version, [STARTER_CHARACTER_ID,
                                                       "char_aquel"])
     screens.handle_prep(db, balance, graduate, f"{screens.PREP_PREFIX}deck:1",
-                        ["card_starter_화염참"], version)
+                        ["card_starter_화염참"] * 7, version)
     screens.handle_prep(db, balance, graduate,
                         f"{screens.PREP_PREFIX}deck_auto:2", [], version)
     result = screens.handle_prep(db, balance, graduate,
@@ -154,7 +154,7 @@ def test_the_basic_cards_survive_any_deck_choice(db, balance, version, graduate)
     _reach_deck_step(db, balance, graduate, version, [STARTER_CHARACTER_ID,
                                                       "char_aquel"])
     screens.handle_prep(db, balance, graduate, f"{screens.PREP_PREFIX}deck:1",
-                        ["card_starter_화염참"], version)
+                        ["card_starter_화염참"] * 7, version)
     screens.handle_prep(db, balance, graduate,
                         f"{screens.PREP_PREFIX}deck_auto:2", [], version)
     result = screens.handle_prep(db, balance, graduate,
@@ -182,7 +182,7 @@ def test_a_card_the_character_cannot_play_is_refused(db, balance, version,
                                  f"{screens.PREP_PREFIX}deck:2",
                                  ["card_화_강타"], version)
     assert result["content"] == errors.ILLEGAL_STATE
-    assert screens.load_draft(db, graduate)["deck"].get(2) is None
+    assert "card_화_강타" not in screens.load_draft(db, graduate)["deck"].get(2, [])
 
 
 def test_the_engine_refuses_a_forged_deck(db, balance, version, graduate):
@@ -202,19 +202,19 @@ def test_changing_the_party_clears_the_deck(db, balance, version, graduate):
     _reach_deck_step(db, balance, graduate, version, [STARTER_CHARACTER_ID,
                                                       "char_aquel"])
     screens.handle_prep(db, balance, graduate, f"{screens.PREP_PREFIX}deck:1",
-                        ["card_starter_화염참"], version)
+                        ["card_starter_화염참"] * 7, version)
     assert screens.load_draft(db, graduate)["deck"][1]
 
     screens.handle_prep(db, balance, graduate, f"{screens.PREP_PREFIX}party",
                         ["char_aquel", STARTER_CHARACTER_ID], version)
-    assert screens.load_draft(db, graduate)["deck"] == {}
+    assert "card_starter_화염참" not in screens.load_draft(db, graduate)["deck"].get(1, [])
 
 
 def test_the_preview_matches_the_deck_that_gets_built(db, balance, version,
                                                       graduate):
     """화면이 보여준 덱과 실제로 만들어지는 덱이 달라서는 안 된다."""
     _unlock(db, graduate, "card_starter_화염참")
-    chosen = ["card_starter_화염참"]
+    chosen = ["card_starter_화염참"] * 7
     preview = lc.preview_deck(db, balance, graduate, STARTER_CHARACTER_ID,
                               version, chosen=chosen)
 

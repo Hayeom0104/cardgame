@@ -1122,6 +1122,8 @@ def create_account(db: Database, user_id: int, content_version_id: int) -> None:
     """
     existing = db.one("SELECT user_id FROM accounts WHERE user_id = ?", (user_id,))
     if existing is not None:
+        from app.engine.loadouts import backfill
+        backfill(db, user_id, content_version_id)
         return
 
     from app.content.balance import Balance

@@ -121,6 +121,8 @@ def publish(db: Database, version_id: int) -> str:
         logger.info("Deckout v8.5 world-1 gimmick overlay applied to content version %s",
                     version_id)
 
+    from app.content.deck_refresh import apply
+    apply(db, version_id)
     validate_version(db, version_id)
     stamp = fingerprint(db, version_id)
     with db.tx() as conn:

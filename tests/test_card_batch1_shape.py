@@ -33,6 +33,10 @@ def _clear_batch_cards(db, version):
     validation time) — neither is part of what this file tests, so both go
     too rather than leaving dangling references behind.
     """
+    # This fixture replaces the entire skill pool; its starter-bundle references
+    # must be removed along with reward/event references to the original cards.
+    db.execute("UPDATE balancing_constants SET value_json='{}' WHERE "
+               "content_version_id=? AND key='character_starter_skills'", (version,))
     db.execute("DELETE FROM events WHERE content_version_id = ?", (version,))
     db.execute("DELETE FROM reward_tables WHERE content_version_id = ?", (version,))
     db.execute(

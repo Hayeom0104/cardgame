@@ -271,7 +271,7 @@ def test_a_tutorial_run_never_gets_stuck(ctx, db, user_id):
     assert all(line.strip() for line in session.log)
 
 
-def test_a_fresh_player_can_actually_clear_the_tutorial_and_reach_the_main_campaign(ctx, db):
+def test_a_fresh_player_can_actually_clear_the_tutorial_and_reach_the_main_campaign(ctx, db, monkeypatch):
     """R3 §9 Mandatory Acceptance Test A — 진짜 승리로, 화면이 준 컨트롤만으로.
 
     보스 HP를 직접 0으로 만들지 않는다. `!덱아웃 포기`로 끝내지 않는다 —
@@ -287,6 +287,9 @@ def test_a_fresh_player_can_actually_clear_the_tutorial_and_reach_the_main_campa
     자체가 곧 R3이 요구한 "승인된 재시도 상한"이다.
     """
     RETRY_CEILING = 5
+    # Regression seed: previously entered a world-1 combat event in the tutorial
+    # and lost the same 3-enemy encounter repeatedly until all 300 clicks ran out.
+    monkeypatch.setattr(lc.secrets, "randbits", lambda bits: 6110960433128140531)
     fresh_id = 810400
     session = None
     cleared = False

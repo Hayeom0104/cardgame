@@ -1,0 +1,91 @@
+{
+  "deck": {
+    "action": "edit",
+    "content": "**준비 화면** — [3] 덱 구성 (2/2)\n아쿠엘 · 수\n덱 18장 중 기본 카드 11장은 고정이고, 나머지 7장을 고른 카드로 채웁니다.\n고르지 않으면 자동으로 구성합니다.",
+    "components": [
+      {
+        "type": "string_select",
+        "custom_id": "dko:prep:deck:2",
+        "placeholder": "아쿠엘이(가) 낼 수 있는 카드",
+        "min_values": 0,
+        "max_values": 5,
+        "options": [
+          {
+            "label": "물의 장막 (2)",
+            "description": "수 · 방어",
+            "value": "card_수_보호막"
+          },
+          {
+            "label": "물의 치유 (2)",
+            "description": "수 · 회복",
+            "value": "card_수_치유"
+          },
+          {
+            "label": "기본 방어 (1)",
+            "description": "무속성 · 방어",
+            "value": "card_기본방어"
+          },
+          {
+            "label": "물결 베기 (2)",
+            "description": "수 · 공격",
+            "value": "card_수_물결"
+          },
+          {
+            "label": "평타 (1)",
+            "description": "무속성 · 공격",
+            "value": "card_평타"
+          }
+        ]
+      },
+      {
+        "type": "button",
+        "custom_id": "dko:prep:deck_auto:2",
+        "label": "자동 구성"
+      }
+    ]
+  },
+  "equipment": {
+    "action": "reply",
+    "content": "**장비** — 코인 —\n수련용 검 T1 · 무기 [starter_001]\n　다음 강화: T2×3 + T1×2\n수련용 갑옷 T0 · 방어구 [starter_001]\n　다음 강화: T1×2\n수련용 부적 T2 · 악세서리 [starter_001]\n　다음 강화: T3×4 + T2×4",
+    "components": [
+      {
+        "type": "string_select",
+        "custom_id": "dko:hub:enhance",
+        "placeholder": "강화할 장비",
+        "options": [
+          {
+            "label": "수련용 검 → T2",
+            "value": "1"
+          },
+          {
+            "label": "수련용 갑옷 → T1",
+            "value": "2"
+          },
+          {
+            "label": "수련용 부적 → T3",
+            "value": "3"
+          }
+        ]
+      },
+      {
+        "type": "string_select",
+        "custom_id": "dko:hub:equip",
+        "placeholder": "장착할 장비",
+        "options": [
+          {
+            "label": "수련용 검 T1 (무기)",
+            "value": "1"
+          },
+          {
+            "label": "수련용 갑옷 T0 (방어구)",
+            "value": "2"
+          },
+          {
+            "label": "수련용 부적 T2 (악세서리)",
+            "value": "3"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -18,12 +18,13 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 # Bumped whenever schema.sql changes shape. §18.9: startup fails closed when the
 # file on disk is older than what the code expects.
-EXPECTED_SCHEMA_VERSION = 8
+EXPECTED_SCHEMA_VERSION = 9
 
 #: §18.9 forward-only migrations, applied in one transaction each and recorded.
 #: `schema.sql` uses CREATE TABLE IF NOT EXISTS, so it never alters an existing
 #: table — anything that changes a table already on disk belongs here.
 MIGRATIONS: dict[int, tuple[str, ...]] = {
+    9: ("ALTER TABLE runs ADD COLUMN boss_encounter_id TEXT",),
     # v6.4, §2.5.1a — statuses gain `scope`, gating which content pools may
     # reference them. The base 10 are all `universal`.
     2: (

@@ -305,7 +305,10 @@ def deck_screen(ctx: HandlerContext, user_id: int) -> dict:
                 upgradable.append((card, plan))
         lines.append(line)
 
-    components = [_CATALOG_BUTTON]
+    components = [_CATALOG_BUTTON,
+                  {"type": "button", "custom_id": f"{hub.HUB_PREFIX}st:{cid.to_base36(user_id)}",
+                   "label": "출발 준비 · 덱 편성"}]
+    lines.append("캐릭터별 덱은 출발 준비에서 장수를 정해 저장할 수 있습니다.")
     if upgradable:
         components.append({
             "type": "string_select", "custom_id": f"{hub.HUB_PREFIX}cardup",
@@ -511,11 +514,32 @@ def equipment_screen(ctx: HandlerContext, user_id: int) -> dict:
     upgradable: list[tuple] = []
     render_rows: list[dict] = []
     for row in rows:
-        equipped = f" [{row['equipped_character_id']}]" if row["equipped_character_id"] else ""
+        wearer = ctx.db.one("SELECT name FROM characters WHERE content_version_id=? AND character_id=?",
+                             (ctx.content_version_id, row["equipped_character_id"]))
+        wearer_name = wearer["name"] if wearer else "미장착"
+        equipped = f" [장착: {wearer_name}]"
         line = f"{row['name']} T{row['tier']} · {row['slot']}{equipped}"
         render_row = {"equipment_def_id": row["equipment_def_id"], "name": row["name"],
                      "tier": row["tier"], "slot": row["slot"],
-                     "equipped_character_id": row["equipped_character_id"]}
+                     "equipped_character_id": row["equipped_character_id"],
+                     "equipped_character_name": wearer_name}
+        from app.engine.encounter import _equipment_flat
+        def bonuses(tier):
+            return _equipment_flat(ctx.db, ctx.content_version_id,
+                                   json.dumps({"piece": {"def_id": row["equipment_def_id"], "tier": tier}}))
+        current = bonuses(int(row["tier"]))
+        labels = {"hp": "HP", "atk": "공격", "def": "방어", "spd": "속도"}
+        stat_line = " · ".join(f"{labels[k]} +{v}" for k, v in current.items() if v) or "능력치 보너스 없음"
+        if int(row["tier"]) < max_tier:
+            after = bonuses(int(row["tier"]) + 1)
+            stat_line = " · ".join(f"{labels[k]} {current[k]} > {after[k]} (+{after[k]-current[k]})"
+                                   for k in current if current[k] or after[k])
+        else:
+            stat_line += " · 최대 강화"
+        line += "\n　" + stat_line
+        stat_parts = stat_line.split(" · ")
+        render_row["stat_lines"] = [" · ".join(stat_parts[i:i+2]) for i in range(0, len(stat_parts), 2)]
+        render_row["stat_preview"] = stat_line
         if int(row["tier"]) < max_tier:
             cost = pg.enhancement_cost(ctx.balance, int(row["tier"]) + 1)
             need = f"T{int(row['tier']) + 1}×{cost['current_tier_stones']}"
@@ -523,7 +547,7 @@ def equipment_screen(ctx: HandlerContext, user_id: int) -> dict:
                 need += f" + T{row['tier']}×{cost['previous_tier_stones']}"
             line += f"\n　다음 강화: {need}"
             render_row["next_enhance"] = f"다음 강화: {need}"
-            upgradable.append((row["equipment_instance_id"], row["name"],
+            upgradable.append((row["equipment_instance_id"], f"{row['name']} [{wearer_name}]",
                                int(row["tier"]) + 1))
         lines.append(line)
         render_rows.append(render_row)
@@ -723,6 +747,8 @@ def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
     Re-issuing it while a run is active re-renders the current screen (§16.3);
     if the thread was deleted it is recreated at surface_generation + 1 (§16.8).
     """
+    from app.engine.loadouts import backfill
+    backfill(ctx.db, user_id, ctx.content_version_id)
     expired = _expire_and_close(ctx, user_id)
 
     run = lc.active_run_for(ctx.db, user_id)
@@ -1170,6 +1196,10 @@ def current_screen(ctx: HandlerContext, run_id: int) -> dict | None:
             return {"action": "edit",
                     "content": f"{prefix}이벤트: {options.get('name', '')}",
                     "components": controls.event(ctx.db, run_id, options)}
+        if choice["choice_type"] == "add_card_to_run_deck":
+            parsed = cid.CustomId(cid.ACTION_EVENT_PICK, run_id,
+                                  run["surface_generation"], run["presentation_revision"])
+            return _render_nested_choice(ctx, run, parsed, {})
         # Other choice_type (nested operator halt) needs logic re-execution
         # to reconstruct safely — not invented here either.
         return None
@@ -1335,6 +1365,15 @@ def _render_nested_choice(ctx: HandlerContext, run, parsed: cid.CustomId,
     choice = ctx.db.one(
         "SELECT * FROM pending_choices WHERE run_id = ? AND status = 'open'",
         (parsed.run_id,))
+    if choice is not None and choice["choice_type"] == "add_card_to_run_deck":
+        offer = nodes.materialize_trial_card(ctx.db, parsed.run_id, choice)
+        if not offer["options"]:
+            nodes.choose_reward(ctx.db, parsed.run_id, choice_id=choice["choice_id"],
+                                card_id=None, party_slot=None)
+            return {"action": "edit", "content": "이 스킬을 사용할 파티원이 없어 지나갑니다.",
+                    "components": controls.game_map(ctx.db, parsed.run_id)}
+        return {"action": "edit", "content": "스킬 체험 — 이번 모험에서만 사용할 캐릭터를 선택하세요.",
+                "components": controls.reward(ctx.db, parsed.run_id, offer["options"])}
     if choice is not None and choice["choice_type"] == "offer_reward":
         offer = nodes.materialize_offer_reward(
             ctx.db, ctx.balance, _rng(ctx, run), parsed.run_id, choice)

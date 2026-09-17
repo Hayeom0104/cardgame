@@ -1348,11 +1348,13 @@ def render_deck(cards: list[dict], *, character: dict, title: str,
     for index, card in enumerate(ordered):
         column, row = index % columns, index // columns
         left = left_edge + column * (size[0] + canvas.gap)
-        top = 56 + row * (size[1] + canvas.gap)
+        top = 56 + row * (size[1] + 36)
         if top + size[1] > canvas.height - canvas.pad:
             break
         canvas.paste(render_card(card, canvas, size=size), (left, top))
 
+        canvas.label((left, top + size[1] + 7), str(card.get("name", ""))[:9],
+                     role="small")
         count = int(card.get("count", 1))
         if count > 1:
             text = f"×{count}"
@@ -1678,7 +1680,7 @@ def render_equipment(rows: list[dict], *, stones: list[dict] | None = None) -> A
         top0 += 26
 
     icon = (56, 56)
-    item_width, row_height = 420, 72
+    item_width, row_height = 420, 124
     columns = max(1, (canvas.width - canvas.pad * 2 + canvas.gap)
                   // (item_width + canvas.gap))
     capacity_rows = max(1, (canvas.height - top0 - canvas.pad + canvas.gap)
@@ -1697,12 +1699,15 @@ def render_equipment(rows: list[dict], *, stones: list[dict] | None = None) -> A
         text_left = left + icon[0] + 18
         canvas.label((text_left, top),
                      f"{entry.get('name', '')} T{entry.get('tier', 1)}"[:22])
-        equipped = entry.get("equipped_character_id")
+        equipped = entry.get("equipped_character_name") or entry.get("equipped_character_id") or "미장착"
         sub = str(entry.get("slot", "")) + (f" · 장착: {equipped}" if equipped else "")
         canvas.label((text_left, top + 22), sub[:32], role="small", color=canvas.muted)
+        for line_index, stat_line in enumerate(entry.get("stat_lines", [])[:2]):
+            canvas.label((text_left, top + 44 + line_index * 20), stat_line,
+                         role="small", color=canvas.accent)
         need = entry.get("next_enhance")
         if need:
-            canvas.label((text_left, top + 44), str(need)[:32], role="small",
+            canvas.label((text_left, top + 94), str(need)[:32], role="small",
                          color=canvas.accent)
 
     hidden = len(rows) - capacity

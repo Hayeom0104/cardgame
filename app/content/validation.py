@@ -44,6 +44,8 @@ def validate_version(db: Database, version_id: int) -> None:
     _validate_passives(db, version_id)
     _validate_constants(db, version_id)
     _validate_card_batch1_shape(db, version_id)
+    from app.content.deck_refresh import validate_bundles
+    validate_bundles(db, version_id)
 
 
 def _validate_passives(db: Database, version_id: int) -> None:

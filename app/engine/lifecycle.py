@@ -276,7 +276,7 @@ def _validate_decks(db: Database, balance: Balance, request: RunBuildRequest,
     화면이 걸러 주기는 하지만 `custom_id` 는 위조할 수 있으므로, 실제로
     런에 들어가기 전에 여기서 한 번 더 본다.
     """
-    from app.content import catalog
+    from app.engine import loadouts
 
     for slot, card_ids in request.deck_by_slot.items():
         index = int(slot) - 1
@@ -286,13 +286,11 @@ def _validate_decks(db: Database, balance: Balance, request: RunBuildRequest,
             continue
 
         character_id = request.party_character_ids[index]
-        legal = {card.card_id for card in catalog.playable_for(
-            db, request.user_id, content_version_id, character_id)}
-        for card_id in card_ids:
-            if card_id not in legal:
-                raise LifecycleError(
-                    f"{card_id!r} 은(는) 이 캐릭터가 낼 수 없거나 해금하지 "
-                    "않은 카드입니다.")
+        try:
+            loadouts.validate(db, balance, request.user_id, content_version_id,
+                              character_id, card_ids)
+        except ValueError as error:
+            raise LifecycleError(str(error)) from error
 
 
 def create_run(db: Database, balance: Balance, request: RunBuildRequest,
@@ -301,6 +299,17 @@ def create_run(db: Database, balance: Balance, request: RunBuildRequest,
 
     The run only exists from here; steps 1-4 created nothing.
     """
+    from app.engine import loadouts, boss_selection
+
+    loadouts.backfill(db, request.user_id, content_version_id)
+    # Resolve saved decks before validation and snapshotting. Explicit empty
+    # lists retain the old automatic API; an absent slot uses the saved deck.
+    request.deck_by_slot = dict(request.deck_by_slot)
+    for slot, character_id in enumerate(request.party_character_ids, 1):
+        if slot not in request.deck_by_slot and str(slot) not in request.deck_by_slot:
+            cards = loadouts.saved(db, balance, request.user_id, content_version_id, character_id)
+            if cards and not request.is_tutorial:
+                request.deck_by_slot[slot] = cards
     validate_build(db, balance, request, content_version_id)
 
     existing = db.one(
@@ -330,6 +339,10 @@ def create_run(db: Database, balance: Balance, request: RunBuildRequest,
             (f"dko-run-{run_id}", run_id),
         )
 
+        boss_id = boss_selection.preview(db, request.user_id, request.world_id, content_version_id)
+        conn.execute("UPDATE runs SET boss_encounter_id=? WHERE run_id=?", (boss_id, run_id))
+        conn.execute("DELETE FROM boss_previews WHERE user_id=? AND world_id=?",
+                     (request.user_id, request.world_id))
         account = conn.execute("SELECT * FROM accounts WHERE user_id = ?",
                                (request.user_id,)).fetchone()
         for slot, character_id in enumerate(request.party_character_ids, start=1):
@@ -337,7 +350,7 @@ def create_run(db: Database, balance: Balance, request: RunBuildRequest,
                 conn, balance, run_id, slot, character_id, account,
                 content_version_id,
                 chosen=request.deck_by_slot.get(slot)
-                or request.deck_by_slot.get(str(slot)))
+                or request.deck_by_slot.get(str(slot)) or None)
 
         for slot, passive_id in enumerate(request.passive_card_ids, start=1):
             conn.execute(
@@ -475,22 +488,26 @@ def _compose_deck(conn, balance: Balance, user_id: int, character,
     deck = ([CARD_BASIC_ATTACK] * int(composition["평타"])
             + [CARD_BASIC_DEFENSE] * int(composition["기본_방어"]))
 
-    if chosen:
-        playable = [card_id for card_id in dict.fromkeys(chosen)
-                    if card_id not in (CARD_BASIC_ATTACK, CARD_BASIC_DEFENSE)]
-    else:
-        playable = []
-    playable = playable or [
+    if chosen is not None:
+        # Editor previews may be incomplete; committed builds are validated.
+        return deck + list(chosen)
+    playable = [
         row["card_id"]
         for row in conn.execute(
             "SELECT uc.card_id FROM unlocked_cards uc JOIN cards c "
             "ON c.card_id = uc.card_id AND c.content_version_id = ? "
-            "WHERE uc.user_id = ? AND c.is_retired = 0 AND c.element = ? "
+            "WHERE uc.user_id = ? AND c.is_retired = 0 AND c.element IN (?, '무속성') "
             "AND uc.card_id NOT IN (?, ?) ORDER BY c.rarity_tier DESC, uc.card_id",
             (content_version_id, user_id, character["element"],
              CARD_BASIC_ATTACK, CARD_BASIC_DEFENSE),
         ).fetchall()
     ]
+    by_category = {}
+    for card_id in playable:
+        category = conn.execute("SELECT category FROM cards WHERE content_version_id=? AND card_id=?",
+                                (content_version_id, card_id)).fetchone()["category"]
+        by_category.setdefault(category, card_id)
+    playable = [by_category[k] for k in ("공격", "방어", "회복", "버프디버프") if k in by_category]
     if not playable:
         # No elemental card unlocked yet: pad with 평타 so the deck still
         # reaches base size and can never soft-lock a draw.

@@ -1,0 +1,43 @@
+{
+  "modified_files": [
+    "README.md",
+    "app/api/handlers.py",
+    "app/api/screens.py",
+    "app/content/github_sync.py",
+    "app/content/seed.py",
+    "app/content/validation.py",
+    "app/content/versioning.py",
+    "app/db/connection.py",
+    "app/db/schema.sql",
+    "app/engine/gacha.py",
+    "app/engine/lifecycle.py",
+    "app/engine/nodes.py",
+    "app/render/panels.py",
+    "tests/test_card_batch1_shape.py",
+    "tests/test_deck_building.py",
+    "tests/test_screens.py"
+  ],
+  "added_files": [
+    "app/api/deck_editor.py",
+    "app/cli/upgrade_deck_refresh.py",
+    "app/content/deck_refresh.py",
+    "app/engine/boss_selection.py",
+    "app/engine/loadouts.py",
+    "config/14_덱개편.toml",
+    "docs/DECK_REFRESH_HANDOFF.md",
+    "docs/VERIFICATION.md",
+    "docs/previews/armored_deckout_situation.png",
+    "docs/previews/armored_deckout_turn.png",
+    "docs/previews/deckout_deck.png",
+    "docs/previews/deckout_equipment.png",
+    "docs/previews/screens.json",
+    "docs/previews/shaman_deckout_situation.png",
+    "docs/previews/shaman_deckout_turn.png",
+    "docs/validation/boss-equipment-simulation.json",
+    "docs/validation/boss-simulation.json",
+    "docs/validation/pytest-final.txt",
+    "tests/test_deck_refresh.py"
+  ],
+  "tests": "886 passed, 1 dependency deprecation warning",
+  "schema": "8 -> 9"
+}

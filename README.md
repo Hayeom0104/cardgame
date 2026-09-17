@@ -1,5 +1,7 @@
 # Deckout
 
+덱 장수 편성·기본 스킬 지급·성장 표시·월드 1 보스 개편: [구현 및 업데이트 안내](docs/DECK_REFRESH_HANDOFF.md).
+
 An implementation of **Deckout — Design Document v6.4**: a roguelike card-battler
 that runs as its own FastAPI service and proxies every Discord interaction
 through the ARI Central Bot.

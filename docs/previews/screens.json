@@ -1,0 +1,92 @@
+{
+  "deck": {
+    "action": "edit",
+    "content": "**준비 화면** — [3] 덱 구성 (2/2)\n아쿠엘\n이번 도전 보스: 고블린 대족장\n전리품꾼을 먼저 처리하고, 전쟁북 다음 대돌진에는 방어를 준비하세요.\n기본 공격 6장 · 기본 방어 5장 고정\n스킬 7/7장 · 같은 스킬 최대 7장\n한 번 해금하면 여러 장 편성할 수 있습니다. 중복 획득은 강화 재료로 사용합니다.\n이 캐릭터의 저장된 덱을 불러왔습니다.\n• 물결 베기: 3장\n• 물의 장막: 2장\n• 물의 치유: 2장",
+    "components": [
+      {
+        "type": "button",
+        "custom_id": "dko:prep:deck_save:2",
+        "label": "저장하고 다음",
+        "disabled": false
+      },
+      {
+        "type": "button",
+        "custom_id": "dko:prep:deck_auto:2",
+        "label": "자동 편성 저장"
+      },
+      {
+        "type": "string_select",
+        "custom_id": "dko:prep:deck_pick:2",
+        "placeholder": "장수를 바꿀 스킬 (1/1)",
+        "min_values": 1,
+        "max_values": 1,
+        "options": [
+          {
+            "label": "물결 베기 · 3장",
+            "description": "비용 2 · 공격 · 강화 +0",
+            "value": "card_수_물결"
+          },
+          {
+            "label": "물의 장막 · 2장",
+            "description": "비용 2 · 방어 · 강화 +0",
+            "value": "card_수_보호막"
+          },
+          {
+            "label": "물의 치유 · 2장",
+            "description": "비용 2 · 회복 · 강화 +0",
+            "value": "card_수_치유"
+          }
+        ]
+      },
+      {
+        "type": "button",
+        "custom_id": "dko:prep:deck_reset:2",
+        "label": "스킬 비우기"
+      }
+    ]
+  },
+  "equipment": {
+    "action": "reply",
+    "content": "**장비** — 코인 —\n수련용 검 T1 · 무기 [장착: 루야]\n　공격 5 > 6 (+1)\n　다음 강화: T2×3 + T1×2\n수련용 갑옷 T0 · 방어구 [장착: 루야]\n　HP 12 > 15 (+3) · 방어 3 > 3 (+0)\n　다음 강화: T1×2\n수련용 부적 T2 · 악세서리 [장착: 루야]\n　HP 9 > 10 (+1) · 공격 1 > 1 (+0) · 방어 1 > 1 (+0) · 속도 4 > 5 (+1)\n　다음 강화: T3×4 + T2×4",
+    "components": [
+      {
+        "type": "string_select",
+        "custom_id": "dko:hub:enhance",
+        "placeholder": "강화할 장비",
+        "options": [
+          {
+            "label": "수련용 검 [루야] → T2",
+            "value": "1"
+          },
+          {
+            "label": "수련용 갑옷 [루야] → T1",
+            "value": "2"
+          },
+          {
+            "label": "수련용 부적 [루야] → T3",
+            "value": "3"
+          }
+        ]
+      },
+      {
+        "type": "string_select",
+        "custom_id": "dko:hub:equip",
+        "placeholder": "장착할 장비",
+        "options": [
+          {
+            "label": "수련용 검 T1 (무기)",
+            "value": "1"
+          },
+          {
+            "label": "수련용 갑옷 T0 (방어구)",
+            "value": "2"
+          },
+          {
+            "label": "수련용 부적 T2 (악세서리)",
+            "value": "3"
+          }
+        ]
+      }
+    ]
+  }
+}

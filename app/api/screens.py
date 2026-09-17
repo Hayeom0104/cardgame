@@ -130,7 +130,8 @@ def party_select_screen(db: Database, user_id: int, content_version_id: int,
     return {
         "action": "edit",
         "content": (f"**준비 화면** — [2] 파티 선택 "
-                    f"({minimum}~{slots}명, 중복 불가)"),
+                    f"({minimum}~{slots}명, 중복 불가)\n"
+                    + boss_hint(db, user_id, content_version_id, draft)),
         "components": [{
             "type": "string_select",
             "custom_id": f"{PREP_PREFIX}party",
@@ -147,73 +148,14 @@ def party_select_screen(db: Database, user_id: int, content_version_id: int,
     }
 
 
-def deck_select_screen(db: Database, user_id: int, content_version_id: int,
-                       draft: dict, *, slot: int) -> dict:
-    """[3] DECK — 파티 자리마다 그 캐릭터가 들고 갈 카드를 고른다 (§3.2).
+def boss_hint(db, user_id, version, draft):
+    from app.engine.boss_selection import description
+    return description(db, user_id, draft["world_id"], version)
 
-    덱은 캐릭터별이다. 캐릭터 카드가 자리를 차지하고, 그 캐릭터가 낼 수 있는
-    행동 카드만 그 덱에 들어간다 (§2.10) — 속성이 맞거나 무속성이어야 한다.
 
-    고른 카드는 §4.3의 기본 카드 몫을 남긴 나머지 자리를 순서대로 채운다.
-    아무것도 고르지 않으면 그 자리는 §4.6.2대로 자동 구성한다. 기본 카드
-    몫을 없앨 수는 없다 — 낼 카드가 없어 자동 방어만 하는 덱이 되어서는
-    안 되기 때문이다.
-    """
-    from app.content import catalog
-
-    party = draft["party"]
-    if slot > len(party):
-        return confirm_screen(db, user_id, content_version_id, draft)
-
-    character_id = party[slot - 1]
-    character = catalog.find(db, content_version_id, character_id, user_id=user_id)
-    playable = catalog.playable_for(db, user_id, content_version_id, character_id)
-
-    balance = Balance(db, content_version_id)
-    size = int(balance.get("base_deck_size"))
-    composition = balance.get("starter_deck_composition")
-    basics = int(composition["평타"]) + int(composition["기본_방어"])
-    free = size - basics
-
-    name = character.name if character else character_id
-    element = character.element if character else ""
-    lines = [f"**준비 화면** — [3] 덱 구성 ({slot}/{len(party)})",
-             f"{name} · {element}",
-             f"덱 {size}장 중 기본 카드 {basics}장은 고정이고, 나머지 "
-             f"{free}장을 고른 카드로 채웁니다.",
-             "고르지 않으면 자동으로 구성합니다."]
-
-    components: list[dict] = []
-    if playable:
-        components.append({
-            "type": "string_select",
-            "custom_id": f"{PREP_PREFIX}deck:{slot}",
-            "placeholder": f"{name}이(가) 낼 수 있는 카드",
-            "min_values": 0,
-            "max_values": min(free, len(playable), 25),
-            "options": [
-                {"label": f"{card.name} ({card.cost})",
-                 "description": f"{card.element} · {card.category}"
-                                + (f" · +{card.upgrade_tier}" if card.upgrade_tier
-                                   else ""),
-                 "value": card.card_id}
-                for card in sorted(playable,
-                                   key=lambda c: (-c.rarity, c.card_id))[:25]
-            ],
-        })
-    else:
-        lines.append("아직 이 캐릭터가 낼 수 있는 카드가 없어 자동 구성합니다.")
-
-    components.append({"type": "button",
-                       "custom_id": f"{PREP_PREFIX}deck_auto:{slot}",
-                       "label": "자동 구성"})
-
-    return {"action": "edit", "content": "\n".join(lines),
-            "components": components,
-            "attachments": visuals.deck(db, balance, user_id=user_id,
-                                        content_version_id=content_version_id,
-                                        character_id=character_id,
-                                        chosen=draft["deck"].get(slot) or [])}
+def deck_select_screen(db, user_id, content_version_id, draft, *, slot):
+    from app.api.deck_editor import screen
+    return screen(db, user_id, content_version_id, draft, slot=slot)
 
 
 def passive_select_screen(db: Database, user_id: int, content_version_id: int,
@@ -261,7 +203,8 @@ def confirm_screen(db: Database, user_id: int, content_version_id: int,
                    "AND world_id = ?", (content_version_id, draft["world_id"]))
 
     lines = ["**준비 화면** — [4] 확정",
-             f"월드: {world['name'] if world else draft['world_id']}"]
+             f"월드: {world['name'] if world else draft['world_id']}",
+             boss_hint(db, user_id, content_version_id, draft)]
     #: 글자와 그림이 같은 값을 보여주도록 한 번만 계산해 둘 다에 쓴다.
     members: list[dict] = []
     for character_id in draft["party"]:
@@ -301,6 +244,7 @@ def confirm_screen(db: Database, user_id: int, content_version_id: int,
         "content": "\n".join(lines),
         "components": [
             {"type": "button", "custom_id": f"{PREP_PREFIX}confirm", "label": "확정"},
+            {"type": "button", "custom_id": f"{PREP_PREFIX}deck_page:1:0", "label": "덱 다시 편성"},
             {"type": "button", "custom_id": f"{PREP_PREFIX}cancel", "label": "취소"},
         ],
         # 여기 보이는 값이 §16.2.3에서 그대로 얼려진다.
@@ -373,35 +317,8 @@ def handle_prep(db: Database, balance: Balance, user_id: int, custom_id: str,
         return deck_select_screen(db, user_id, content_version_id, draft, slot=1)
 
     if step.startswith("deck"):
-        from app.content import catalog
-
-        action, _, raw_slot = step.partition(":")
-        try:
-            slot = int(raw_slot)
-        except ValueError:
-            return {"action": "edit", "content": errors.ILLEGAL_STATE}
-        if not 1 <= slot <= len(draft["party"]):
-            return {"action": "edit", "content": errors.ILLEGAL_STATE}
-
-        picked: list[str] = []
-        if action == "deck":
-            character_id = draft["party"][slot - 1]
-            # `custom_id`는 위조될 수 있으니, 그 캐릭터가 실제로 낼 수 있는
-            # 카드인지 다시 본다 (§2.10).
-            legal = {card.card_id for card in catalog.playable_for(
-                db, user_id, content_version_id, character_id)}
-            picked = list(dict.fromkeys(values))
-            if not set(picked) <= legal:
-                return {"action": "edit", "content": errors.ILLEGAL_STATE}
-
-        deck = {**draft["deck"], slot: picked}
-        draft = {**draft, "deck": deck}
-        save_draft(db, user_id, draft)
-
-        if slot < len(draft["party"]):
-            return deck_select_screen(db, user_id, content_version_id, draft,
-                                      slot=slot + 1)
-        return passive_select_screen(db, user_id, content_version_id, draft)
+        from app.api.deck_editor import handle
+        return handle(db, balance, user_id, content_version_id, draft, step, values)
 
     if step in ("passive", "skip_passive"):
         if not draft["party"]:
@@ -431,6 +348,15 @@ def materialize(db: Database, balance: Balance, user_id: int, draft: dict,
     런은 스레드도 화면도 없이 계정만 점유한다 — §16.3의 계정당 하나 규칙 탓에
     새 런을 시작할 수도 없다.
     """
+    from app.engine import loadouts
+    for slot, character_id in enumerate(draft["party"], 1):
+        try:
+            loadouts.validate(db, balance, user_id, content_version_id, character_id,
+                              draft["deck"].get(slot, []))
+        except ValueError as error:
+            return {"action": "edit", "content": str(error),
+                    "components": [{"type": "button", "custom_id": f"{PREP_PREFIX}deck_page:{slot}:0",
+                                    "label": "덱 완성하기"}]}
     world = db.one(
         "SELECT is_tutorial FROM worlds WHERE content_version_id = ? AND world_id = ?",
         (content_version_id, draft["world_id"]))
@@ -596,6 +522,8 @@ def format_results(db: Database, outcome: gacha.GachaOutcome,
             if result.wildcards:
                 parts.append(f"와일드카드 +{result.wildcards}")
             line += f" (중복 · {' · '.join(parts)})"
+        if result.kind == "character" and not result.is_duplicate:
+            line += " · 기본 스킬 함께 해금 (기보유 제외)"
         if result.forced_by_guarantee:
             line += " ← 첫 뽑기 보장"
         lines.append(line)

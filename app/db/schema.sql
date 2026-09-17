@@ -161,6 +161,7 @@ CREATE TABLE IF NOT EXISTS runs (
   last_activity_at        TEXT    NOT NULL,
   ended_at                TEXT,
   end_reason              TEXT,
+  boss_encounter_id       TEXT,
   thread_deleted_at       TEXT                     -- R3 M-03: §16.8 terminal
                                                    -- cleanup, once actually run
 );
@@ -890,4 +891,22 @@ CREATE TABLE IF NOT EXISTS battle_passives (
   passive_card_id TEXT    NOT NULL,
   fired_count     INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (battle_id, passive_slot)
+);
+
+
+-- One exact skill loadout per account/character; copies are not inventory.
+CREATE TABLE IF NOT EXISTS character_decks (
+  user_id INTEGER NOT NULL,
+  character_id TEXT NOT NULL,
+  cards_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, character_id)
+);
+-- Preview is retained across closing/cancelling preparation, consumed on start.
+CREATE TABLE IF NOT EXISTS boss_previews (
+  user_id INTEGER NOT NULL,
+  world_id TEXT NOT NULL,
+  content_version_id INTEGER NOT NULL,
+  encounter_id TEXT NOT NULL,
+  PRIMARY KEY (user_id, world_id, content_version_id)
 );

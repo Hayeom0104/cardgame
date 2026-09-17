@@ -374,6 +374,8 @@ def _grant(conn, balance: Balance, user_id: int, kind: str, entity_id: str,
                 "acquired_at) VALUES (?, ?, ?, ?)",
                 (user_id, entity_id, star["base_rarity"] if star else 1, utcnow()),
             )
+            from app.engine.loadouts import grant_starter_skills
+            grant_starter_skills(conn, user_id, content_version_id, entity_id)
             return result
 
         yields = balance.get("duplicate_character_yield")
