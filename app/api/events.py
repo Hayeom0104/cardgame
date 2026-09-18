@@ -43,6 +43,11 @@ class MessageEvent:
     parent_channel_id: int | None = None
     thread_id: int | None = None
     event_id: str | None = None
+    #: 연동 가이드(2026-09-11) §7 — Central이 매 이벤트에 함께 싣는 현재
+    #: 디스코드 표시 이름/아바타. Central 프로필 API(`GET /v1/users/{id}`)엔
+    #: 이 두 값이 없다 — 오직 여기서만 온다.
+    username: str | None = None
+    avatar_url: str | None = None
 
 
 @dataclass
@@ -58,6 +63,8 @@ class InteractionEvent:
     parent_channel_id: int | None = None
     thread_id: int | None = None
     event_id: str | None = None
+    username: str | None = None
+    avatar_url: str | None = None
 
 
 @dataclass
@@ -70,6 +77,8 @@ class ModalSubmitEvent:
     parent_channel_id: int | None = None
     thread_id: int | None = None
     event_id: str | None = None
+    username: str | None = None
+    avatar_url: str | None = None
 
 
 @dataclass
@@ -120,6 +129,8 @@ def parse_event(payload: dict):
             parent_channel_id=payload.get("parent_channel_id"),
             thread_id=payload.get("thread_id"),
             event_id=event_id,
+            username=payload.get("username"),
+            avatar_url=payload.get("avatar_url"),
         )
 
     if event_type == INTERACTION:
@@ -137,6 +148,8 @@ def parse_event(payload: dict):
             parent_channel_id=payload.get("parent_channel_id"),
             thread_id=payload.get("thread_id"),
             event_id=event_id,
+            username=payload.get("username"),
+            avatar_url=payload.get("avatar_url"),
         )
 
     if event_type == MODAL_SUBMIT:
@@ -149,6 +162,8 @@ def parse_event(payload: dict):
             parent_channel_id=payload.get("parent_channel_id"),
             thread_id=payload.get("thread_id"),
             event_id=event_id,
+            username=payload.get("username"),
+            avatar_url=payload.get("avatar_url"),
         )
 
     if event_type == MESSAGE_DELIVERY_RESULT:

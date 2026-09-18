@@ -1164,6 +1164,34 @@ def create_account(db: Database, user_id: int, content_version_id: int) -> None:
             "guarantee_pending) VALUES (?, 'limited_global', 0, 0)", (user_id,))
 
 
+def remember_identity(db: Database, user_id: int, *, username: str | None,
+                      avatar_url: str | None) -> None:
+    """연동 가이드(2026-09-11) §7 — `/event` 페이로드가 실어 오는 현재 표시
+    이름/아바타를 계정에 적어 둔다. Central 프로필 API는 이 두 값을 절대
+    주지 않으므로(§6.3 — economy/XP 상태뿐) 이벤트가 올 때마다 여기서
+    갱신해 두는 것이 유일한 출처다.
+
+    계정이 아직 없거나(가입 전 첫 메시지), 이번 이벤트가 두 값 다 안
+    실었으면 조용히 아무 것도 하지 않는다 — 이미 아는 값을 None으로 지우지
+    않는다.
+    """
+    if username is None and avatar_url is None:
+        return
+    sets = []
+    params: list = []
+    if username is not None:
+        sets.append("display_name = ?")
+        params.append(username)
+    if avatar_url is not None:
+        sets.append("avatar_url = ?")
+        params.append(avatar_url)
+    params.append(user_id)
+    db.execute(
+        f"UPDATE accounts SET {', '.join(sets)} WHERE user_id = ?",
+        tuple(params),
+    )
+
+
 def starter_deck_cards(balance) -> list[str]:
     """§4.6.2 — exactly 18 cards, composed 6/5/7.
 

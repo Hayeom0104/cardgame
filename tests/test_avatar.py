@@ -1,8 +1,10 @@
 """프로필 사진 — 허브 초상으로 쓰는 원격 그림 (오너 요청).
 
-연동 가이드에 정확한 필드 이름이 없어(§1.1) 흔한 후보를 순서대로 찾는다.
-못 받아도 화면은 항상 나가야 한다(§11) — 모든 실패 경로가 None을
-돌려주는지가 이 파일이 확인하는 전부다.
+연동 가이드(2026-09-11) §7 확인 결과 아바타 URL은 `/event.avatar_url`에서
+오고 `app.content.seed.remember_identity()`가 계정에 적어 둔다 — 이 모듈은
+그 URL이 주어졌을 때 그림을 실제로 받아 오는 부분만 한다. 못 받아도 화면은
+항상 나가야 한다(§11) — 모든 실패 경로가 None을 돌려주는지가 이 파일이
+확인하는 전부다.
 """
 
 from __future__ import annotations
@@ -10,34 +12,9 @@ from __future__ import annotations
 import io
 
 import httpx
-import pytest
 from PIL import Image
 
 from app.central import avatar as av
-
-
-# =====================================================================
-# avatar_url — 후보 키 찾기
-# =====================================================================
-def test_finds_the_first_matching_candidate_key():
-    profile = {"nickname": "테스트", "avatar_url": "https://cdn.example/a.png"}
-    assert av.avatar_url(profile) == "https://cdn.example/a.png"
-
-
-def test_falls_back_through_candidates_in_order():
-    profile = {"icon_url": "https://cdn.example/icon.png"}
-    assert av.avatar_url(profile) == "https://cdn.example/icon.png"
-
-
-def test_returns_none_when_no_known_key_matches():
-    assert av.avatar_url({"weird_key": "https://cdn.example/x.png"}) is None
-
-
-def test_returns_none_when_the_value_is_not_a_url():
-    # 필드 이름은 맞아도 값이 URL이 아니면(예: null, 빈 문자열) 쓰지 않는다.
-    assert av.avatar_url({"avatar_url": None}) is None
-    assert av.avatar_url({"avatar_url": ""}) is None
-    assert av.avatar_url({"avatar_url": "not-a-url"}) is None
 
 
 # =====================================================================

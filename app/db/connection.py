@@ -18,12 +18,21 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 # Bumped whenever schema.sql changes shape. §18.9: startup fails closed when the
 # file on disk is older than what the code expects.
-EXPECTED_SCHEMA_VERSION = 9
+EXPECTED_SCHEMA_VERSION = 10
 
 #: §18.9 forward-only migrations, applied in one transaction each and recorded.
 #: `schema.sql` uses CREATE TABLE IF NOT EXISTS, so it never alters an existing
 #: table — anything that changes a table already on disk belongs here.
 MIGRATIONS: dict[int, tuple[str, ...]] = {
+    # 연동 가이드(2026-09-11) 확인 결과 — Central 프로필 API
+    # (`GET /v1/users/{id}`)엔 표시 이름·아바타가 없고, `/event` 페이로드
+    # 자체의 `username`/`avatar_url`이 진짜 출처다. 이벤트가 올 때마다 이
+    # 두 칸에 최신값을 적어 두고, 이벤트 없이 화면을 다시 그릴 때도
+    # (§16.7 중복 재전송 등) 마지막으로 안 값을 쓴다.
+    10: (
+        "ALTER TABLE accounts ADD COLUMN display_name TEXT",
+        "ALTER TABLE accounts ADD COLUMN avatar_url TEXT",
+    ),
     9: ("ALTER TABLE runs ADD COLUMN boss_encounter_id TEXT",),
     # v6.4, §2.5.1a — statuses gain `scope`, gating which content pools may
     # reference them. The base 10 are all `universal`.

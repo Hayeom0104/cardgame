@@ -112,14 +112,10 @@ def handle_join(ctx: HandlerContext, user_id: int) -> dict:
                       f"{screen.get('content', '')}"}
 
 
-#: 중앙봇의 사용자 응답에서 코인 잔액을 찾을 때 볼 키들. 연동 가이드의 응답
-#: 스키마가 이 저장소에 없어서(§1.1 표에 경로만 있다) 흔한 이름을 순서대로
-#: 본다. 가이드를 확인하면 고칠 곳은 이 상수 하나다.
+#: 중앙봇의 `GET /v1/users/{id}` 응답에서 코인 잔액을 찾을 때 볼 키.
+#: 연동 가이드(2026-09-11) §6.3 확인 결과 실제 필드명은 `balance` — 나머지는
+#: 그 확인 전에 쓰던 후보로, 구성이 바뀌는 배포 대비 안전망으로만 남겨 둔다.
 COIN_BALANCE_KEYS = ("balance", "coin", "coins", "currency", "value")
-
-#: A-1.2 허브 대시보드의 닉네임. 같은 이유로(§1.1 표에 경로만 있다) 흔한
-#: 이름을 순서대로 본다.
-DISPLAY_NAME_KEYS = ("display_name", "username", "nickname", "global_name", "name")
 
 
 def _central_user(ctx: HandlerContext, user_id: int) -> dict:
@@ -163,13 +159,18 @@ def coin_balance(ctx: HandlerContext, user_id: int, *, profile: dict | None = No
     return None
 
 
-def display_name(ctx: HandlerContext, user_id: int, *, profile: dict | None = None) -> str:
-    """A-1.2 — 허브 대시보드에 보일 닉네임. 알 수 없으면 user_id로 채운다."""
-    payload = profile if profile is not None else _central_user(ctx, user_id)
-    for key in DISPLAY_NAME_KEYS:
-        value = payload.get(key)
-        if isinstance(value, str) and value:
-            return value
+def display_name(ctx: HandlerContext, user_id: int) -> str:
+    """A-1.2 — 허브 대시보드에 보일 닉네임. 알 수 없으면 user_id로 채운다.
+
+    연동 가이드(2026-09-11) §6.3 확인 결과 Central 프로필 API에는 표시
+    이름이 없다 — `/event` 페이로드의 `username`이 유일한 출처이고,
+    `remember_identity()`가 이벤트가 올 때마다 계정에 적어 둔다. 여기서는
+    그 마지막 값을 읽기만 한다.
+    """
+    row = ctx.db.one("SELECT display_name FROM accounts WHERE user_id = ?",
+                     (user_id,))
+    if row is not None and row["display_name"]:
+        return row["display_name"]
     return f"플레이어 {user_id}"
 
 
@@ -769,7 +770,8 @@ def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
     account = ctx.db.one("SELECT * FROM accounts WHERE user_id = ?", (user_id,))
     # R3 M-01 — 코인 줄과 A-1.2 대시보드가 각자 `_central_user()`를 불러
     # `GET /v1/users/{id}`가 허브 하나에 두 번 나갔다. 여기서 한 번만 부르고
-    # 아래 두 곳 모두에 넘긴다.
+    # 아래 두 곳 모두에 넘긴다. (표시 이름·아바타는 이 프로필에 없다 —
+    # `account`의 `display_name`/`avatar_url` 칸에서 따로 읽는다.)
     profile = _central_user(ctx, user_id)
     note = None
     lines = []
@@ -811,7 +813,7 @@ def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
     achievements = ach.progress_list(ctx.db, user_id, ctx.content_version_id)
     dashboard = {
         **dict(account),
-        "display_name": display_name(ctx, user_id, profile=profile),
+        "display_name": display_name(ctx, user_id),
         "silver": None,   # 런 밖이라 실버는 항상 없음 (A-1.2)
         "characters_owned": int(owned_characters["n"]),
         "characters_total": int(total_characters["n"]),
@@ -823,11 +825,13 @@ def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
     }
 
     # 오너 요청 — 대표 캐릭터 그림 대신 실제 프로필 사진을 초상으로 쓴다.
-    # 못 받아도(연동 가이드에 필드가 없거나, 응답이 느리거나, 그림이 아니면)
-    # 조용히 기존 캐릭터 그림으로 물러난다 — 화면은 항상 나가야 한다(§11).
+    # 출처는 `account.avatar_url`(연동 가이드 §7 — `/event.avatar_url`을
+    # `remember_identity()`가 적어 둔 값)이다. 못 받아도(아직 한 번도 이벤트가
+    # 안 왔거나, 응답이 느리거나, 그림이 아니면) 조용히 기존 캐릭터 그림으로
+    # 물러난다 — 화면은 항상 나가야 한다(§11).
     avatar_image = None
     try:
-        url = av.avatar_url(profile)
+        url = account["avatar_url"]
         if url:
             avatar_image = av.fetch_avatar(url)
     except Exception:                                        # noqa: BLE001

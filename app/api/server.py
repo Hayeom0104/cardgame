@@ -10,6 +10,7 @@ This service holds no Discord gateway connection and no bot token.
 
 from __future__ import annotations
 
+import hmac
 import logging
 from contextlib import asynccontextmanager
 
@@ -23,6 +24,7 @@ from app.central.client import (CapabilityError, CentralClient, to_action_rows,
                                 validate_multi_action)
 from app.config import settings
 from app.content.balance import Balance
+from app.content.seed import remember_identity
 from app.content.versioning import current_version_id
 from app.db.connection import Database
 from app.engine import lifecycle
@@ -30,6 +32,22 @@ from app.engine import lifecycle
 logger = logging.getLogger(__name__)
 
 state: dict = {}
+
+INGRESS_SECRET_HEADER = "X-ARI-Minigame-Secret"
+
+
+def _verify_ingress_secret(request: Request) -> bool:
+    """연동 가이드(2026-09-11) §4B — Central이 보낸 요청인지 상수 시간으로
+    확인한다. 이게 없으면 `service_url`(현재는 공개 ngrok 인그레스)을 아는
+    누구든 Central인 척 `/event`·`/shutdown`을 호출할 수 있다.
+
+    `settings.ingress_secret`이 비어 있으면(로컬 개발/테스트 기본값)
+    검증을 건너뛴다 — 운영 배포는 반드시 설정해야 한다.
+    """
+    if not settings.ingress_secret:
+        return True
+    provided = request.headers.get(INGRESS_SECRET_HEADER, "")
+    return hmac.compare_digest(provided, settings.ingress_secret)
 
 
 def _split_battle_images(db: Database, response: dict, user_id: int) -> dict:
@@ -311,6 +329,10 @@ async def healthz() -> dict:
 @app.post("/event")
 async def event(request: Request) -> JSONResponse:
     """All five inbound types. Parsed per type, never against a shared model."""
+    if not _verify_ingress_secret(request):
+        logger.warning("rejected /event: bad or missing %s", INGRESS_SECRET_HEADER)
+        return JSONResponse({"action": "ignore"}, status_code=401)
+
     payload = await request.json()
 
     if not state.get("accepting"):
@@ -324,6 +346,15 @@ async def event(request: Request) -> JSONResponse:
         return JSONResponse({"action": "ignore", "error": str(error)}, status_code=200)
 
     db: Database = state["db"]
+
+    if isinstance(parsed, (ev.MessageEvent, ev.InteractionEvent, ev.ModalSubmitEvent)):
+        # 연동 가이드(2026-09-11) §7 — 표시 이름/아바타는 Central 프로필
+        # API가 아니라 이 이벤트 자체에서만 온다. 핸들러가 이 값으로 화면을
+        # 그리기 전에 최대한 먼저 적어 둔다 (계정이 이미 있는 보통의 경우).
+        # 이 이벤트가 방금 계정을 만드는 경우(가입 클릭)엔 여기선 조용히
+        # no-op되고, 핸들러 뒤에서 다시 한 번 적는다.
+        remember_identity(db, parsed.user_id, username=parsed.username,
+                          avatar_url=parsed.avatar_url)
 
     if isinstance(parsed, ev.DeliveryResultEvent):
         # Callback failure is advisory; never re-issue a delivery that may
@@ -365,6 +396,13 @@ async def event(request: Request) -> JSONResponse:
     else:
         response = handlers.handle_modal_submit(context, parsed)
 
+    # 연동 가이드(2026-09-11) §7 — 표시 이름/아바타는 Central 프로필 API가
+    # 아니라 이 이벤트 자체에서만 온다. 핸들러 뒤에 적는다 — 가입 버튼
+    # 클릭처럼 이 이벤트가 방금 계정을 만들었을 수도 있어서, 앞에서 적으면
+    # 그 계정이 아직 없어 조용히 no-op된다.
+    remember_identity(db, parsed.user_id, username=parsed.username,
+                      avatar_url=parsed.avatar_url)
+
     # §1.3.5 — 핸들러는 "스레드가 필요하다"고 응답에 적기만 하고, 실제 호출은
     # 여기 한 곳에서 한다. 이 줄이 없으면 런은 스레드 없이 계정만 점유한다.
     response = surfaces.fulfil_thread_request(
@@ -403,6 +441,10 @@ async def shutdown(request: Request) -> dict:
         3. Resolve or park every non-terminal transaction (§17.4)
         4. Return truthful counts
     """
+    if not _verify_ingress_secret(request):
+        logger.warning("rejected /shutdown: bad or missing %s", INGRESS_SECRET_HEADER)
+        return JSONResponse({"status": "rejected"}, status_code=401)
+
     body = await request.json() if await request.body() else {}
     timeout = int(body.get("timeout", 30))
     state["accepting"] = False

@@ -53,6 +53,13 @@ class Settings:
     database_path: str = os.environ.get("DECKOUT_DB", "deckout.db")
     central_base_url: str = os.environ.get("DECKOUT_CENTRAL_URL", "http://localhost:8000")
     central_api_key: str = os.environ.get("DECKOUT_API_KEY", "")
+    #: 연동 가이드(2026-09-11) §4B — Central이 `/event`, `/shutdown`에 실어
+    #: 보내는 `X-ARI-Minigame-Secret` 헤더와 상수 시간 비교할 공유 비밀.
+    #: 비어 있으면(로컬 개발/테스트) 검증을 건너뛴다 — 운영 배포에서는
+    #: 반드시 설정해야 한다. Central 쪽 설정에는 이 값 자체가 아니라
+    #: 환경변수 **이름**만 적힌다(가이드 §4B) — 값은 두 호스트 protected
+    #: 환경에만 둔다.
+    ingress_secret: str = os.environ.get("DECKOUT_INGRESS_SECRET", "")
     parent_channel_id: int = int(os.environ.get("DECKOUT_CHANNEL_ID", "0"))
     bot_name: str = "deckout"
     command_prefix: str = "!덱아웃"

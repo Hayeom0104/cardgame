@@ -150,6 +150,67 @@ def test_healthz_reports_status(client):
     assert response.json()["status"] == "ok"
 
 
+# =====================================================================
+# 연동 가이드(2026-09-11) §4B — X-ARI-Minigame-Secret
+# =====================================================================
+def test_event_is_rejected_without_the_ingress_secret_when_one_is_configured(
+        client, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "ingress_secret", "shh-its-a-secret")
+    response = client.post("/event", json={
+        "type": "message", "user_id": 1, "command": "덱아웃", "args": [],
+        "raw_content": "!덱아웃",
+    })
+    assert response.status_code == 401
+    assert response.json()["action"] == "ignore"
+
+
+def test_event_is_rejected_with_the_wrong_ingress_secret(client, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "ingress_secret", "shh-its-a-secret")
+    response = client.post(
+        "/event",
+        json={"type": "message", "user_id": 1, "command": "덱아웃", "args": [],
+              "raw_content": "!덱아웃"},
+        headers={"X-ARI-Minigame-Secret": "wrong"},
+    )
+    assert response.status_code == 401
+
+
+def test_event_is_accepted_with_the_correct_ingress_secret(client, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "ingress_secret", "shh-its-a-secret")
+    response = client.post(
+        "/event",
+        json={"type": "message", "user_id": 1, "command": "덱아웃", "args": [],
+              "raw_content": "!덱아웃"},
+        headers={"X-ARI-Minigame-Secret": "shh-its-a-secret"},
+    )
+    assert response.status_code == 200
+
+
+def test_event_is_accepted_without_a_header_when_no_secret_is_configured(client):
+    """개발/테스트 기본값 — `settings.ingress_secret`이 비어 있으면(운영
+    배포 전 미설정 상태) 검증을 건너뛴다."""
+    response = client.post("/event", json={
+        "type": "message", "user_id": 1, "command": "덱아웃", "args": [],
+        "raw_content": "!덱아웃",
+    })
+    assert response.status_code == 200
+
+
+def test_shutdown_is_rejected_without_the_ingress_secret_when_one_is_configured(
+        client, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "ingress_secret", "shh-its-a-secret")
+    response = client.post("/shutdown", json={"timeout": 30})
+    assert response.status_code == 401
+
+
 def test_an_unknown_user_is_prompted_to_register_before_an_account_exists(client):
     """계정이 없는 사용자의 첫 명령은 가입 버튼만 돌려준다 — 계정은 그
     버튼을 눌러야 비로소 생긴다 (오너 지시로 §4.6.5의 조용한 자동 생성을
@@ -179,6 +240,30 @@ def test_an_unknown_user_is_prompted_to_register_before_an_account_exists(client
     assert account is not None
     # §4.6.3 — exactly one 10-pull's worth of 카르타.
     assert account["carta"] == 1600
+
+
+def test_an_event_s_username_and_avatar_url_land_on_the_account(client):
+    """연동 가이드(2026-09-11) §7 — Central 프로필 API엔 표시 이름/아바타가
+    없다. 이 둘의 유일한 출처는 `/event` 페이로드 자체이고, 서버가 이벤트마다
+    계정에 적어 둬야 허브가 실제로 그걸 보여줄 수 있다."""
+    from app.api import server
+    from app.api.custom_id import to_base36
+
+    client.post("/event", json={
+        "type": "message", "user_id": 778, "guild_id": 1, "channel_id": 2,
+        "command": "덱아웃", "args": [], "raw_content": "!덱아웃",
+        "username": "디스코드유저", "avatar_url": "https://cdn.discordapp.com/a.png",
+    })
+    join_id = f"dko:hub:join:{to_base36(778)}"
+    client.post("/event", json={
+        "type": "interaction", "user_id": 778, "guild_id": 1, "channel_id": 2,
+        "custom_id": join_id, "values": [],
+        "username": "디스코드유저", "avatar_url": "https://cdn.discordapp.com/a.png",
+    })
+    account = server.state["db"].one(
+        "SELECT display_name, avatar_url FROM accounts WHERE user_id = 778")
+    assert account["display_name"] == "디스코드유저"
+    assert account["avatar_url"] == "https://cdn.discordapp.com/a.png"
 
 
 def test_registering_twice_does_not_duplicate_the_account(client):

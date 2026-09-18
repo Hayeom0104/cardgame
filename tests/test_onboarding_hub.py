@@ -9,7 +9,7 @@ from app.api import errors
 from app.api import events as ev
 from app.api import handlers
 from app.api import hub
-from app.content.seed import STARTER_CHARACTER_ID, create_account
+from app.content.seed import STARTER_CHARACTER_ID, create_account, remember_identity
 from app.engine import lifecycle as lc
 
 
@@ -138,24 +138,33 @@ def test_the_dashboard_renders_an_image(ctx, graduated_user):
     assert screen["attachments"], "허브 대시보드 그림이 없습니다"
 
 
-def test_the_dashboard_shows_the_nickname_from_central(ctx, graduated_user):
-    name = handlers.display_name(ctx, graduated_user)
-    assert name == "테스트유저"
+def test_the_dashboard_shows_the_nickname_remembered_from_the_last_event(
+        ctx, db, graduated_user):
+    """연동 가이드(2026-09-11) §7 확인 결과 표시 이름은 Central 프로필이
+    아니라 `/event.username`에서 온다 — `remember_identity()`가 이벤트마다
+    계정에 적어 두고, `display_name()`은 그 값을 읽기만 한다."""
+    db.execute("UPDATE accounts SET display_name = ? WHERE user_id = ?",
+              ("테스트유저", graduated_user))
+    assert handlers.display_name(ctx, graduated_user) == "테스트유저"
 
 
-def test_the_hub_fetches_the_profile_picture_when_central_provides_one(
+def test_the_hub_fetches_the_profile_picture_remembered_from_the_last_event(
         ctx, db, monkeypatch):
-    """오너 요청 — 대표 캐릭터 그림 대신 실제 프로필 사진을 초상으로 쓴다."""
+    """오너 요청 — 대표 캐릭터 그림 대신 실제 프로필 사진을 초상으로 쓴다.
+
+    출처는 `/event.avatar_url`이 `remember_identity()`를 거쳐 적어 둔
+    `accounts.avatar_url`이다 (연동 가이드 §7 확인 후 — 예전엔 Central
+    프로필에서 후보 키를 찾으려 했으나 그 API엔 아바타가 없다)."""
     from PIL import Image
 
     from app.central import avatar as av
 
     user_id = 810105
     create_account(db, user_id, ctx.content_version_id)
-    db.execute("UPDATE accounts SET tutorial_completed_at = ? WHERE user_id = ?",
-              ("2026-01-01T00:00:00+00:00", user_id))
-    ctx.central.profile = {"balance": 500, "username": "테스트유저",
-                           "avatar_url": "https://cdn.example/a.png"}
+    db.execute(
+        "UPDATE accounts SET tutorial_completed_at = ?, avatar_url = ? "
+        "WHERE user_id = ?",
+        ("2026-01-01T00:00:00+00:00", "https://cdn.example/a.png", user_id))
 
     calls = []
 
@@ -170,9 +179,10 @@ def test_the_hub_fetches_the_profile_picture_when_central_provides_one(
     assert screen["attachments"], "프로필 사진이 있어도 화면 그림은 나가야 합니다"
 
 
-def test_the_hub_falls_back_silently_when_the_profile_has_no_avatar(ctx, graduated_user):
-    """흔한 후보 키 중 아무것도 없으면(연동 가이드 필드 미확인) 조용히
-    기존 캐릭터 그림으로 물러난다 — 예외를 올리지 않는다."""
+def test_the_hub_falls_back_silently_when_no_avatar_was_ever_recorded(ctx, graduated_user):
+    """이 계정으로 온 이벤트에 `avatar_url`이 한 번도 없었으면(또는 아직
+    이벤트가 한 번도 안 왔으면) 조용히 기존 캐릭터 그림으로 물러난다 —
+    예외를 올리지 않는다."""
     screen = handlers.hub_screen(ctx, graduated_user)
     assert screen["attachments"]
 
@@ -183,10 +193,10 @@ def test_a_broken_avatar_fetch_never_breaks_the_hub_screen(ctx, db, monkeypatch)
 
     user_id = 810106
     create_account(db, user_id, ctx.content_version_id)
-    db.execute("UPDATE accounts SET tutorial_completed_at = ? WHERE user_id = ?",
-              ("2026-01-01T00:00:00+00:00", user_id))
-    ctx.central.profile = {"balance": 500, "username": "테스트유저",
-                           "avatar_url": "https://cdn.example/a.png"}
+    db.execute(
+        "UPDATE accounts SET tutorial_completed_at = ?, avatar_url = ? "
+        "WHERE user_id = ?",
+        ("2026-01-01T00:00:00+00:00", "https://cdn.example/a.png", user_id))
 
     def boom(url):
         raise RuntimeError("network is on fire")
@@ -204,11 +214,42 @@ def test_the_hub_fetches_the_central_profile_only_once(ctx, graduated_user, cent
     assert central.get_user_calls == 1
 
 
-def test_display_name_falls_back_when_central_has_no_known_key(db, balance, version):
-    ctx = handlers.HandlerContext(db=db, balance=balance,
-                                  central=FakeCentral(profile={"weird_key": 1}),
+def test_display_name_falls_back_when_nothing_was_ever_recorded(db, balance, version):
+    ctx = handlers.HandlerContext(db=db, balance=balance, central=FakeCentral(),
                                   content_version_id=version)
     assert handlers.display_name(ctx, 999) == "플레이어 999"
+
+
+# =====================================================================
+# remember_identity — 연동 가이드(2026-09-11) §7, /event.username/avatar_url
+# =====================================================================
+def test_remember_identity_writes_both_fields_onto_the_account(db, ctx):
+    user_id = 810107
+    create_account(db, user_id, ctx.content_version_id)
+    remember_identity(db, user_id, username="새이름",
+                      avatar_url="https://cdn.example/new.png")
+    row = db.one("SELECT display_name, avatar_url FROM accounts WHERE user_id = ?",
+                (user_id,))
+    assert row["display_name"] == "새이름"
+    assert row["avatar_url"] == "https://cdn.example/new.png"
+
+
+def test_remember_identity_does_not_clear_a_known_value_with_a_later_none(db, ctx):
+    """어떤 이벤트는 둘 다 안 실을 수 있다 — 그렇다고 이미 아는 값을
+    지우면 안 된다."""
+    user_id = 810108
+    create_account(db, user_id, ctx.content_version_id)
+    remember_identity(db, user_id, username="처음이름", avatar_url=None)
+    remember_identity(db, user_id, username=None, avatar_url=None)
+    row = db.one("SELECT display_name FROM accounts WHERE user_id = ?", (user_id,))
+    assert row["display_name"] == "처음이름"
+
+
+def test_remember_identity_is_a_silent_no_op_before_the_account_exists(db, ctx):
+    """가입 전 첫 메시지엔 아직 `accounts` 행이 없다 — UPDATE가 0행에
+    맞아도 조용히 넘어가야 한다."""
+    remember_identity(db, 810109, username="아직가입안함", avatar_url=None)
+    assert db.one("SELECT 1 FROM accounts WHERE user_id = 810109") is None
 
 
 def _tree_codes(screen: dict) -> set[str]:

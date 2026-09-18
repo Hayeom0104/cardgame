@@ -26,7 +26,9 @@ CREATE TABLE IF NOT EXISTS accounts (
   wildcards                 INTEGER NOT NULL DEFAULT 0,
   carta                     INTEGER NOT NULL DEFAULT 0,
   first_pull_results_count  INTEGER NOT NULL DEFAULT 0,   -- §5.10.1, 0..10
-  first_pull_guarantee_used INTEGER NOT NULL DEFAULT 0    -- §5.10
+  first_pull_guarantee_used INTEGER NOT NULL DEFAULT 0,   -- §5.10
+  display_name              TEXT,                  -- 최근 /event.username
+  avatar_url                TEXT                   -- 최근 /event.avatar_url
 );
 
 -- §5.2 per-entity materials — never a single fungible balance column.

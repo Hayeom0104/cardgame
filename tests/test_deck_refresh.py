@@ -249,8 +249,8 @@ def test_v8_migration_keeps_ownership_and_existing_run(db, version, balance, gra
     db.execute("DROP TABLE character_decks")
     db.execute("DROP TABLE boss_previews")
     db.execute("UPDATE schema_version SET version=8")
-    assert db.migrate() == 9
-    assert db.migrate() == 9
+    assert db.migrate() == 10
+    assert db.migrate() == 10
     assert db.one("SELECT boss_encounter_id FROM runs WHERE run_id=?", (rid,))["boss_encounter_id"] is None
     assert db.one("SELECT COUNT(*) n FROM run_deck_cards WHERE run_id=?", (rid,))["n"] == 36
     assert db.one("SELECT star_rank FROM owned_characters WHERE user_id=? AND character_id='char_aquel'",

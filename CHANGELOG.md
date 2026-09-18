@@ -11,7 +11,58 @@
 - 커밋 또는 PR이 있으면 식별자를 함께 적습니다.
 - 비밀값(API 키, 토큰, 비밀번호, 개인 정보)은 이 파일에 기록하지 않습니다.
 
-## 2026-09-17
+## 2026-09-18
+
+### 14:27 KST — 연동 가이드(2026-09-11) 반영: 유입 시크릿 검증 + 표시 이름/아바타 출처 수정
+
+오너가 Central 쪽에서 받은 `Deckout Central Bot Production Integration
+Guide`(2026-09-11 검증)를 업로드해, 그동안 "연동 가이드에 없어 후보 이름을
+순서대로 찾는다"고 플래그만 해 뒀던 두 곳을 실제 스펙과 대조했습니다.
+
+**① 보안 구멍 — `/event`, `/shutdown`에 유입 시크릿 검증이 전혀 없었습니다.**
+가이드 §4B에 따르면 Central은 두 엔드포인트에 `X-ARI-Minigame-Secret` 헤더를
+싣고, Deckout은 이를 상수 시간으로 검증해야 합니다. 이 저장소엔
+`DECKOUT_INGRESS_SECRET` 자체가 존재하지 않았고 헤더 검사 코드도 없었습니다
+— 가이드에 적힌 현재 운영 라우트가 공개 ngrok HTTPS 인그레스를 쓰고
+있다는 점을 감안하면, 그 URL만 알면 누구나 Central인 척 가짜 이벤트를
+보내거나(`POST /event`) 서비스를 끌 수 있는(`POST /shutdown`) 상태였습니다.
+`app/config.py`에 `ingress_secret` 설정을 추가하고, `app/api/server.py`에
+`hmac.compare_digest`로 상수 시간 비교하는 `_verify_ingress_secret()`을 두
+엔드포인트 맨 앞에 걸었습니다. 시크릿이 비어 있으면(로컬 개발/테스트
+기본값) 검증을 건너뛰어 기존 테스트를 깨지 않습니다.
+
+**② 프로필 사진/표시 이름이 프로덕션에서 사실상 항상 실패했습니다.**
+가이드 §6.3을 보면 Central 프로필 API(`GET /v1/users/{id}`)는
+`{user_id, xp, level, xp_in_level, xp_to_next, balance}`만 주고 표시
+이름·아바타는 **아예 없습니다**. 진짜 출처는 `/event` 페이로드 자체의
+`username`/`avatar_url`(§7)입니다. 그런데 이전 코드
+(`handlers.DISPLAY_NAME_KEYS`, `avatar.AVATAR_URL_KEYS`)는 전부 그 프로필
+API 응답에서 후보 키를 찾고 있었습니다 — 있지도 않은 필드를 찾는 것이므로
+매번 실패해 허브 대시보드 프로필 사진 기능(UI 개편 3탄, `2e14302`)이
+실제로는 한 번도 동작하지 않았을 것입니다. `app/api/events.py`의 세
+이벤트 타입에 `username`/`avatar_url` 필드를 추가하고, `/event` 페이로드가
+올 때마다 `app.content.seed.remember_identity()`가 계정(`accounts` 테이블,
+스키마 v9→v10, `display_name`/`avatar_url` 칼럼 추가)에 최신값을 적어
+두도록 했습니다. `handlers.display_name()`과 `hub_screen()`의 아바타
+조회는 이제 그 계정 칼럼을 읽습니다 — Central 프로필은 더 이상 이 두
+값의 출처로 보지 않습니다. 코인 잔액(`COIN_BALANCE_KEYS`)은 가이드가
+`balance` 필드를 확인해 줬으므로 그대로 둡니다.
+
+- `app/db/connection.py`: `EXPECTED_SCHEMA_VERSION` 9→10,
+  마이그레이션 10 추가.
+- `app/db/schema.sql`: `accounts`에 `display_name`/`avatar_url` 칼럼 추가.
+- 관련 테스트 갱신·추가: `tests/test_render_and_api.py`(유입 시크릿 5개 +
+  이벤트→계정 반영 통합 테스트), `tests/test_avatar.py`(죽은 후보 키
+  테스트 제거), `tests/test_onboarding_hub.py`(프로필/이름 테스트를 실제
+  출처로 재작성 + `remember_identity` 단위 테스트 3개),
+  `tests/test_deck_refresh.py`(스키마 head 버전 9→10 갱신 — 무관한
+  마이그레이션 회귀 테스트).
+
+검증: 영향받은 테스트 파일 직접 실행 통과 +
+`python -m app.cli.bootstrap`/`check_content`로 새 스키마 v10 정상 발행 확인
++ 전체 pytest **892 passed** (369초, 알려진 flaky 테스트 포함 전부 통과).
+
+
 
 ### 11:54 KST — 덱 개편 최종 통합 검증 및 GitHub 반영
 
