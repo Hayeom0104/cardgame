@@ -1,5 +1,7 @@
 # Deckout
 
+중앙봇 연결·인증 설정 및 읽기 전용 점검: [운영 연동 준비](docs/CENTRAL_DEPLOYMENT.md).
+
 덱 장수 편성·기본 스킬 지급·성장 표시·월드 1 보스 개편: [구현 및 업데이트 안내](docs/DECK_REFRESH_HANDOFF.md).
 
 An implementation of **Deckout — Design Document v6.4**: a roguelike card-battler
@@ -14,8 +16,9 @@ namespace `dko:`.
 pip install -e ".[dev]"
 python -m app.cli.bootstrap --db deckout.db      # migrate + seed + publish content
 python -m app.cli.check_content --db deckout.db  # §10.5 validation pass
+# Configure the Central URL/key, ingress secret and channel first (guide above).
 uvicorn app.api.server:app --port 8080
-pytest                                           # 741 tests
+pytest
 ```
 
 Registration (§1.3.0) — `route_threads: true` is **mandatory** and defaults to

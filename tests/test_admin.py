@@ -28,6 +28,7 @@ def client(tmp_path, monkeypatch):
 
     monkeypatch.setattr(settings, "database_path", str(tmp_path / "admin.db"))
     monkeypatch.setattr(settings, "skip_capability_check", True)
+    monkeypatch.setattr(settings, "allow_unauthenticated_local", True)
     monkeypatch.setattr(settings, "central_api_key", "")
     monkeypatch.setattr(settings, "admin_password", PASSWORD)
     monkeypatch.setattr(settings, "admin_secret", "테스트-서명-키")

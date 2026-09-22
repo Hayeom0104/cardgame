@@ -131,6 +131,7 @@ def client(tmp_path, monkeypatch):
 
     monkeypatch.setattr(settings, "database_path", str(tmp_path / "api.db"))
     monkeypatch.setattr(settings, "skip_capability_check", True)
+    monkeypatch.setattr(settings, "allow_unauthenticated_local", True)
     monkeypatch.setattr(settings, "central_api_key", "")
 
     with TestClient(server.app) as test_client:

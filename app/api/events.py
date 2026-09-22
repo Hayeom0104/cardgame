@@ -58,7 +58,7 @@ class InteractionEvent:
     custom_id: str
     values: list[str] = field(default_factory=list)
     interaction_token: str | None = None
-    component_type: int | None = None
+    component_type: str = "button"
     message_id: int | None = None
     parent_channel_id: int | None = None
     thread_id: int | None = None
@@ -143,7 +143,7 @@ def parse_event(payload: dict):
             # coercion or legality checking on values[] (guide §7.2).
             values=list(payload.get("values") or []),
             interaction_token=payload.get("interaction_token"),
-            component_type=payload.get("component_type"),
+            component_type=payload.get("component_type", "button"),
             message_id=payload.get("message_id"),
             parent_channel_id=payload.get("parent_channel_id"),
             thread_id=payload.get("thread_id"),

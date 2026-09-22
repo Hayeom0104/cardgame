@@ -259,6 +259,7 @@ def test_the_event_endpoint_opens_the_thread(tmp_path, monkeypatch):
 
     monkeypatch.setattr(settings, "database_path", str(tmp_path / "surface.db"))
     monkeypatch.setattr(settings, "skip_capability_check", True)
+    monkeypatch.setattr(settings, "allow_unauthenticated_local", True)
     monkeypatch.setattr(settings, "central_api_key", "")
     monkeypatch.setattr(settings, "parent_channel_id", PARENT_CHANNEL)
 

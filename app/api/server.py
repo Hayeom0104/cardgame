@@ -41,13 +41,12 @@ def _verify_ingress_secret(request: Request) -> bool:
     확인한다. 이게 없으면 `service_url`(현재는 공개 ngrok 인그레스)을 아는
     누구든 Central인 척 `/event`·`/shutdown`을 호출할 수 있다.
 
-    `settings.ingress_secret`이 비어 있으면(로컬 개발/테스트 기본값)
-    검증을 건너뛴다 — 운영 배포는 반드시 설정해야 한다.
+    비밀 미설정 시 거절한다. 로컬 테스트만 명시적으로 검증을 해제할 수 있다.
     """
     if not settings.ingress_secret:
-        return True
+        return settings.allow_unauthenticated_local
     provided = request.headers.get(INGRESS_SECRET_HEADER, "")
-    return hmac.compare_digest(provided, settings.ingress_secret)
+    return hmac.compare_digest(provided.encode(), settings.ingress_secret.encode())
 
 
 def _split_battle_images(db: Database, response: dict, user_id: int) -> dict:
@@ -95,6 +94,8 @@ def _split_battle_images(db: Database, response: dict, user_id: int) -> dict:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if not settings.ingress_secret and not settings.allow_unauthenticated_local:
+        raise RuntimeError("DECKOUT_INGRESS_SECRET is required before startup")
     db = Database(settings.database_path)
     db.migrate()
     state["db"] = db
@@ -319,11 +320,16 @@ app.include_router(admin_router)
 
 
 @app.get("/healthz")
-async def healthz() -> dict:
-    return {
-        "status": "ok" if state.get("accepting") else "draining",
+async def healthz() -> JSONResponse:
+    ready = bool(state.get("accepting") and state.get("content_version_id"))
+    try:
+        state["db"].one("SELECT 1")
+    except Exception:
+        ready = False
+    return JSONResponse({
+        "status": "ok" if ready else "not_ready",
         "content_version_id": state.get("content_version_id"),
-    }
+    }, status_code=200 if ready else 503)
 
 
 @app.post("/event")
