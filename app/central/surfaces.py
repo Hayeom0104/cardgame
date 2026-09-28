@@ -74,14 +74,17 @@ def fulfil_thread_request(db: Database, central, response: dict, *,
     if request is None:
         return response
 
+    unavailable = {"action": "reply_ephemeral",
+                   "content": "스레드 연결을 확인하지 못했습니다. !덱아웃으로 다시 시도해 주세요."}
+
     if central is None:
         logger.error("중앙봇 클라이언트가 없어 런 %s 의 스레드를 열지 못했습니다",
                      run_id)
-        return response
+        return unavailable
     if not parent_channel_id:
         logger.error("DECKOUT_CHANNEL_ID 가 설정되지 않아 런 %s 의 스레드를 "
                      "열지 못했습니다", run_id)
-        return response
+        return unavailable
 
     request_id = (response.get("metadata") or {}).get("request_id")
     try:
@@ -98,13 +101,17 @@ def fulfil_thread_request(db: Database, central, response: dict, *,
         # 같은 `surface_generation` 으로 다시 부르는 것은 멱등하므로(§1.3.5),
         # 여기서 실패한 것을 되돌릴 필요가 없다.
         logger.exception("런 %s 의 스레드 생성이 실패했습니다", run_id)
-        return response
+        return unavailable
 
     bound = _bind(db, request_id, result, run_id=run_id,
                   surface_generation=int(request["surface_generation"]))
     if bound and run_id is not None:
         _leave_preparing(db, run_id)
-    return response
+        run = db.one("SELECT thread_id FROM runs WHERE run_id = ?", (run_id,))
+        if run and run["thread_id"]:
+            return {"action": "redirect", "thread_id": run["thread_id"],
+                    "content": "런 스레드에서 지도 열기를 눌러 주세요."}
+    return unavailable
 
 
 def _leave_preparing(db: Database, run_id: int) -> None:

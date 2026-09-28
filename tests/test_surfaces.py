@@ -125,6 +125,44 @@ def test_the_binding_is_recorded_against_the_intent(ctx, db, central, user_id):
     assert binding is not None and binding["applied"] == 1
 
 
+def test_thread_open_renders_map_without_parent_controls(ctx, db, central, user_id):
+    from app.api.events import InteractionEvent
+    from app.api import custom_id
+
+    response = start_tutorial(ctx, user_id)
+    run_id = response["run_id"]
+    result = surfaces.fulfil_thread_request(
+        db, central, response, parent_channel_id=PARENT_CHANNEL)
+    assert result["action"] == "redirect"
+    assert "components" not in result
+    assert "metadata" not in result
+    button = central.create_calls[0]["components"][0]
+    assert custom_id.parse(button["custom_id"]).action == custom_id.ACTION_SCREEN_REFRESH
+    screen = handlers.handle_interaction(ctx, InteractionEvent(
+        user_id=user_id, guild_id=1, channel_id=result["thread_id"],
+        thread_id=result["thread_id"], custom_id=button["custom_id"]))
+    assert screen["action"] == "edit"
+    assert screen["attachments"], "지도 PNG가 실제 응답에 있어야 합니다"
+    assert screen["components"]
+    assert db.one("SELECT state FROM runs WHERE run_id = ?", (run_id,))["state"] == "map_navigation"
+
+
+def test_old_parent_button_redirects_without_advancing_run(ctx, db, central, user_id, monkeypatch):
+    from app.api.events import InteractionEvent
+    from app.api import controls
+    monkeypatch.setattr(handlers.settings, "parent_channel_id", PARENT_CHANNEL)
+    response = start_tutorial(ctx, user_id)
+    run_id = response["run_id"]
+    surfaces.fulfil_thread_request(db, central, response, parent_channel_id=PARENT_CHANNEL)
+    before = dict(db.one("SELECT * FROM runs WHERE run_id = ?", (run_id,)))
+    button = controls.game_map(db, run_id)[0]
+    result = handlers.handle_interaction(ctx, InteractionEvent(
+        user_id=user_id, guild_id=1, channel_id=PARENT_CHANNEL,
+        custom_id=button["custom_id"]))
+    assert result["action"] == "redirect"
+    assert dict(db.one("SELECT * FROM runs WHERE run_id = ?", (run_id,))) == before
+
+
 def test_a_response_without_a_thread_request_is_untouched(db, central):
     response = {"action": "reply", "content": "안녕"}
     assert surfaces.fulfil_thread_request(
@@ -140,8 +178,10 @@ def test_a_failed_thread_call_does_not_lose_the_run(ctx, db, user_id):
     response = start_tutorial(ctx, user_id)
     run_id = response["run_id"]
 
-    surfaces.fulfil_thread_request(db, failing, response,
-                                   parent_channel_id=PARENT_CHANNEL)
+    result = surfaces.fulfil_thread_request(db, failing, response,
+                                           parent_channel_id=PARENT_CHANNEL)
+    assert "components" not in result
+    assert "metadata" not in result
 
     run = db.one("SELECT state, thread_id FROM runs WHERE run_id = ?", (run_id,))
     assert run is not None, "스레드 실패가 런을 지웠습니다"

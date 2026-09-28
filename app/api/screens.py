@@ -394,15 +394,19 @@ def surface_request(db: Database, run_id: int, user_id: int) -> dict:
         surface_generation=run["surface_generation"],
         presentation_revision=run["presentation_revision"],
     )
-    # 스레드가 열리자마자 보이는 첫 화면이 곧 지도다. 여기에 칸 버튼을 붙이지
-    # 않으면 플레이어는 열린 스레드를 보고도 한 발짝을 못 뗀다 (§3.5).
-    from app.api import controls
+    # 스레드 생성 API에는 이미지 첨부 계약이 없다. 첫 버튼의 interaction edit로
+    # 지도 PNG와 이동 버튼을 함께 전송한다 (§3.5).
+    from app.api import custom_id as cid
 
     return {
         # 스레드가 생성됐다는 사실을 플레이어가 즉시 알아차리도록 첫 메시지에서
         # 소유자를 멘션한다. 비공개 스레드의 멤버 추가와 별개인 UX 신호다.
-        "content": f"<@{user_id}> 런이 준비됐어요. 아래 지도에서 갈 칸을 골라 주세요.",
-        "components": controls.game_map(db, run_id),
+        "content": f"<@{user_id}> 런이 준비됐어요. 지도 열기를 눌러 주세요.",
+        "components": [{
+            "type": "button", "label": "지도 열기",
+            "custom_id": cid.build(cid.ACTION_SCREEN_REFRESH,
+                run_id, run["surface_generation"], run["presentation_revision"], ""),
+        }],
         "metadata": {"request_id": request_id},
         # 응답 경로의 `create_thread`가 아니라 서비스 주도 API를 쓴다 —
         # 전자는 공개 스레드를 만든다 (§1.3.5).

@@ -992,7 +992,16 @@ def handle_interaction(ctx: HandlerContext, event: ev.InteractionEvent) -> dict:
         logger.info("rejected custom_id: %s", error)
         return _ephemeral(errors.ILLEGAL_STATE)
 
-    handler = _INTERACTION_HANDLERS.get(parsed.action)
+    run = ctx.db.one("SELECT * FROM runs WHERE run_id = ?", (parsed.run_id,))
+    if (run and int(run["user_id"]) == int(event.user_id)
+            and run["thread_id"] and settings.parent_channel_id
+            and event.channel_id == settings.parent_channel_id
+            and not event.thread_id):
+        return {"action": "redirect", "thread_id": run["thread_id"],
+                "content": "런 스레드 안의 버튼을 사용해 주세요."}
+
+    handler = (_on_screen_refresh if parsed.action == cid.ACTION_SCREEN_REFRESH
+               else _INTERACTION_HANDLERS.get(parsed.action))
     if handler is None:
         return _ephemeral(errors.ILLEGAL_STATE)
 
@@ -1023,6 +1032,12 @@ def handle_interaction(ctx: HandlerContext, event: ev.InteractionEvent) -> dict:
     except GateError as error:
         logger.info("gate rejected %s: %s", parsed.action, error.reason)
         return _ephemeral(error.message)
+
+
+def _on_screen_refresh(ctx: HandlerContext, event: ev.InteractionEvent,
+                       parsed: cid.CustomId) -> dict:
+    check_gates(ctx.db, ctx.balance, user_id=event.user_id, custom_id=parsed)
+    return current_screen(ctx, parsed.run_id) or _ephemeral(errors.ILLEGAL_STATE)
 
 
 def handle_modal_submit(ctx: HandlerContext, event: ev.ModalSubmitEvent) -> dict:

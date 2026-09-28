@@ -32,9 +32,11 @@ class FakeCentral:
     def __init__(self):
         self._next = 900000
         self.balance = 0
+        self.thread_screens = {}
 
     def create_thread(self, **kwargs):
         self._next += 1
+        self.thread_screens[self._next] = kwargs
         return {"thread_id": self._next, "message_id": 11}
 
     def recreate_thread(self, **kwargs):
@@ -92,11 +94,13 @@ class Session:
         self.ctx = ctx
         self.user_id = user_id
         self.screen: dict = {}
+        self.thread_id = None
         self.presses = 0
         self.log: list[str] = []
 
     # -- 명령 --------------------------------------------------------
     def command(self, *args: str) -> dict:
+        self.thread_id = None
         event = ev.MessageEvent(
             event_id=f"cmd-{self.presses}-{'-'.join(args)}", user_id=self.user_id,
             guild_id=1, channel_id=2, command="덱아웃", args=list(args),
@@ -106,6 +110,8 @@ class Session:
         self.screen = surfaces.fulfil_thread_request(
             self.ctx.db, self.ctx.central, self.screen,
             parent_channel_id=PARENT_CHANNEL)
+
+        self.screen = self.follow_redirect(self.screen)
 
         # 계정이 없는 첫 명령은 가입 프롬프트만 돌아온다 — 사람이라면 눌러야
         # 하는 화면이지, 원래 치려던 명령이 통과된 게 아니다. 가입을 눌러
@@ -117,6 +123,13 @@ class Session:
             self.press_first()
             return self.command(*args)
         return self.screen
+
+    def follow_redirect(self, response: dict) -> dict:
+        if response.get("action") == "redirect":
+            # 부모 채널 안내를 따라가 실제 스레드에 전달된 첫 화면을 읽는다.
+            self.thread_id = int(response["thread_id"])
+            return self.ctx.central.thread_screens[self.thread_id]
+        return response
 
     # -- 컴포넌트 ----------------------------------------------------
     def components(self) -> list[dict]:
@@ -150,7 +163,8 @@ class Session:
 
             event = ev.InteractionEvent(
                 event_id=f"press-{self.presses}", user_id=self.user_id,
-                guild_id=1, channel_id=2, custom_id=component["custom_id"],
+                guild_id=1, channel_id=self.thread_id or 2, thread_id=self.thread_id,
+                custom_id=component["custom_id"],
                 values=values)
             self.presses += 1
             reply = handlers.handle_interaction(self.ctx, event)
@@ -162,8 +176,8 @@ class Session:
                 parent_channel_id=PARENT_CHANNEL)
             self.log.append(f"{self.state()}: {reply.get('content', '')[:40]}")
             if reply.get("action") != "reply_ephemeral":
-                self.screen = reply
-                return reply
+                self.screen = self.follow_redirect(reply)
+                return self.screen
 
         raise AssertionError(
             f"상태 {self.state()!r} 의 화면에서 누를 수 있는 것이 하나도 "

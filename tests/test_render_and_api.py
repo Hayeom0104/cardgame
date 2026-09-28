@@ -313,6 +313,7 @@ class _FakeCentral:
 
     def create_thread(self, **kwargs):
         self._next += 1
+        self.initial_screen = kwargs
         return {"thread_id": self._next, "message_id": 11}
 
     def recreate_thread(self, **kwargs):
@@ -361,10 +362,22 @@ def test_a_duplicate_event_after_a_committed_node_click_replays_the_live_screen(
         "type": "interaction", "user_id": 55510, "guild_id": 1, "channel_id": 2,
         "custom_id": join_id, "values": [],
     }).json()
-    node_buttons = [c for row in entered["components"] for c in row.get("components", [row])]
+    assert entered["action"] == "redirect"
+    assert not entered.get("components")
+    thread_id = entered["thread_id"]
+    refresh_id = server.state["central"].initial_screen["components"][0]["custom_id"]
+    opened = client_with_central.post("/event", json={
+        "type": "interaction", "user_id": 55510, "guild_id": 1,
+        "channel_id": thread_id, "thread_id": thread_id,
+        "custom_id": refresh_id, "values": [],
+    }).json()
+    assert opened["action"] == "edit"
+    assert opened["attachments"], "스레드의 초기 지도 그림이 없습니다"
+    node_buttons = [c for row in opened["components"] for c in row.get("components", [row])]
     node_id = node_buttons[0]["custom_id"]
 
-    payload = {"type": "interaction", "user_id": 55510, "guild_id": 1, "channel_id": 2,
+    payload = {"type": "interaction", "user_id": 55510, "guild_id": 1,
+               "channel_id": thread_id, "thread_id": thread_id,
                "custom_id": node_id, "values": [], "event_id": "evt-node-committed"}
     first = client_with_central.post("/event", json=payload).json()
     assert first["action"] == "multi_action"
@@ -388,8 +401,8 @@ def test_a_duplicate_event_after_a_committed_node_click_replays_the_live_screen(
     battle_buttons = [c for row in second["components"]
                       for c in row.get("components", [row])]
     reply = client_with_central.post("/event", json={
-        "type": "interaction", "user_id": 55510, "guild_id": 1, "channel_id": 2,
-        "custom_id": battle_buttons[0]["custom_id"],
+        "type": "interaction", "user_id": 55510, "guild_id": 1, "channel_id": thread_id,
+        "thread_id": thread_id, "custom_id": battle_buttons[0]["custom_id"],
         "values": [battle_buttons[0]["options"][0]["value"]]
                   if "options" in battle_buttons[0] else [],
         "event_id": "evt-after-replay",
