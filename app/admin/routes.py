@@ -22,6 +22,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 
 from app.admin import auth, service
 from app.config import settings
@@ -58,6 +59,29 @@ def _balance(request: Request):
     from app.api.server import state
 
     return state.get("balance")
+
+
+def _central_status() -> dict:
+    """Refresh the running process's actual API-key identity for operators.
+
+    Only the service ID and a generic failure type reach the browser; neither
+    the configured URL nor credentials are ever rendered.
+    """
+    from app.api.server import state
+
+    central = state.get("central")
+    if central is None:
+        return {"service_id": None, "status": "연결되지 않음"}
+    try:
+        capabilities = central.check_capabilities()
+    except Exception as error:  # noqa: BLE001
+        logger.warning("admin Central capability probe failed: %s", type(error).__name__)
+        return {"service_id": None, "status": "인증/연결 확인 실패"}
+    service_id = capabilities.get("service_id") if isinstance(capabilities, dict) else None
+    if not isinstance(service_id, str):
+        service_id = None
+    return {"service_id": service_id,
+            "status": "정상" if service_id == "deckout" else "서비스 인증 불일치"}
 
 
 def _render(request: Request, template: str, **context) -> HTMLResponse:
@@ -153,7 +177,8 @@ async def index(request: Request):
         missing = sum(1 for entry in report
                       if not entry["present"] or entry["problem"])
     return _render(request, "index.html", overview=overview,
-                   missing_assets=missing)
+                   missing_assets=missing, central_status=await run_in_threadpool(_central_status),
+                   parent_channel_id=settings.parent_channel_id)
 
 
 @router.post("/actions/reap")

@@ -134,6 +134,42 @@ def test_every_page_renders_for_a_signed_in_operator(signed_in):
         assert "덱아웃 관리" in response.text
 
 
+def test_dashboard_shows_running_central_service_identity_without_credentials(signed_in):
+    from app.api import server
+
+    class Central:
+        def check_capabilities(self):
+            return {"service_id": "deckout"}
+
+    original = server.state.get("central")
+    try:
+        server.state["central"] = Central()
+        body = signed_in.get("/admin/").text
+        assert "service_id" in body and "deckout" in body
+        assert "정상" in body
+        assert "X-API-Key" not in body
+    finally:
+        server.state["central"] = original
+
+
+def test_dashboard_flags_old_central_key_without_exposing_it(signed_in):
+    from app.api import server
+
+    class OldCentral:
+        def check_capabilities(self):
+            return {"service_id": "deckout-remote-old"}
+
+    original = server.state.get("central")
+    try:
+        server.state["central"] = OldCentral()
+        body = signed_in.get("/admin/").text
+        assert "서비스 인증 불일치" in body
+        assert "deckout-remote-old" in body
+        assert "X-API-Key" not in body
+    finally:
+        server.state["central"] = original
+
+
 # =====================================================================
 # §10.6 — 발행된 버전은 고칠 수 없다
 # =====================================================================

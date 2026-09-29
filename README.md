@@ -45,6 +45,11 @@ cannot open one occupies the account with no screen to play on (§16.3).
 
 ## Admin dashboard (§10.1–10.3)
 
+Termux activation and connection addresses: [관리자 대시보드 안내](docs/ADMIN_DASHBOARD.md).
+Run `python -m app.cli.setup_admin` to save an admin password in the existing
+`.env`, then restart the server and open `http://127.0.0.1:8081/admin/` on that
+same device. Other devices use the server tablet's Tailscale IP instead.
+
 Served by the same process at `/admin`. It is **off unless a password is set** —
 there is no default, because a deployment that forgot to configure one would
 otherwise come up with an open admin screen.

@@ -18,6 +18,14 @@
   <div class="stat"><div class="n {% if missing_assets %}warn{% endif %}">{{ missing_assets }}</div><div class="k">빠진 그림</div></div>
 </div>
 
+<h2>연동 상태</h2>
+<div class="panel">
+  <p>실행 중인 프로세스의 Central 인증: <strong class="{{ 'good' if central_status.status == '정상' else 'bad' }}">{{ central_status.status }}</strong></p>
+  <p>인증된 service_id: <code>{{ central_status.service_id or '확인 불가' }}</code></p>
+  <p>부모 채널 ID: <code>{{ parent_channel_id or '미설정' }}</code></p>
+  <p class="muted">이 화면을 새로고침하면 실제 프로세스에 실린 API 키로 다시 확인합니다. 인증 값은 표시하지 않습니다.</p>
+</div>
+
 <h2>런 상태별</h2>
 <div class="panel scroll">
   {% if overview.runs_by_state %}

@@ -6,19 +6,27 @@
   <p class="sub">관리자 비밀번호를 입력하세요.</p>
   {% if error %}<p class="bad">{{ error }}</p>{% endif %}
   <div class="row" style="flex-direction:column;align-items:stretch;gap:12px">
-    <input type="password" id="pw" placeholder="비밀번호" autofocus
+    <label for="pw">관리자 비밀번호</label>
+    <input type="password" id="pw" placeholder="비밀번호" autocomplete="current-password" autofocus
            onkeydown="if(event.key==='Enter')login()">
-    <button onclick="login()">로그인</button>
+    <button id="login-button" onclick="login()">로그인</button>
   </div>
 </div>
 <script>
   async function login() {
+    const button = document.getElementById('login-button');
+    if (button.disabled) return;
+    button.disabled = true;
+    try {
     const response = await fetch('/admin/login', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({password: document.getElementById('pw').value}),
     });
     if (response.ok) { location.href = '/admin/'; }
-    else { toast('비밀번호가 맞지 않습니다.', false); }
+    else { toast(response.status === 401 ? '비밀번호가 맞지 않습니다.' : '로그인할 수 없습니다. 서버 설정을 확인하세요.', false); }
+    } catch (error) {
+      toast('서버에 연결할 수 없습니다. 연결 상태를 확인하세요.', false);
+    } finally { button.disabled = false; }
   }
 </script>
 {% endblock %}
