@@ -341,3 +341,63 @@ def test_the_balance_is_never_used_to_block_a_button(db, balance, version,
     broke = _with(db, balance, version, BalanceCentral({"balance": 0}))
     screen = handlers.characters_screen(broke, user_id)
     assert screen["components"], "코인 0이라고 버튼을 감췄습니다"
+
+
+# =====================================================================
+# 장비 화면 페이지 — 26번째 장비부터 장착·강화할 수 없던 문제
+# =====================================================================
+def _stock_equipment(db, version, user_id, count):
+    defs = [row["equipment_def_id"] for row in db.query(
+        "SELECT equipment_def_id FROM equipment_defs WHERE content_version_id = ?",
+        (version,))]
+    for index in range(count):
+        db.execute("INSERT INTO owned_equipment (user_id, equipment_def_id, tier) "
+                   "VALUES (?, ?, 0)", (user_id, defs[index % len(defs)]))
+    return [row["equipment_instance_id"] for row in db.query(
+        "SELECT equipment_instance_id FROM owned_equipment WHERE user_id = ? "
+        "ORDER BY equipment_instance_id", (user_id,))]
+
+
+def _equip_options(screen):
+    select = next(c for c in screen["components"]
+                  if c.get("custom_id") == f"{hub.HUB_PREFIX}equip")
+    return [int(option["value"]) for option in select["options"]]
+
+
+def _page_button(screen, label):
+    return next((c for c in screen["components"] if c.get("label") == label), None)
+
+
+def test_every_owned_equipment_is_reachable_through_the_pages(ctx, db, version,
+                                                             user_id):
+    owned = _stock_equipment(db, version, user_id, 32)
+    screen = handlers.equipment_screen(ctx, user_id)
+    seen = []
+    for _ in range(10):
+        seen += _equip_options(screen)
+        assert len(screen["content"]) <= 2000
+        forward = _page_button(screen, "다음 ▶")
+        if forward is None:
+            break
+        screen = hub.handle_hub(ctx, user_id, forward["custom_id"], [])
+        assert screen["action"] == "edit"
+    assert seen == owned, "모든 장비가 어느 한 페이지의 장착 선택창에 있어야 합니다"
+    assert _page_button(screen, "◀ 이전") is not None
+
+
+def test_someone_else_cannot_turn_your_equipment_page(ctx, db, version, user_id):
+    from app.content.seed import create_account
+
+    _stock_equipment(db, version, user_id, 12)
+    forward = _page_button(handlers.equipment_screen(ctx, user_id), "다음 ▶")
+    other = user_id + 7
+    create_account(db, other, version)
+    reply = hub.handle_hub(ctx, other, forward["custom_id"], [])
+    assert reply["content"] == errors.NOT_OWNER
+
+
+def test_a_small_collection_has_no_page_buttons(ctx, db, version, user_id):
+    _stock_equipment(db, version, user_id, 3)
+    screen = handlers.equipment_screen(ctx, user_id)
+    assert _page_button(screen, "다음 ▶") is None
+    assert _page_button(screen, "◀ 이전") is None

@@ -116,6 +116,17 @@ def handle_hub(ctx, user_id: int, custom_id: str, values: list[str], *,
             return {**screen, "action": "edit"}
         return screen
 
+    # 장비 화면 페이지 넘김 — 공개 메시지 위의 버튼이라 주인만 넘길 수 있다.
+    if action == handlers.EQUIPMENT_PAGE_ACTION:
+        owner, _, page = argument.partition("-")
+        if _user_from_payload(owner) != user_id:
+            return {"action": "reply_ephemeral", "content": errors.NOT_OWNER}
+        try:
+            screen = handlers.equipment_screen(ctx, user_id, int(page))
+        except ValueError:
+            return {"action": "reply_ephemeral", "content": errors.ILLEGAL_STATE}
+        return {**screen, "action": "edit"}
+
     # 장착만 두 단계다 — 장비를 고른 다음 대상 캐릭터를 고른다. 한 컴포넌트에
     # 둘을 담을 수 없어서, 첫 단계는 결과가 아니라 다음 화면을 돌려준다.
     if action == "equip":

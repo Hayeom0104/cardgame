@@ -59,44 +59,93 @@ def _clamp(response: dict) -> dict:
     return response
 
 
-def _split_battle_images(db: Database, response: dict, user_id: int) -> dict:
+#: 전황 로그 메시지 한 개에 싣는 최근 행동 줄 수 (오너 지시).
+BATTLE_LOG_LINES_PER_POST = 5
+
+
+def _battle_log_mark(db: Database) -> tuple[int, int]:
+    """(마지막 전투 로그 ID, 마지막 전투 ID). 요청 처리 전에 찍어 두면, 처리 뒤
+    이보다 큰 로그 줄이 이번 클릭으로 일어난 행동이고, 이보다 큰 전투는 이번
+    클릭에 시작된 전투다 (핸들러는 한 번에 하나씩 돈다)."""
+    log = db.one("SELECT MAX(battle_log_id) AS mark FROM battle_log")
+    battle = db.one("SELECT MAX(battle_id) AS mark FROM battles")
+    return int(log["mark"] or 0), int(battle["mark"] or 0)
+
+
+def _log_block(lines: list[str]) -> str:
+    """최근 행동을 작은 고정폭 글씨(코드블록)로 — 오너 지시."""
+    body = "\n".join(line.replace("```", "'''") for line in lines)
+    return f"```\n{body}\n```"
+
+
+def _split_battle_images(db: Database, response: dict, user_id: int,
+                         log_mark: tuple[int, int] | None = None) -> dict:
     """전투의 `내 턴`과 `전황`을 서로 다른 디스코드 메시지로 보낸다.
 
     컴포넌트 클릭 응답만 multi_action을 쓸 수 있다. 기존(첫) 메시지는 조작과
-    직접 연결된 내 턴 패널을 유지하고, 전황/기록은 뒤따르는 새 메시지다.
+    직접 연결된 내 턴 패널을 유지한다. 전황 그림은 **전투가 시작된 클릭에서만**
+    새 메시지로 올리고, 그 뒤로는 이번 클릭으로 일어난 행동(최근 5줄)만
+    코드블록 글로 쌓는다 — 예전엔 카드를 낼 때마다 전황 그림이 새로 올라와
+    스레드가 금방 쌓였다(오너 지시: "로그처럼").
+
+    `log_mark`는 요청 처리 전의 마지막 로그 ID다. 없으면 이번 클릭의 행동을
+    알 수 없으므로 전황 그림을 그대로 올린다.
     """
-    attachments = response.get("attachments") or []
-    names = {item.get("filename") for item in attachments}
-    if names != {"deckout_situation.png", "deckout_turn.png"}:
-        return response
     run_id = lifecycle.most_relevant_run_id(db, user_id)
     run = db.one("SELECT * FROM runs WHERE run_id = ?", (run_id,)) if run_id else None
     if run is None:
         return response
 
-    turn = next(item for item in attachments if item["filename"] == "deckout_turn.png")
-    situation = next(item for item in attachments
-                     if item["filename"] == "deckout_situation.png")
-    turn_id = delivery.mint_request_id("battle-turn")
-    situation_id = delivery.mint_request_id("battle-situation")
-    for request_id, purpose in ((turn_id, "battle_turn"),
-                                (situation_id, "battle_situation")):
+    attachments = response.get("attachments") or []
+    names = {item.get("filename") for item in attachments}
+    is_battle_screen = names == {"deckout_situation.png", "deckout_turn.png"}
+
+    battle = db.one("SELECT battle_id FROM battles WHERE run_id = ? "
+                    "ORDER BY battle_id DESC LIMIT 1", (run_id,))
+    new_lines: list[str] = []
+    battle_started_now = log_mark is None
+    if battle is not None and log_mark is not None:
+        last_log, last_battle = log_mark
+        new_lines = [row["entry"] for row in db.query(
+            "SELECT entry FROM battle_log WHERE battle_id = ? AND battle_log_id > ? "
+            "ORDER BY battle_log_id", (battle["battle_id"], last_log))]
+        battle_started_now = int(battle["battle_id"]) > last_battle
+    recent = new_lines[-BATTLE_LOG_LINES_PER_POST:]
+
+    if not is_battle_screen and not recent:
+        return response
+
+    def intent(prefix: str, purpose: str) -> str:
+        request_id = delivery.mint_request_id(prefix)
         delivery.record_intent(
             db, request_id=request_id, run_id=run_id, purpose=purpose,
             surface_generation=int(run["surface_generation"]),
             presentation_revision=int(run["presentation_revision"]))
+        return request_id
 
     first = dict(response)
     first["action"] = "edit"
-    first["attachments"] = [turn]
-    first["metadata"] = {"request_id": turn_id}
-    second = {
-        "action": "post_channel_message",
-        "content": "**전황 · 전투 기록**",
-        "attachments": [situation],
-        "components": [],
-        "metadata": {"request_id": situation_id},
-    }
+    second = None
+    if is_battle_screen:
+        turn = next(item for item in attachments if item["filename"] == "deckout_turn.png")
+        situation = next(item for item in attachments
+                         if item["filename"] == "deckout_situation.png")
+        first["attachments"] = [turn]
+        if battle_started_now:
+            second = {"action": "post_channel_message",
+                      "content": "**전황 · 전투 기록**" + (
+                          "\n" + _log_block(recent) if recent else ""),
+                      "attachments": [situation], "components": [],
+                      "metadata": {"request_id": intent("battle-situation",
+                                                        "battle_situation")}}
+    if second is None and recent:
+        second = {"action": "post_channel_message", "content": _log_block(recent),
+                  "attachments": [], "components": [],
+                  "metadata": {"request_id": intent("battle-log", "battle_log")}}
+    if not (first.get("metadata") or {}).get("request_id"):
+        first["metadata"] = {"request_id": intent("battle-turn", "battle_turn")}
+    if second is None:
+        return first
     children = [first, second]
     validate_multi_action(children)
     # 연동 가이드 §8의 형식 그대로 — 클릭한 컴포넌트의 메시지를 첫 자식
@@ -471,6 +520,7 @@ async def event(request: Request) -> JSONResponse:
             return JSONResponse(_clamp(replay))
         return JSONResponse({"action": "ignore", "duplicate": True})
 
+    log_mark = _battle_log_mark(db)
     if isinstance(parsed, ev.MessageEvent):
         response = handlers.handle_message(context, parsed)
     elif isinstance(parsed, ev.InteractionEvent):
@@ -503,7 +553,7 @@ async def event(request: Request) -> JSONResponse:
     # 전투 그림은 파일 두 개가 아니라 메시지 두 개로 분리한다. multi_action은
     # 컴포넌트 상호작용에서만 허용되므로 그 경우에만 적용한다.
     if isinstance(parsed, ev.InteractionEvent) and response.get("action") == "edit":
-        response = _split_battle_images(db, response, parsed.user_id)
+        response = _split_battle_images(db, response, parsed.user_id, log_mark)
 
     # Recorded only after the handler returns. Marking it up front would make a
     # handler exception permanently swallow Central's redelivery of an event

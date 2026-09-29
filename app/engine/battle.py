@@ -112,9 +112,16 @@ class BattleEngine:
     def _persist_log(self, entries: list[str], round_no: int) -> None:
         """`result.log` 를 `battle_log` 에 남긴다 — 계산은 이 표 없이도
         끝나므로, 쓰기가 하나 실패해도 전투를 막지 않는다."""
+        import re
+
         from app.db.connection import utcnow
 
         for entry in entries:
+            # 효과 코드의 진단 문구는 `unit 7: 치명타!`처럼 내부 번호를 쓴다.
+            # 이 로그는 그대로 플레이어 화면(전황 그림·로그 메시지)에 나가므로
+            # 이름으로 바꾼다.
+            entry = re.sub(r"\bunit (\d+)\b",
+                           lambda match: self._unit_name(int(match.group(1))), entry)
             try:
                 self.db.execute(
                     "INSERT INTO battle_log (battle_id, round_no, entry, created_at) "
@@ -457,7 +464,7 @@ class BattleEngine:
             (self.content_version_id, card["card_id"]),
         )
         if definition is None:
-            result.log.append(f"cursed card {card['card_id']!r} is not defined")
+            result.log.append(f"알 수 없는 저주 카드 ({card['card_id']})")
             return
         ctx = self._context(unit, [unit], fx.ops.CTX_CURSED_CARD)
         outcome = fx.execute_effects(json.loads(definition["penalty_json"]), ctx)

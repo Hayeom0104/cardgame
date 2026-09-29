@@ -488,20 +488,33 @@ def characters_screen(ctx: HandlerContext, user_id: int) -> dict:
             "attachments": visuals.characters(render_rows)}
 
 
-def equipment_screen(ctx: HandlerContext, user_id: int) -> dict:
-    """`!덱아웃 장비` — 보유 장비, 티어, 다음 강화 비용 (§8.4)."""
-    rows = ctx.db.query(
+#: 장비 화면 한 페이지의 장비 수. 선택창 한도(25)보다 작게 잡는다 — 장비 한
+#: 개가 본문 3줄이라, 25개면 본문이 다시 디스코드 한도(2000자)를 넘는다.
+EQUIPMENT_PAGE_SIZE = 10
+EQUIPMENT_PAGE_ACTION = "eqpage"
+
+
+def equipment_screen(ctx: HandlerContext, user_id: int, page: int = 0) -> dict:
+    """`!덱아웃 장비` — 보유 장비, 티어, 다음 강화 비용 (§8.4).
+
+    페이지로 나눈다. 예전엔 선택창에 앞의 25개만 들어가서 26번째 장비부터는
+    장착도 강화도 할 수 없었다."""
+    all_rows = ctx.db.query(
         "SELECT oe.equipment_instance_id, oe.equipment_def_id, oe.tier, "
         "oe.equipped_character_id, ed.name, ed.slot, ed.set_name FROM owned_equipment oe "
         "JOIN equipment_defs ed ON ed.equipment_def_id = oe.equipment_def_id "
         "AND ed.content_version_id = ? WHERE oe.user_id = ? "
         "ORDER BY oe.equipment_instance_id", (ctx.content_version_id, user_id))
+    pages = max(1, -(-len(all_rows) // EQUIPMENT_PAGE_SIZE))
+    page = min(max(int(page), 0), pages - 1)
+    rows = all_rows[page * EQUIPMENT_PAGE_SIZE:(page + 1) * EQUIPMENT_PAGE_SIZE]
     stones = ctx.db.query(
         "SELECT tier, amount FROM enhancement_stones WHERE user_id = ? "
         "AND amount > 0 ORDER BY tier", (user_id,))
     stone_rows = [dict(row) for row in stones]
 
-    lines = [f"**장비** — {_coin_line(ctx, user_id)}"]
+    lines = [f"**장비** — {_coin_line(ctx, user_id)}"
+             + (f" · {page + 1}/{pages}쪽 (전체 {len(all_rows)}개)" if pages > 1 else "")]
     if stones:
         lines.append("강화석 " + " · ".join(
             f"T{row['tier']}×{row['amount']}" for row in stones))
@@ -568,6 +581,17 @@ def equipment_screen(ctx: HandlerContext, user_id: int) -> dict:
                      "value": str(row["equipment_instance_id"])}
                     for row in rows[:25]],
     })
+    if pages > 1:
+        # 공개 메시지라 남이 넘기지 못하게 주인 ID를 싣는다(hub가 대조한다).
+        owner = cid.to_base36(user_id)
+        if page > 0:
+            components.append({
+                "type": "button", "label": "◀ 이전",
+                "custom_id": f"{hub.HUB_PREFIX}{EQUIPMENT_PAGE_ACTION}:{owner}-{page - 1}"})
+        if page < pages - 1:
+            components.append({
+                "type": "button", "label": "다음 ▶",
+                "custom_id": f"{hub.HUB_PREFIX}{EQUIPMENT_PAGE_ACTION}:{owner}-{page + 1}"})
     return {**_reply("\n".join(lines), components),
             "attachments": visuals.equipment(render_rows, stones=stone_rows)}
 

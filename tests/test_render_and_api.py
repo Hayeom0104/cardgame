@@ -497,3 +497,69 @@ def test_thread_resume_is_visible_and_rebuilds_images_without_advancing(client_w
                                         'custom_id': refresh_id}).json()
     assert other['action'] == 'reply_ephemeral'
     assert dict(db.one('SELECT * FROM runs WHERE user_id = ?', (uid,))) == before
+
+
+# =====================================================================
+# 전황은 전투 시작 때 그림 한 번, 이후엔 최근 행동 5줄 코드블록 로그 (오너 지시)
+# =====================================================================
+def _enter_first_battle(client, uid):
+    from app.api import server
+
+    unknown = client.post('/event', json={
+        'type': 'interaction', 'user_id': uid, 'guild_id': 1, 'channel_id': 5959,
+        'custom_id': 'dko:hub:daily', 'values': []}).json()
+    join_id = unknown['components'][0]['components'][0]['custom_id']
+    entered = client.post('/event', json={
+        'type': 'interaction', 'user_id': uid, 'guild_id': 1, 'channel_id': 5959,
+        'custom_id': join_id, 'values': []}).json()
+    thread_id = entered['thread_id']
+    refresh_id = server.state['central'].initial_screen['components'][0]['custom_id']
+    base = {'type': 'interaction', 'user_id': uid, 'guild_id': 1,
+            'channel_id': thread_id, 'thread_id': thread_id, 'values': []}
+    opened = client.post('/event', json={**base, 'custom_id': refresh_id}).json()
+    node = opened['components'][0]['components'][0]['custom_id']
+    return base, client.post('/event', json={**base, 'custom_id': node}).json()
+
+
+def _first_control(action):
+    component = action['components'][0]['components'][0]
+    values = [component['options'][0]['value']] if component.get('options') else []
+    return component['custom_id'], values
+
+
+def test_the_situation_image_is_posted_once_then_the_battle_is_logged_as_text(
+        client_with_central):
+    base, start = _enter_first_battle(client_with_central, 55530)
+    assert start['action'] == 'multi_action'
+    assert start['actions'][1]['attachments'][0]['filename'] == 'deckout_situation.png'
+
+    screen = start['actions'][0]
+    logs = []
+    for _ in range(6):
+        custom_id, values = _first_control(screen)
+        reply = client_with_central.post('/event', json={
+            **base, 'custom_id': custom_id, 'values': values}).json()
+        if reply['action'] != 'multi_action':
+            screen = reply
+            continue
+        screen = reply['actions'][0]
+        follow = reply['actions'][1]
+        assert follow['attachments'] == [], "전황 그림은 전투 시작 때만 올라가야 합니다"
+        logs.append(follow['content'])
+        if not screen.get('components'):
+            break
+    assert logs, "카드를 낸 뒤 행동 로그가 올라와야 합니다"
+    for content in logs:
+        assert content.startswith('```\n') and content.endswith('\n```')
+        assert 1 <= len(content.strip('`').strip().splitlines()) <= 5
+
+
+def test_a_click_that_changes_nothing_posts_no_log_message(client_with_central):
+    """낡은 버튼 재클릭처럼 새 행동이 없으면 로그 메시지를 올리지 않는다."""
+    base, start = _enter_first_battle(client_with_central, 55531)
+    custom_id, values = _first_control(start['actions'][0])
+    client_with_central.post('/event', json={**base, 'custom_id': custom_id,
+                                             'values': values})
+    stale = client_with_central.post('/event', json={**base, 'custom_id': custom_id,
+                                                     'values': values}).json()
+    assert stale['action'] != 'multi_action', stale

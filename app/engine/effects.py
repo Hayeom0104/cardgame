@@ -150,7 +150,7 @@ def _op_deal_damage(params: dict, ctx: EffectContext, outcome: EffectOutcome) ->
         if not target.is_alive:
             continue
         if te.is_invulnerable(ctx.db, target.battle_unit_id, ctx.round_no):
-            outcome.log.append(f"unit {target.battle_unit_id} is 무적 — damage nullified")
+            outcome.log.append(f"unit {target.battle_unit_id}: 무적 — 피해 무효")
             continue
 
         pierced = st.has_status(ctx.db, target.battle_unit_id, st.SHIELD_PIERCE)
@@ -465,9 +465,7 @@ def _op_summon_enemy(params: dict, ctx: EffectContext, outcome: EffectOutcome) -
             (ctx.battle_id, un.ENEMY),
         )
         if int(existing["n"]) >= cap:
-            outcome.log.append(
-                f"summon of {params['enemy_id']!r} failed: enemy cap {cap} reached"
-            )
+            outcome.log.append(f"소환 실패 — 적이 이미 {cap}명입니다")
             return
         summon_enemy(ctx.db, ctx.battle_id, params["enemy_id"],
                      ctx.content_version_id, ctx.balance)
