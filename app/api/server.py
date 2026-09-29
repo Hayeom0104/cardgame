@@ -19,7 +19,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.api import events as ev
-from app.api import handlers
+from app.api import handlers, visuals
 from app.central import delivery, surfaces
 from app.central.client import (CapabilityError, CentralClient, clamp_content,
                                 to_action_rows, validate_multi_action)
@@ -59,8 +59,10 @@ def _clamp(response: dict) -> dict:
     return response
 
 
-#: 전황 로그 메시지 한 개에 싣는 최근 행동 줄 수 (오너 지시).
+#: 전황 보드에 남기는 최근 행동 줄 수 — 큐처럼 새 줄이 들어오면 가장 오래된
+#: 줄이 밀려난다 (오너 지시).
 BATTLE_LOG_LINES_PER_POST = 5
+BOARD_TITLE = "**전황 · 전투 기록**"
 
 
 def _battle_log_mark(db: Database) -> tuple[int, int]:
@@ -78,18 +80,35 @@ def _log_block(lines: list[str]) -> str:
     return f"```\n{body}\n```"
 
 
+def _board_purpose(battle_id: int) -> str:
+    return f"battle_board:{battle_id}"
+
+
+def _board_message(db: Database, run_id: int, battle_id: int):
+    """이 전투의 전황 보드 메시지 — Central의 전송 결과 콜백이 알려 준 것."""
+    return db.one(
+        "SELECT channel_id, thread_id, message_id FROM discord_bindings "
+        "WHERE run_id = ? AND purpose = ? AND success = 1 AND applied = 1 "
+        "AND message_id IS NOT NULL ORDER BY rowid DESC LIMIT 1",
+        (run_id, _board_purpose(battle_id)))
+
+
 def _split_battle_images(db: Database, response: dict, user_id: int,
-                         log_mark: tuple[int, int] | None = None) -> dict:
-    """전투의 `내 턴`과 `전황`을 서로 다른 디스코드 메시지로 보낸다.
+                         log_mark: tuple[int, int] | None = None,
+                         balance=None) -> dict:
+    """전투의 `내 턴`과 `전황 보드`를 서로 다른 디스코드 메시지로 보낸다.
 
-    컴포넌트 클릭 응답만 multi_action을 쓸 수 있다. 기존(첫) 메시지는 조작과
-    직접 연결된 내 턴 패널을 유지한다. 전황 그림은 **전투가 시작된 클릭에서만**
-    새 메시지로 올리고, 그 뒤로는 이번 클릭으로 일어난 행동(최근 5줄)만
-    코드블록 글로 쌓는다 — 예전엔 카드를 낼 때마다 전황 그림이 새로 올라와
-    스레드가 금방 쌓였다(오너 지시: "로그처럼").
+    컴포넌트 클릭 응답만 multi_action을 쓸 수 있다. 클릭된 메시지는 조작과
+    직접 연결된 `내 턴` 패널로 고친다. 전황 보드(전황 그림 + 최근 5줄 로그)는
+    전투가 시작된 클릭에서 한 번 올리고, 그 뒤로는 **같은 메시지를 고쳐 쓴다**
+    — 로그는 큐처럼 최근 5줄만 남는다(오너 지시). 연동 가이드 §8의 "한 번의
+    클릭으로 두 고정 보드" 형식(`upsert_user_safezone_message`)이다.
 
-    `log_mark`는 요청 처리 전의 마지막 로그 ID다. 없으면 이번 클릭의 행동을
-    알 수 없으므로 전황 그림을 그대로 올린다.
+    보드 메시지 ID는 Central의 전송 결과 콜백으로만 알 수 있다. 아직 모르면
+    (콜백이 늦었거나 실패) 새 보드를 올린다 — 그 콜백이 오면 이후엔 그걸 고친다.
+
+    `log_mark`는 요청 처리 전의 (로그 ID, 전투 ID)다. 없으면 이번 클릭이 새
+    전투를 연 것으로 본다.
     """
     run_id = lifecycle.most_relevant_run_id(db, user_id)
     run = db.one("SELECT * FROM runs WHERE run_id = ?", (run_id,)) if run_id else None
@@ -102,18 +121,36 @@ def _split_battle_images(db: Database, response: dict, user_id: int,
 
     battle = db.one("SELECT battle_id FROM battles WHERE run_id = ? "
                     "ORDER BY battle_id DESC LIMIT 1", (run_id,))
-    new_lines: list[str] = []
-    battle_started_now = log_mark is None
-    if battle is not None and log_mark is not None:
-        last_log, last_battle = log_mark
-        new_lines = [row["entry"] for row in db.query(
-            "SELECT entry FROM battle_log WHERE battle_id = ? AND battle_log_id > ? "
-            "ORDER BY battle_log_id", (battle["battle_id"], last_log))]
-        battle_started_now = int(battle["battle_id"]) > last_battle
-    recent = new_lines[-BATTLE_LOG_LINES_PER_POST:]
-
-    if not is_battle_screen and not recent:
+    if battle is None and not is_battle_screen:
         return response
+    battle_id = int(battle["battle_id"]) if battle is not None else 0
+    changed = log_mark is None
+    battle_started_now = log_mark is None or battle is None
+    if log_mark is not None and battle is not None:
+        last_log, last_battle = log_mark
+        changed = db.one("SELECT 1 FROM battle_log WHERE battle_id = ? "
+                         "AND battle_log_id > ? LIMIT 1", (battle_id, last_log)) is not None
+        battle_started_now = battle_id > last_battle
+
+    if not is_battle_screen and not changed:
+        return response
+
+    from app.engine import battle as bt
+
+    queue = bt.recent_log(db, battle_id, BATTLE_LOG_LINES_PER_POST)
+    board_content = BOARD_TITLE + ("\n" + _log_block(queue) if queue else "")
+
+    situation = None
+    if is_battle_screen:
+        situation = next(item for item in attachments
+                         if item["filename"] == "deckout_situation.png")
+    elif balance is not None:
+        # 전투를 끝낸 클릭 — 응답 화면은 지도라 전황 그림이 없다. 응답 경로
+        # 첨부는 replace만 지원하므로, 그림 없이 고치면 보드의 그림이 지워진다.
+        # 끝난 전투의 전황을 다시 그려 싣는다.
+        rendered = visuals.battle(db, balance, battle_id=battle_id, run=run)
+        situation = next((item for item in rendered
+                          if item.get("filename") == "deckout_situation.png"), None)
 
     def intent(prefix: str, purpose: str) -> str:
         request_id = delivery.mint_request_id(prefix)
@@ -125,25 +162,29 @@ def _split_battle_images(db: Database, response: dict, user_id: int,
 
     first = dict(response)
     first["action"] = "edit"
-    second = None
     if is_battle_screen:
-        turn = next(item for item in attachments if item["filename"] == "deckout_turn.png")
-        situation = next(item for item in attachments
-                         if item["filename"] == "deckout_situation.png")
-        first["attachments"] = [turn]
-        if battle_started_now:
-            second = {"action": "post_channel_message",
-                      "content": "**전황 · 전투 기록**" + (
-                          "\n" + _log_block(recent) if recent else ""),
-                      "attachments": [situation], "components": [],
-                      "metadata": {"request_id": intent("battle-situation",
-                                                        "battle_situation")}}
-    if second is None and recent:
-        second = {"action": "post_channel_message", "content": _log_block(recent),
-                  "attachments": [], "components": [],
-                  "metadata": {"request_id": intent("battle-log", "battle_log")}}
+        first["attachments"] = [item for item in attachments
+                                if item["filename"] == "deckout_turn.png"]
     if not (first.get("metadata") or {}).get("request_id"):
         first["metadata"] = {"request_id": intent("battle-turn", "battle_turn")}
+
+    second = None
+    board = None if battle_started_now else _board_message(db, run_id, battle_id)
+    if board is not None and changed:
+        second = {"action": "upsert_user_safezone_message",
+                  "channel_id": board["channel_id"] or board["thread_id"] or run["thread_id"],
+                  "message_id": board["message_id"],
+                  "content": board_content,
+                  "attachments": [situation] if situation else [],
+                  "components": [],
+                  "metadata": {"request_id": intent("battle-board",
+                                                    _board_purpose(battle_id))}}
+    elif board is None and (battle_started_now or changed):
+        second = {"action": "post_channel_message", "content": board_content,
+                  "attachments": [situation] if situation else [],
+                  "components": [],
+                  "metadata": {"request_id": intent("battle-board",
+                                                    _board_purpose(battle_id))}}
     if second is None:
         return first
     children = [first, second]
@@ -553,7 +594,8 @@ async def event(request: Request) -> JSONResponse:
     # 전투 그림은 파일 두 개가 아니라 메시지 두 개로 분리한다. multi_action은
     # 컴포넌트 상호작용에서만 허용되므로 그 경우에만 적용한다.
     if isinstance(parsed, ev.InteractionEvent) and response.get("action") == "edit":
-        response = _split_battle_images(db, response, parsed.user_id, log_mark)
+        response = _split_battle_images(db, response, parsed.user_id, log_mark,
+                                        balance=state.get("balance"))
 
     # Recorded only after the handler returns. Marking it up front would make a
     # handler exception permanently swallow Central's redelivery of an event

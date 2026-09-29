@@ -500,7 +500,7 @@ def test_thread_resume_is_visible_and_rebuilds_images_without_advancing(client_w
 
 
 # =====================================================================
-# 전황은 전투 시작 때 그림 한 번, 이후엔 최근 행동 5줄 코드블록 로그 (오너 지시)
+# 전황 보드 — 전투당 메시지 하나를 고쳐 쓰고, 로그는 최근 5줄 큐 (오너 지시)
 # =====================================================================
 def _enter_first_battle(client, uid):
     from app.api import server
@@ -527,36 +527,71 @@ def _first_control(action):
     return component['custom_id'], values
 
 
-def test_the_situation_image_is_posted_once_then_the_battle_is_logged_as_text(
-        client_with_central):
-    base, start = _enter_first_battle(client_with_central, 55530)
-    assert start['action'] == 'multi_action'
-    assert start['actions'][1]['attachments'][0]['filename'] == 'deckout_situation.png'
+def _deliver_board(client, child, thread_id, message_id):
+    """Central이 보드 메시지를 보낸 뒤 돌려주는 전송 결과 콜백."""
+    client.post('/event', json={
+        'type': 'message_delivery_result', 'request_id': child['metadata']['request_id'],
+        'action': child['action'], 'success': True, 'partial': False,
+        'channel_id': thread_id, 'message_id': message_id, 'thread_id': None})
 
+
+def _log_lines(content):
+    return content.split('```')[1].strip().splitlines()
+
+
+def test_the_battle_board_is_edited_in_place_with_a_five_line_queue(client_with_central):
+    from app.api import server
+
+    base, start = _enter_first_battle(client_with_central, 55530)
+    board = start['actions'][1]
+    assert board['action'] == 'post_channel_message'
+    assert board['attachments'][0]['filename'] == 'deckout_situation.png'
+    _deliver_board(client_with_central, board, base['thread_id'], 777001)
+
+    db = server.state['db']
+    first_battle = db.one("SELECT MAX(battle_id) AS b FROM battles")['b']
     screen = start['actions'][0]
-    logs = []
-    for _ in range(6):
+    edits = []
+    for _ in range(20):
         custom_id, values = _first_control(screen)
         reply = client_with_central.post('/event', json={
             **base, 'custom_id': custom_id, 'values': values}).json()
         if reply['action'] != 'multi_action':
             screen = reply
             continue
-        screen = reply['actions'][0]
-        follow = reply['actions'][1]
-        assert follow['attachments'] == [], "전황 그림은 전투 시작 때만 올라가야 합니다"
-        logs.append(follow['content'])
-        if not screen.get('components'):
-            break
-    assert logs, "카드를 낸 뒤 행동 로그가 올라와야 합니다"
-    for content in logs:
-        assert content.startswith('```\n') and content.endswith('\n```')
-        assert 1 <= len(content.strip('`').strip().splitlines()) <= 5
+        screen, follow = reply['actions']
+        assert follow['action'] == 'upsert_user_safezone_message', \
+            "보드는 새로 올리지 않고 같은 메시지를 고쳐야 합니다"
+        assert follow['message_id'] == 777001
+        assert follow['attachments'][0]['filename'] == 'deckout_situation.png'
+        edits.append(_log_lines(follow['content']))
+        _deliver_board(client_with_central, follow, base['thread_id'], 777001)
+        run = db.one("SELECT state FROM runs WHERE user_id = 55530")
+        if run['state'] not in ('battle', 'boss_battle'):
+            break                                  # 첫 전투가 끝났다
+    assert edits, "카드를 낸 뒤 보드가 고쳐져야 합니다"
+    for lines in edits:
+        assert 1 <= len(lines) <= 5
+
+    # 큐 — 보드에는 이 전투 전체 로그 중 가장 최근 5줄만 남는다(마지막 일격 포함).
+    from app.engine import battle as bt
+    assert edits[-1] == bt.recent_log(db, first_battle, 5)
 
 
-def test_a_click_that_changes_nothing_posts_no_log_message(client_with_central):
-    """낡은 버튼 재클릭처럼 새 행동이 없으면 로그 메시지를 올리지 않는다."""
+def test_without_a_known_board_message_a_new_board_is_posted(client_with_central):
+    """콜백이 아직 안 왔으면 고칠 메시지를 모른다 — 새 보드를 올린다."""
+    base, start = _enter_first_battle(client_with_central, 55532)
+    custom_id, values = _first_control(start['actions'][0])
+    reply = client_with_central.post('/event', json={
+        **base, 'custom_id': custom_id, 'values': values}).json()
+    if reply['action'] == 'multi_action':
+        assert reply['actions'][1]['action'] == 'post_channel_message'
+
+
+def test_a_click_that_changes_nothing_does_not_touch_the_board(client_with_central):
+    """새 행동이 없는 클릭(대상 선택 화면, 낡은 버튼 재클릭)은 보드를 건드리지 않는다."""
     base, start = _enter_first_battle(client_with_central, 55531)
+    _deliver_board(client_with_central, start['actions'][1], base['thread_id'], 777002)
     custom_id, values = _first_control(start['actions'][0])
     client_with_central.post('/event', json={**base, 'custom_id': custom_id,
                                              'values': values})

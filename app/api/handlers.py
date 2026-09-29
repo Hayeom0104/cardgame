@@ -1318,8 +1318,12 @@ def _on_reward_pick(ctx: HandlerContext, event: ev.InteractionEvent,
         except nodes.NodeError as error:
             raise GateError(errors.ILLEGAL_STATE, reason=str(error)) from error
     # 수령이 끝나면 런은 지도로 돌아간다 (§3.2). 지도 버튼을 다시 붙이지
-    # 않으면 그 자리에서 더 갈 곳이 없어진다.
-    return {"action": "edit", "content": f"{card_id} 카드를 받았습니다.",
+    # 않으면 그 자리에서 더 갈 곳이 없어진다. 안내에는 내부 ID가 아니라
+    # 카드 이름을 쓴다(예전엔 `card_starter_화염참 카드를 받았습니다.`).
+    card = ctx.db.one("SELECT name FROM cards WHERE content_version_id = ? "
+                      "AND card_id = ?", (gate.run["content_version_id"], card_id))
+    card_name = card["name"] if card is not None else card_id
+    return {"action": "edit", "content": f"{card_name} 카드를 받았습니다.",
             "components": controls.game_map(ctx.db, parsed.run_id),
             "attachments": visuals.game_map(ctx.db, gate.run)}
 
@@ -1440,15 +1444,21 @@ def _render_nested_choice(ctx: HandlerContext, run, parsed: cid.CustomId,
                                     selection=cursed[0]["card_instance_id"])
         return {"action": "edit", "content": "저주받은 카드를 제거했습니다."}
 
+    names = {row["cursed_card_id"]: row["name"] for row in ctx.db.query(
+        "SELECT cursed_card_id, name FROM cursed_cards WHERE content_version_id = ?",
+        (run["content_version_id"],))}
     return {
         "action": "edit",
         "content": "제거할 저주받은 카드를 선택하세요.",
         "components": [{
             "type": "string_select",
+            "placeholder": "제거할 카드를 고르세요",
             "custom_id": cid.build(cid.ACTION_CLEANSE_PICK, parsed.run_id,
                                    parsed.generation, revision),
+            # 내부 ID가 아니라 카드 이름을 보여 준다.
             "options": [
-                {"label": card["card_id"], "value": str(card["card_instance_id"])}
+                {"label": names.get(card["card_id"], card["card_id"])[:100],
+                 "value": str(card["card_instance_id"])}
                 for card in cursed[:25]
             ],
         }],
