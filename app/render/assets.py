@@ -88,7 +88,8 @@ class AssetLibrary:
 
     # -- 열기 ----------------------------------------------------------
     def load(self, kind: str, entity_id: str,
-             size: tuple[int, int] | None = None) -> Image.Image | None:
+             size: tuple[int, int] | None = None, *,
+             fit: str | None = None) -> Image.Image | None:
         """그림을 정해진 크기로 열어 준다. 쓸 수 없으면 None.
 
         None 을 돌려주는 것은 실패가 아니라 "대신 그려라"라는 뜻이다.
@@ -110,7 +111,8 @@ class AssetLibrary:
             logger.warning("에셋이 너무 큽니다(%d바이트): %s", stat.st_size, path)
             return None
 
-        key = (str(path), stat.st_mtime_ns, target)
+        fit = fit or rule.fit
+        key = (str(path), stat.st_mtime_ns, target, fit)
         cached = self._cache.get(key)
         if cached is not None:
             return cached
@@ -125,7 +127,7 @@ class AssetLibrary:
         if max(image.size) > self.max_dimension:
             image.thumbnail((self.max_dimension, self.max_dimension))
         if target:
-            image = _fit(image, target, rule.fit)
+            image = _fit(image, target, fit)
 
         if len(self._cache) >= self._cache_size:
             self._cache.clear()
@@ -134,13 +136,17 @@ class AssetLibrary:
 
     def art(self, kind: str, entity_id: str, *, label: str | None = None,
             rarity: int | None = None, element: str | None = None,
-            size: tuple[int, int] | None = None) -> Image.Image:
+            size: tuple[int, int] | None = None,
+            fit: str | None = None) -> Image.Image:
         """언제나 그림을 돌려준다. 넣은 파일이 없으면 대신 그린다.
+
+        `fit`을 주면 설정의 맞춤 방식(`asset_kinds`) 대신 그것을 쓴다 — 전투
+        캐릭터 카드처럼 한 화면만 전신을 다 보여야(`contain`) 할 때.
 
         `label` 을 생략하면 id 로 대신 채운다 — 그림이 없어도 뭔가는
         보여야 한다(§11). 부르는 쪽이 이름을 이미 다른 자리에 따로 그리고
         있어 그림에는 글자가 필요 없다면, `label=""` 로 명시해 끈다."""
-        image = self.load(kind, entity_id, size)
+        image = self.load(kind, entity_id, size, fit=fit)
         if image is not None:
             return image
         rule = self.kind(kind)

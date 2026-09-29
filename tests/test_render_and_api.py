@@ -714,3 +714,103 @@ def test_map_buttons_are_numbered_left_to_right(db, balance, version, user_id):
         [str(node["node_index"]) for node in options]
     assert len({b["label"] for b in buttons}) == len(buttons), \
         "같은 종류의 갈림길이라도 버튼 라벨은 서로 달라야 합니다"
+
+
+# =====================================================================
+# v8.54 — 전투 캐릭터 카드
+# =====================================================================
+def _card_unit(name="루야", **extra):
+    unit = {"battle_unit_id": 1, "name": name, "character_id": "starter_001",
+            "hp_current": 72, "hp_max": 75, "block": 0, "is_alive": True, "tier": 2,
+            "statuses": []}
+    unit.update(extra)
+    return unit
+
+
+def test_the_character_card_is_a_larger_hand_card():
+    """손패 카드와 같은 비율, 1.20~1.35배 (v8.54 §3)."""
+    from app.render import theme as theme_module
+
+    theme = theme_module.load()
+    hand_w, hand_h = theme.size("card_size")
+    card_w, card_h = panels.character_card_size(theme)
+    assert 1.20 <= card_w / hand_w <= 1.35 and 1.20 <= card_h / hand_h <= 1.35
+    assert abs(card_w / card_h - hand_w / hand_h) < 0.02
+
+
+@pytest.mark.parametrize("party", [1, 2, 3])
+def test_every_party_size_fits_side_by_side(party):
+    from app.render import theme as theme_module
+
+    theme = theme_module.load()
+    units = [_card_unit(f"캐릭터{i}", battle_unit_id=i) for i in range(party)]
+    image = panels.render_ally_panel(units, resource=3, round_no=1)
+    assert image.size == panels.ally_panel_size(theme)
+
+
+def test_a_full_body_character_is_not_cropped(tmp_path):
+    """contain — 머리끝(초록)과 발(빨강)이 모두 카드 안에 남아야 한다 (v8.54 §4)."""
+    import shutil
+
+    from PIL import Image, ImageDraw
+
+    from app.render import theme as theme_module
+    from app.render.assets import AssetLibrary
+
+    art = Image.new("RGBA", (300, 700), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(art)
+    draw.rectangle((100, 0, 200, 12), fill=(0, 255, 0, 255))
+    draw.rectangle((100, 40, 200, 660), fill=(60, 90, 200, 255))
+    draw.rectangle((100, 686, 200, 699), fill=(255, 0, 0, 255))
+    theme = theme_module.load()
+    library = AssetLibrary(theme)
+    target = library.root / library.kind("character").directory / "zz_pytest_tall.png"
+    art.save(target)
+    try:
+        canvas = panels.Canvas(panels.ally_panel_size(theme), theme)
+        card = panels.render_character_card(
+            _card_unit(character_id="zz_pytest_tall"), canvas,
+            size=panels.character_card_size(theme))
+        colors = set(card.convert("RGB").getdata())
+        near = lambda rgb, ref: all(abs(a - b) < 40 for a, b in zip(rgb, ref))
+        assert any(near(c, (0, 255, 0)) for c in colors), "머리끝이 잘렸습니다"
+        assert any(near(c, (255, 0, 0)) for c in colors), "발끝이 잘렸습니다"
+    finally:
+        target.unlink()
+
+
+def test_the_acting_character_is_marked_in_the_battle_view(db, balance, version, user_id):
+    from app.api import visuals
+    from app.engine import battle as bt
+
+    captured = {}
+    original = panels.render_battle_screen
+
+    def spy(allies, *args, **kwargs):
+        captured["allies"] = allies
+        return original(allies, *args, **kwargs)
+
+    from tests.test_playthrough import FakeCentral, Session
+    from app.api import handlers
+    ctx = handlers.HandlerContext(db=db, balance=balance, central=FakeCentral(),
+                                  content_version_id=version)
+    session = Session(ctx, user_id)
+    session.command()
+    session.command("시작")
+    for _ in range(10):
+        if session.state() == "battle":
+            break
+        session.press_first()
+    battle = db.one("SELECT battle_id FROM battles ORDER BY battle_id DESC LIMIT 1")
+    run = db.one("SELECT * FROM runs WHERE user_id = ?", (user_id,))
+    import unittest.mock as mock
+    with mock.patch.object(panels, "render_battle_screen", spy):
+        visuals.battle(db, balance, battle_id=battle["battle_id"], run=run)
+    acting = [unit for unit in captured["allies"] if unit.get("is_acting")]
+    engine = bt.build_engine(db, balance, battle_id=battle["battle_id"],
+                             run_id=run["run_id"],
+                             content_version_id=run["content_version_id"], rng=None)
+    expected = engine.acting_unit()
+    # 전투에 막 들어가 입력을 기다리는 중이면 행동 중인 것은 아군이다.
+    assert expected is not None and expected.side == "ally"
+    assert [unit["battle_unit_id"] for unit in acting] == [expected.battle_unit_id]

@@ -69,6 +69,11 @@ def battle(db: Database, balance, *, battle_id: int, run) -> list[dict]:
             content_version_id=run["content_version_id"], rng=None)
         telegraphs = {entry["enemy_unit_id"]: entry
                       for entry in engine.telegraphs()}
+        # v8.54 §7 — 지금 행동 중인 캐릭터 카드를 강조한다.
+        acting = engine.acting_unit()
+        for view in allies:
+            view["is_acting"] = bool(acting and acting.battle_unit_id
+                                     == view["battle_unit_id"])
 
         from app.engine import passives as pv
 

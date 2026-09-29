@@ -17,7 +17,7 @@ import io
 import logging
 from dataclasses import dataclass
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 
 from app.central.client import (MAX_PNG_BYTES, MAX_PNG_DIMENSION,
                                 validate_png_attachment)
@@ -469,85 +469,197 @@ def _status_chips(unit: dict) -> list[str]:
     return [chip for chip in chips if chip]
 
 
+#: 아군 패널 윗부분(라운드·자원 줄)과 아랫여백.
+_ALLY_HEAD = 52
+_ALLY_FOOT = 14
+
+
+def character_card_size(theme) -> tuple[int, int]:
+    """전투 캐릭터 카드 크기 — 손패 카드와 같은 비율로 `character_card_scale`배
+    (v8.54 §3). 비율이 같아야 손패와 같은 게임의 카드로 읽힌다."""
+    card_w, card_h = theme.size("card_size")
+    scale = float(theme.get("character_card_scale", 1.25))
+    return round(card_w * scale), round(card_h * scale)
+
+
+def ally_panel_size(theme) -> tuple[int, int]:
+    """아군 패널 크기 — 폭은 전투 패널과 같고, 높이는 캐릭터 카드에 맞춘다."""
+    width = theme.size("panel_size")[0]
+    return width, _ALLY_HEAD + character_card_size(theme)[1] + _ALLY_FOOT
+
+
+def render_character_card(unit: dict, canvas: Canvas, *, size: tuple[int, int],
+                          acting: bool = False) -> Image.Image:
+    """전투 화면의 캐릭터 한 명 — 손패 카드와 같은 디자인의 세로 카드 (v8.54).
+
+    예전 아군 패널은 화면 폭 전체의 가로 배너에 그림을 꽉 채워(cover) 캐릭터가
+    잘린 확대 컷으로 보였고, HP 바가 그림을 가로질렀다. 여기서는:
+
+    · 위: 이름·성급 (행동 중이면 배지)
+    · 가운데: 그림 칸 — 캐릭터 전체가 보이게 `contain`, 칸 높이의 82%
+    · 아래: HP 숫자·바, 방어·상태이상(최대 3개, 넘치면 +N) — 그림을 가리지 않는다
+    """
+    theme = canvas.theme
+    width, height = size
+    alive = unit.get("is_alive", True)
+    tier = int(unit.get("tier") or 1)
+    element = unit.get("element")
+    radius = theme.int_("corner_radius")
+    base_w = character_card_size(theme)[0]
+    scale = min(1.3, max(0.6, width / base_w))
+    body = theme.font(max(11, round(theme.int_("font_size_body") * scale)))
+    small = theme.font(max(10, round(theme.int_("font_size_small") * scale)))
+    pad = max(6, round(10 * scale))
+
+    kind_color = theme.element_color(element) if element else theme.rarity_color(tier)
+    border = (theme.color("color_selectable") if acting and alive
+              else theme.color("color_disabled_border") if not alive
+              else _rarity_border(theme, tier))
+    if alive:
+        top = kit.mix(theme.color("color_panel_top"), kind_color, 0.26)
+        bottom = kit.mix(theme.color("color_panel"), kind_color, 0.10)
+    else:
+        top, bottom = theme.color("color_disabled_top"), theme.color("color_disabled")
+
+    image = Image.new("RGBA", size, (0, 0, 0, 0))
+    kit.panel(image, (0, 0, width - 1, height - 1), top=top, bottom=bottom,
+              radius=radius, border=border, border_width=3 if acting else 2, shadow=False)
+    draw = ImageDraw.Draw(image)
+    text_color = theme.color("color_text") if alive else theme.color("color_muted")
+
+    # ---- 위: 이름 · 성급 · 행동 중 ----
+    name_top = max(6, round(8 * scale))
+    badge_width = 0
+    if acting and alive:
+        # kit.pill 의 좌우 여백(8px씩)을 더한 폭 — 오른쪽 위에 붙인다.
+        badge_width = kit.text_size(draw, "행동 중", small)[0] + 16
+        kit.pill(image, (width - pad - badge_width, name_top), "행동 중", small,
+                 fg=theme.color("color_background"), bg=theme.color("color_selectable"))
+    name_room = width - pad * 2 - (badge_width + 6 if badge_width else 0)
+    draw.text((pad, name_top),
+              kit.truncate(draw, f"◆ {unit.get('name', '?')}", body, name_room),
+              font=body, fill=text_color)
+    name_h = kit.text_size(draw, "가", body)[1]
+    star = int(unit.get("star") or unit.get("tier") or 0)
+    stars_top = name_top + name_h + max(4, round(6 * scale))
+    if star:
+        kit.stars(draw, (pad, stars_top), star, max(star, 3), small,
+                  color=theme.color("color_accent"),
+                  dim=theme.color("color_disabled_border"))
+    head = stars_top + kit.text_size(draw, "★", small)[1] + max(6, round(8 * scale))
+
+    # ---- 아래: HP · 방어 · 상태 ----
+    small_h = kit.text_size(draw, "가", small)[1]
+    bar_h = max(10, round(12 * scale))
+    chip_h = small_h + 8
+    info_h = pad + name_h + 6 + bar_h + 8 + chip_h + pad
+    info_top = height - info_h
+
+    # ---- 가운데: 그림 칸 (contain) ----
+    art_box = (pad, head, width - pad, info_top - 4)
+    art_w, art_h = art_box[2] - art_box[0], art_box[3] - art_box[1]
+    kit.panel(image, art_box,
+              top=kit.mix(theme.color("color_panel_top"), (0, 0, 0), 0.10),
+              bottom=kit.mix(kind_color if alive else theme.color("color_disabled"),
+                             (0, 0, 0), 0.45),
+              radius=max(2, radius - 4), border=None, shadow=False, highlight=False)
+    ratio = float(theme.get("character_card_art_ratio", 0.82))
+    target_h = max(1, round(art_h * ratio))
+    art = canvas.assets.art(
+        "character", str(unit.get("character_id", unit.get("name", ""))), label="",
+        rarity=tier, element=element, size=(art_w, target_h), fit="contain")
+    if not alive:
+        alpha = art.getchannel("A") if art.mode == "RGBA" else None
+        art = ImageOps.grayscale(art.convert("RGB")).convert("RGBA")
+        if alpha is not None:
+            art.putalpha(alpha)
+    art = art.convert("RGBA")
+    image.alpha_composite(art, (art_box[0] + (art_w - art.width) // 2,
+                                art_box[1] + (art_h - art.height) // 2))
+
+    hp_now, hp_max = int(unit.get("hp_current", 0)), max(1, int(unit.get("hp_max", 1)))
+    y = info_top + pad // 2
+    draw.text((pad, y), f"HP {hp_now} / {hp_max}", font=body, fill=text_color)
+    y += name_h + 6
+    ratio_hp = hp_now / hp_max
+    high, low = canvas.hp_colors(ratio_hp)
+    kit.gauge(image, (pad, y, width - pad, y + bar_h), ratio_hp,
+              high=high, low=low, back=theme.color("color_gauge_back"))
+    y += bar_h + 8
+
+    cursor = pad
+    right = width - pad
+    if not alive:
+        kit.pill(image, (cursor, y), "전투불능", small,
+                 fg=theme.color("color_background"), bg=theme.color("color_hp_crit"))
+        return image
+    chips = []
+    if unit.get("block"):
+        chips.append(("block", f"방어 {unit['block']}"))
+    chips += [("status", text) for text in _status_chips(unit)]
+    limit = int(theme.get("character_card_max_statuses", 3))
+    shown, hidden = chips[:limit], len(chips) - min(len(chips), limit)
+    for kind, text in shown:
+        room = right - cursor
+        if room < 30:
+            hidden += 1
+            continue
+        label = kit.truncate(draw, text, small, room - 16)
+        if kind == "block":
+            used = kit.pill(image, (cursor, y), label, small,
+                            fg=theme.color("color_block_text"),
+                            bg=theme.color("color_block_back"),
+                            border=theme.color("color_block"))
+        else:
+            used = kit.pill(image, (cursor, y), label, small,
+                            fg=theme.color("color_text"),
+                            bg=theme.color("color_gauge_back"))
+        cursor += used + 4
+    if hidden:
+        kit.pill(image, (min(cursor, right - 30), y), f"+{hidden}", small,
+                 fg=theme.color("color_text"), bg=theme.color("color_gauge_back"))
+    return image
+
+
 def render_ally_panel(units: list[dict], *, resource: int, round_no: int,
                       canvas: Canvas | None = None) -> Image.Image:
-    """아군 패널 — 카드형 칸, 체력, 방어막, 상태이상 (§11).
+    """아군 패널 — 라운드·자원 아래에 캐릭터 카드를 가운데 정렬로 (v8.54).
 
-    파티 공유 자원(§2.3)은 숫자 대신 구슬로 그린다. 몇 개 남았는지는 세는
-    것보다 보는 편이 빠르다.
-
-    아군은 최대 3명뿐이라(§2.1) 옆으로 늘어놓고 그림을 크게 그린다 — 세로로
-    쌓아 작은 초상화만 보이면 손패의 카드보다도 정보가 적어진다.
+    파티 공유 자원(§2.3)은 숫자 대신 구슬로 그린다. 캐릭터 카드는 손패 카드와
+    같은 비율로 1.25배 — 화면 전체를 쓰던 가로 배너 대신, "캐릭터 → 그
+    캐릭터가 쓰는 손패"라는 계층이 보이게 한다. 파티가 셋이어도 카드를 크게
+    줄이지 않고 간격을 먼저 줄인다.
     """
-    canvas = canvas or Canvas(theme_module.load().size("panel_size"),
-                              tint="color_tint_battle", palette="aurora")
+    theme = theme_module.load()
+    canvas = canvas or Canvas(ally_panel_size(theme), tint="color_tint_battle",
+                              palette="aurora")
     theme = canvas.theme
     canvas.title(f"라운드 {round_no}")
     _resource_orbs(canvas, resource)
 
-    small = canvas.font("small")
-    head = 52
-    count = max(1, min(len(units), 3))
-    slot_width = (canvas.width - canvas.pad * 2 - canvas.gap * (count - 1)) // count
-    slot_height = canvas.height - head - canvas.pad
+    shown = units[:3]
+    count = max(1, len(shown))
+    card_w, card_h = character_card_size(theme)
+    room_h = canvas.height - _ALLY_HEAD - _ALLY_FOOT
+    room_w = canvas.width - canvas.pad * 2
+    gap = canvas.gap if count * card_w + canvas.gap * (count - 1) <= room_w else 8
+    scale = min(1.0, room_h / card_h,
+                (room_w - gap * (count - 1)) / (count * card_w))
+    size = (max(1, int(card_w * scale)), max(1, int(card_h * scale)))
+    total = count * size[0] + gap * (count - 1)
+    left = (canvas.width - total) // 2
+    top = _ALLY_HEAD + (room_h - size[1]) // 2
 
-    for index, unit in enumerate(units[:3]):
-        left = canvas.pad + index * (slot_width + canvas.gap)
-        box = (left, head, left + slot_width, head + slot_height)
-        alive = unit.get("is_alive", True)
-        canvas.tile(box, dimmed=not alive,
-                    outline=None if alive else theme.color("color_disabled_border"))
-
-        # 그림 — 칸 안쪽을 거의 꽉 채운다. 이름·체력은 그림 위에 얹고,
-        # 위아래만 어둡게 깔아(fade) 글자 자리를 대신한다.
-        art = canvas.assets.art(
-            "character", str(unit.get("character_id", unit.get("name", ""))), label="",
-            rarity=unit.get("tier", 1), size=(slot_width - 12, slot_height - 12))
-        canvas.art_tile((left + 6, head + 6, left + slot_width - 6, head + slot_height - 6),
-                        art, grayscale=not alive, fade_top=True, fade_bottom=True,
-                        outline=theme.color("color_border"))
-
-        text_left = left + 10
-        text_top = head + 8
-        canvas.label((text_left, text_top),
-                     kit.truncate(canvas.draw, str(unit.get("name", "?")),
-                                  canvas.font("body"), slot_width - 20),
-                     color=theme.color("color_muted") if not alive else None)
-
-        # 성급 — 등급과 다른 축이라 별로만 표시한다 (§4.4).
-        star = int(unit.get("star") or unit.get("tier") or 0)
-        if star:
-            kit.stars(canvas.draw, (text_left, text_top + 24), star, max(star, 3), small,
-                      color=theme.color("color_accent"),
-                      dim=theme.color("color_disabled_border"))
-
-        if not alive:
-            canvas.label((text_left, head + slot_height - 30), "전투불능",
-                         color=theme.color("color_hp_crit"))
-            continue
-
-        bar_width = slot_width - 20
-        bar_top = head + slot_height - 58
-        ratio = unit.get("hp_current", 0) / max(1, unit.get("hp_max", 1))
-        high, low = canvas.hp_colors(ratio)
-        kit.gauge(canvas.image, (text_left, bar_top, text_left + bar_width, bar_top + 14),
-                  ratio, high=high, low=low, back=theme.color("color_gauge_back"))
-        canvas.label((text_left, bar_top + 16),
-                     f"{unit.get('hp_current', 0)}/{unit.get('hp_max', 1)}", role="small")
-
-        cursor = text_left
-        row = bar_top + 36
-        if unit.get("block"):
-            cursor += kit.pill(canvas.image, (cursor, row), f"방어 {unit['block']}", small,
-                               fg=theme.color("color_block_text"),
-                               bg=theme.color("color_block_back"),
-                               border=theme.color("color_block")) + 5
-        for text in _status_chips(unit)[:3]:
-            if cursor > left + slot_width - 30:
-                cursor = text_left
-                row += 22
-            cursor += canvas.pill((cursor, row), text, color=theme.color("color_text"),
-                                  back=theme.color("color_gauge_back")) + 5
+    for index, unit in enumerate(shown):
+        x = left + index * (size[0] + gap)
+        acting = bool(unit.get("is_acting")) and unit.get("is_alive", True)
+        if acting:
+            kit.outer_glow(canvas.image, (x, top, x + size[0], top + size[1]),
+                           theme.color("color_selectable"), radius=canvas.radius,
+                           blur=11, opacity=theme.int_("glow_opacity_available"),
+                           spread=3)
+        card = render_character_card(unit, canvas, size=size, acting=acting)
+        canvas.paste(card, (x, top))
     return canvas.image
 
 
@@ -744,13 +856,15 @@ def render_battle_screen(ally_units: list[dict], enemy_units: list[dict],
 
     ally_image = render_ally_panel(
         ally_units, resource=resource, round_no=round_no,
-        canvas=Canvas(size, theme, tint="color_tint_battle", palette="aurora"))
+        canvas=Canvas(ally_panel_size(theme), theme, tint="color_tint_battle",
+                      palette="aurora"))
     hand_image = render_hand(
         hand or [], resource=resource, passives=passives,
         canvas=Canvas(size, theme, tint="color_tint_battle", palette="aurora"))
-    turn = Image.new("RGB", (size[0], size[1] * 2), ui_theme.color("color_background"))
+    turn = Image.new("RGB", (size[0], ally_image.height + hand_image.height),
+                     ui_theme.color("color_background"))
     turn.paste(ally_image, (0, 0))
-    turn.paste(hand_image, (0, size[1]))
+    turn.paste(hand_image, (0, ally_image.height))
 
     return [
         to_attachment(situation, "deckout_situation.png"),
