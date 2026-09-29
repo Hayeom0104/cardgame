@@ -680,7 +680,7 @@ def test_the_recreate_request_body_has_the_guide_s_required_fields():
 
     sent = {}
     client = CentralClient("http://central", "key")
-    client._post = lambda path, body: sent.update(path=path, body=body) or {}
+    client._post = lambda path, body, **kw: sent.update(path=path, body=body) or {}
     client.recreate_thread(logical_session_id="dko-run-1", surface_generation=2,
                            parent_channel_id=1, owner_user_id=2, thread_name="덱아웃 런",
                            content="다시", components=[{"type": "button", "label": "a",
@@ -690,3 +690,107 @@ def test_the_recreate_request_body_has_the_guide_s_required_fields():
                 "owner_user_id", "thread_name", "content", "embeds", "components"):
         assert key in body, key
     assert body["components"][0]["type"] == 1          # action row
+
+
+# =====================================================================
+# 운영 ReadTimeout — Central의 스레드 생성이 1.5초를 넘길 때
+# =====================================================================
+class SlowCentral(FakeCentral):
+    """첫 생성 호출은 응답이 늦다(그 사이 Central은 스레드를 만든다). 같은
+    세대로 다시 부르면 같은 스레드를 돌려준다 — 실제 Central의 멱등성."""
+
+    def __init__(self, slow_calls: int = 1):
+        super().__init__()
+        self.slow_calls = slow_calls
+        self.made: dict[tuple, dict] = {}
+        self.timeouts: list = []
+
+    def create_thread(self, **kwargs):
+        import httpx
+
+        self.create_calls.append(kwargs)
+        self.timeouts.append(kwargs.get("timeout"))
+        key = (kwargs["logical_session_id"], kwargs["surface_generation"])
+        thread = self.made.setdefault(key, self._thread())
+        if len(self.create_calls) <= self.slow_calls:
+            raise httpx.ReadTimeout("timed out")
+        return thread
+
+
+def _slow_ctx(db, balance, version, central):
+    return handlers.HandlerContext(db=db, balance=balance, central=central,
+                                   content_version_id=version)
+
+
+def test_a_slow_thread_create_is_finished_in_the_background(db, balance, version,
+                                                            user_id):
+    from app.engine import lifecycle as lc
+
+    central = SlowCentral()
+    ctx = _slow_ctx(db, balance, version, central)
+    response = start_tutorial(ctx, user_id)
+    run_id = response["run_id"]
+    reply = surfaces.fulfil_thread_request(db, central, response,
+                                           parent_channel_id=PARENT_CHANNEL)
+    assert reply["content"] == surfaces.SURFACE_PENDING_MESSAGE
+    surfaces.wait_for_background(5)
+
+    run = db.one("SELECT thread_id, state, surface_generation FROM runs WHERE run_id = ?",
+                 (run_id,))
+    assert run["thread_id"] == central.made[("dko-run-%d" % run_id, 1)]["thread_id"]
+    assert run["state"] == lc.MAP_NAVIGATION
+    assert run["surface_generation"] == 1, "새 스레드를 만들면 안 됩니다"
+    assert len({(c["logical_session_id"], c["surface_generation"])
+                for c in central.create_calls}) == 1
+    assert central.timeouts[-1] == pytest.approx(15.0)
+
+
+def test_the_hub_does_not_open_a_second_thread_while_one_is_pending(
+        db, balance, version, user_id, monkeypatch):
+    import threading
+
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "parent_channel_id", PARENT_CHANNEL)
+    gate = threading.Event()
+
+    class BlockedCentral(SlowCentral):
+        def create_thread(self, **kwargs):
+            if kwargs.get("timeout"):
+                gate.wait(5)                     # 백그라운드 호출이 아직 안 끝났다
+            return super().create_thread(**kwargs)
+
+    central = BlockedCentral()
+    ctx = _slow_ctx(db, balance, version, central)
+    response = start_tutorial(ctx, user_id)
+    surfaces.fulfil_thread_request(db, central, response,
+                                   parent_channel_id=PARENT_CHANNEL)
+    calls = len(central.create_calls)
+    reply = handlers.hub_screen(ctx, user_id)
+    assert reply["content"] == surfaces.SURFACE_PENDING_MESSAGE
+    assert len(central.create_calls) == calls
+    gate.set()
+    surfaces.wait_for_background(5)
+
+
+def test_a_never_bound_run_is_retried_at_the_same_generation(
+        db, balance, version, user_id, monkeypatch):
+    """예전엔 허브가 이 런을 '스레드가 지워진 런'으로 보고 세대를 올려 새
+    스레드를 만들었다 — Central이 늦게 만든 첫 스레드는 버려진 채 남았다."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "parent_channel_id", PARENT_CHANNEL)
+    central = FakeCentral(fail=True)
+    ctx = _slow_ctx(db, balance, version, central)
+    response = start_tutorial(ctx, user_id)
+    run_id = response["run_id"]
+    surfaces.fulfil_thread_request(db, central, response,
+                                   parent_channel_id=PARENT_CHANNEL)
+    central.fail = False
+    reply = handlers.hub_screen(ctx, user_id)
+    assert reply["action"] == "redirect"
+    run = db.one("SELECT surface_generation, thread_id FROM runs WHERE run_id = ?",
+                 (run_id,))
+    assert run["surface_generation"] == 1
+    assert central.recreate_calls == []
+    assert run["thread_id"] == reply["thread_id"]

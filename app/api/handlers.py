@@ -779,11 +779,25 @@ def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
     run = lc.active_run_for(ctx.db, user_id)
     if run is not None:
         if run["thread_id"] is None:
-            # §16.8 — 세대만 올리고 끝내면 스레드는 영영 돌아오지 않는다.
-            thread_id = surfaces.reopen_thread(
-                ctx.db, ctx.central, run["run_id"],
-                parent_channel_id=settings.parent_channel_id)
+            if surfaces.surface_pending(run["run_id"]):
+                # 늦은 스레드 생성을 백그라운드에서 기다리는 중 — 여기서 또
+                # 만들면 스레드가 둘이 된다.
+                return _ephemeral(surfaces.SURFACE_PENDING_MESSAGE)
+            if run["state"] == lc.PREPARING:
+                # 한 번도 스레드에 묶인 적 없는 런(생성 응답이 늦었거나 실패).
+                # 같은 세대로 다시 부른다 — Central이 이미 만들었으면 그
+                # 스레드를 돌려받는다. 세대를 올리면 새 스레드가 또 생긴다.
+                thread_id = surfaces.retry_surface(
+                    ctx.db, ctx.central, run["run_id"],
+                    parent_channel_id=settings.parent_channel_id)
+            else:
+                # §16.8 — 스레드가 실제로 지워졌다. 새 세대로 다시 연다.
+                thread_id = surfaces.reopen_thread(
+                    ctx.db, ctx.central, run["run_id"],
+                    parent_channel_id=settings.parent_channel_id)
             if thread_id is None:
+                if surfaces.surface_pending(run["run_id"]):
+                    return _ephemeral(surfaces.SURFACE_PENDING_MESSAGE)
                 return _ephemeral(errors.SURFACE_UNAVAILABLE)
             return {"action": "redirect", "thread_id": thread_id,
                     "content": "런 스레드를 다시 만들었습니다."}

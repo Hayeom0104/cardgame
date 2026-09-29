@@ -47,6 +47,14 @@ BUDGET_INTERACTION_SECONDS = 2.0
 #: hold a handler for roughly the full 5s on its own, before any local work.
 CENTRAL_CLIENT_TIMEOUT_SECONDS = 1.5
 
+#: 스레드 생성·재생성을 **백그라운드에서** 마저 기다릴 때의 타임아웃(초).
+#: Central은 디스코드에 스레드 생성 + 멤버 추가 + 첫 메시지를 하느라 위의
+#: 1.5초를 자주 넘긴다(운영 Termux 로그의 ReadTimeout). 이벤트 응답은 이미
+#: 돌려준 뒤라 인터랙션 예산과 무관하다. 같은 세대의 생성은 멱등이므로
+#: 다시 불러도 스레드가 둘이 되지 않는다.
+CENTRAL_THREAD_TIMEOUT_SECONDS = 15.0
+CENTRAL_THREAD_ATTEMPTS = 3
+
 
 @dataclass
 class Settings:

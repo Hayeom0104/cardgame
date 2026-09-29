@@ -12,7 +12,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from PIL import ImageFont
+from PIL import ImageDraw, ImageFont
 
 from app.content import config_loader
 
@@ -125,14 +125,129 @@ def _supports_hangul(font) -> bool:
     return bytes(drawn) != bytes(missing)
 
 
+class FallbackFont(ImageFont.FreeTypeFont):
+    """기본 글꼴에 없는 글자만 대체 글꼴로 그리는 글꼴 (오너 지시).
+
+    기본 글꼴인 Neo둥근모(도트풍)에는 `→`(전투 로그의 모든 줄), `★☆`(성급),
+    한자·일본어(닉네임 `月冴` 등)가 없어 네모로 깨졌다. Pillow에는 글꼴 대체
+    기능이 없어서, 줄을 "같은 글꼴로 그릴 수 있는 글자 묶음"으로 나눠 기준선을
+    맞춰 이어 그린다 — 나머지 글자는 도트 글꼴 그대로다. 그리기는 아래
+    `ImageDraw` 감싸기가, 크기 측정은 이 클래스의 `getbbox`/`getlength`가 같은
+    방식으로 한다.
+    """
+
+    def __init__(self, path: str, size: int, fallback) -> None:
+        super().__init__(path, size)
+        self._fallback = fallback
+        # 글자 확인·묶음 그리기는 가로채지 않은 일반 글꼴로 한다 — `getmask`가
+        # 내부에서 `getmask2`를 부르므로 자기 자신으로 하면 끝없이 되돌아온다.
+        self._probe = ImageFont.truetype(path, size)
+        self._covered: dict[str, bool] = {}
+        self._missing_mask: bytes | None = None
+
+    def _covers(self, char: str) -> bool:
+        known = self._covered.get(char)
+        if known is not None:
+            return known
+        if char.isspace():
+            result = True
+        else:
+            if self._missing_mask is None:
+                self._missing_mask = bytes(self._probe.getmask(_MISSING_PROBE[0]))
+            try:
+                result = bytes(self._probe.getmask(char)) != self._missing_mask
+            except Exception:                                  # noqa: BLE001
+                result = False
+        self._covered[char] = result
+        return result
+
+    def _needs_fallback(self, text) -> bool:
+        return isinstance(text, str) and not all(self._covers(ch) for ch in text)
+
+    def runs(self, text: str) -> list[tuple[object, str]]:
+        """(그릴 글꼴, 글자 묶음) 목록. 기본 글꼴에 있는 글자는 도트 글꼴로."""
+        out: list[tuple[object, str]] = []
+        for char in text:
+            font = self._probe if self._covers(char) else self._fallback
+            if out and out[-1][0] is font:
+                out[-1] = (font, out[-1][1] + char)
+            else:
+                out.append((font, char))
+        return out
+
+    def baseline(self) -> int:
+        """기본 글꼴의 윗선(ascender)에서 기준선까지 — 앵커 `la`의 기준."""
+        return self._probe.getmetrics()[0]
+
+    def _mixable(self, text, anchor) -> bool:
+        return (anchor in (None, "la") and isinstance(text, str) and "\n" not in text
+                and self._needs_fallback(text))
+
+    def getmask2(self, text, *args, **kwargs):
+        # `ImageDraw` 감싸기를 거치지 않는 그리기(다른 앵커 등)의 안전망 —
+        # 이 경우만 줄 전체를 대체 글꼴로 그린다. 네모보다는 낫다.
+        if self._needs_fallback(text):
+            return self._fallback.getmask2(text, *args, **kwargs)
+        return super().getmask2(text, *args, **kwargs)
+
+    def getbbox(self, text, mode="", direction=None, features=None, language=None,
+                stroke_width=0, anchor=None):
+        if not self._mixable(text, anchor):
+            if self._needs_fallback(text):
+                return self._fallback.getbbox(text, mode, direction, features,
+                                              language, stroke_width, anchor)
+            return super().getbbox(text, mode, direction, features, language,
+                                   stroke_width, anchor)
+        x, top, bottom, left, right = 0.0, None, None, None, None
+        base = self.baseline()
+        for font, run in self.runs(text):
+            l, t, r, b = font.getbbox(run, mode, direction, features, language,
+                                      stroke_width, "ls")
+            left = x + l if left is None else min(left, x + l)
+            right = x + r if right is None else max(right, x + r)
+            top = base + t if top is None else min(top, base + t)
+            bottom = base + b if bottom is None else max(bottom, base + b)
+            x += font.getlength(run, mode, direction, features, language)
+        return (left, top, right, bottom)
+
+    def getlength(self, text, mode="", direction=None, features=None, language=None):
+        if isinstance(text, str) and self._needs_fallback(text):
+            return sum(font.getlength(run, mode, direction, features, language)
+                       for font, run in self.runs(text))
+        return super().getlength(text, mode, direction, features, language)
+
+
+_draw_text = ImageDraw.ImageDraw.text
+
+
+def _mixed_text(self, xy, text, fill=None, font=None, anchor=None, *args, **kwargs):
+    """`ImageDraw.text` — 글꼴이 `FallbackFont`이고 기본 글꼴에 없는 글자가
+    있을 때만 글자 묶음별로 나눠 그린다. 그 밖에는 원래 함수 그대로다."""
+    if not (isinstance(font, FallbackFont) and font._mixable(text, anchor)):
+        return _draw_text(self, xy, text, fill, font, anchor, *args, **kwargs)
+    x, y = xy
+    base = y + font.baseline()
+    for run_font, run in font.runs(text):
+        _draw_text(self, (x, base), run, fill, run_font, "ls", *args, **kwargs)
+        x += run_font.getlength(run)
+    return None
+
+
+ImageDraw.ImageDraw.text = _mixed_text
+
+
 @lru_cache(maxsize=32)
 def _load_font(candidates: tuple[str, ...], size: int):
     """설정에 적힌 순서대로 찾되, 한글이 그려지는 글꼴을 우선한다.
+
+    한글이 되는 글꼴이 둘 이상이면 첫 번째를 기본으로, 두 번째를 기본
+    글꼴에 없는 글자(→ ★ 한자 등)용 대체 글꼴로 쓴다(`FallbackFont`).
 
     한글이 되는 글꼴이 하나도 없으면 그래도 읽히는 것 중 첫 번째를 쓴다 —
     이름이 네모로 나올지언정 화면은 나가야 한다 (§11).
     """
     fallback = None
+    primary: tuple[str, object] | None = None
     for candidate in candidates:
         path = Path(candidate)
         if not path.is_absolute():
@@ -145,8 +260,18 @@ def _load_font(candidates: tuple[str, ...], size: int):
             logger.warning("글꼴을 읽지 못했습니다: %s", path)
             continue
         if _supports_hangul(font):
-            return font
+            if primary is None:
+                primary = (str(path), font)
+                continue
+            if path.resolve() == Path(primary[0]).resolve():
+                continue
+            try:
+                return FallbackFont(primary[0], size, font)
+            except OSError:
+                return primary[1]
         fallback = fallback or font
+    if primary is not None:
+        return primary[1]
 
     if fallback is not None:
         logger.warning(

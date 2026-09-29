@@ -598,3 +598,53 @@ def test_a_click_that_changes_nothing_does_not_touch_the_board(client_with_centr
     stale = client_with_central.post('/event', json={**base, 'custom_id': custom_id,
                                                      'values': values}).json()
     assert stale['action'] != 'multi_action', stale
+
+
+# =====================================================================
+# 글꼴 대체 — Neo둥근모에 없는 글자가 네모로 깨지던 문제
+# =====================================================================
+@pytest.mark.parametrize("text", ["루야 → 슬라임: 9 피해", "★★☆", "月冴"])
+def test_characters_missing_from_the_pixel_font_are_drawn_not_boxed(text):
+    """전투 로그의 `→`, 성급 `★☆`, 한자 닉네임이 네모(.notdef)로 나왔다."""
+    from PIL import ImageFont
+
+    from app.render import theme as theme_module
+
+    font = theme_module.load().font(20)
+    assert font._needs_fallback(text)
+    box = bytes(font._probe.getmask(theme_module._MISSING_PROBE[0]))
+    for char in text.replace(" ", ""):
+        if not font._covers(char):
+            assert bytes(font._fallback.getmask(char)) != box, char
+
+
+def test_plain_hangul_keeps_the_pixel_font():
+    from app.render import theme as theme_module
+
+    assert not theme_module.load().font(20)._needs_fallback("평범한 한글 줄")
+
+
+def test_only_the_missing_characters_switch_fonts():
+    """오너 지시 — 줄 전체가 아니라 기본 글꼴에 없는 기호만 다른 글꼴로."""
+    from app.render import theme as theme_module
+
+    font = theme_module.load().font(20)
+    runs = font.runs("루야 → 슬라임")
+    assert [text for _, text in runs] == ["루야 ", "→", " 슬라임"]
+    assert runs[0][0] is font._probe and runs[2][0] is font._probe
+    assert runs[1][0] is font._fallback
+
+
+def test_mixed_text_measures_the_same_width_it_draws():
+    from PIL import Image, ImageDraw
+
+    from app.render import theme as theme_module
+
+    font = theme_module.load().font(20)
+    text = "루야 → 슬라임 ★"
+    image = Image.new("L", (400, 60), 0)
+    draw = ImageDraw.Draw(image)
+    draw.text((10, 10), text, font=font, fill=255)
+    drawn = image.getbbox()
+    measured = draw.textbbox((10, 10), text, font=font)
+    assert abs(drawn[0] - measured[0]) <= 2 and abs(drawn[2] - measured[2]) <= 2

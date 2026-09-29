@@ -152,9 +152,10 @@ class CentralClient:
     def _headers(self) -> dict[str, str]:
         return {"X-API-Key": self.api_key}
 
-    def _post(self, path: str, payload: dict) -> dict:
+    def _post(self, path: str, payload: dict, *, timeout: float | None = None) -> dict:
+        extra = {"timeout": timeout} if timeout is not None else {}
         response = self._client.post(f"{self.base_url}{path}", json=payload,
-                                     headers=self._headers())
+                                     headers=self._headers(), **extra)
         response.raise_for_status()
         return response.json()
 
@@ -212,7 +213,8 @@ class CentralClient:
                       parent_channel_id: int, owner_user_id: int,
                       thread_name: str, content: str = "",
                       embeds: list | None = None,
-                      components: list | None = None) -> dict:
+                      components: list | None = None,
+                      timeout: float | None = None) -> dict:
         """Service-initiated private thread API (guide §11.3).
 
         NOT the response-path `create_thread` action, which creates a
@@ -228,7 +230,7 @@ class CentralClient:
             "content": clamp_content(content),
             "embeds": embeds or [],
             "components": to_action_rows(components),
-        })
+        }, timeout=timeout)
 
     def delete_thread(self, *, logical_session_id: str, expected_thread_id: int,
                       expected_surface_generation: int, reason: str) -> dict:
@@ -249,7 +251,8 @@ class CentralClient:
                         parent_channel_id: int, owner_user_id: int,
                         thread_name: str, content: str = "",
                         embeds: list | None = None,
-                        components: list | None = None) -> dict:
+                        components: list | None = None,
+                        timeout: float | None = None) -> dict:
         """`surface_generation` increments ONLY on recreate, never reused or
         decremented; a same-generation create is idempotent.
 
@@ -264,7 +267,7 @@ class CentralClient:
             "content": clamp_content(content),
             "embeds": embeds or [],
             "components": to_action_rows(components),
-        })
+        }, timeout=timeout)
 
     # =================================================================
     # §1.3.6 durable out-of-band edit

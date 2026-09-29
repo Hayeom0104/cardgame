@@ -32,13 +32,84 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import threading
+import time
 
 import httpx
 
+from app import config
 from app.central import delivery
 from app.db.connection import Database, utcnow
 
 logger = logging.getLogger(__name__)
+
+SURFACE_PENDING_MESSAGE = ("런 스레드를 만드는 중이에요. 준비되면 스레드에서 "
+                           "멘션으로 알려 드릴게요.")
+
+#: 응답이 늦어 백그라운드에서 마저 기다리는 스레드 생성 — run_id별 하나.
+_pending_lock = threading.Lock()
+_pending: dict[int, threading.Thread] = {}
+
+
+def surface_pending(run_id: int) -> bool:
+    """이 런의 스레드 생성을 백그라운드에서 기다리는 중인가."""
+    with _pending_lock:
+        worker = _pending.get(run_id)
+        return worker is not None and worker.is_alive()
+
+
+def wait_for_background(timeout: float | None = None) -> None:
+    """백그라운드 스레드 생성이 끝날 때까지 기다린다 (테스트·종료용)."""
+    with _pending_lock:
+        workers = list(_pending.values())
+    for worker in workers:
+        worker.join(timeout)
+
+
+def _finish_in_background(db: Database, run_id: int, request_id: str | None,
+                          surface_generation: int, call) -> bool:
+    """Central의 스레드 생성 응답이 늦었을 때(운영 Termux 로그의 ReadTimeout)
+    같은 요청을 더 긴 타임아웃으로 백그라운드에서 다시 부른다.
+
+    이벤트 응답 예산(2초) 안에 기다릴 수 없어서 예전엔 그냥 실패로 끝냈는데,
+    그 사이 Central은 스레드를 만들어 버리는 경우가 많았다. 같은 세대의
+    생성은 멱등이라(§1.3.5) 다시 불러도 스레드가 둘이 되지 않고, 이미 만든
+    스레드를 그대로 돌려받아 런에 묶는다. 첫 메시지에 소유자 멘션이 있어
+    플레이어는 알림을 받는다.
+    """
+    def work() -> None:
+        try:
+            for attempt in range(config.CENTRAL_THREAD_ATTEMPTS):
+                try:
+                    result = call(config.CENTRAL_THREAD_TIMEOUT_SECONDS)
+                except Exception as error:                       # noqa: BLE001
+                    logger.warning("런 %s 스레드 생성 재시도 %d/%d 실패: %s", run_id,
+                                   attempt + 1, config.CENTRAL_THREAD_ATTEMPTS,
+                                   type(error).__name__)
+                    time.sleep(min(2 * (attempt + 1), 5))
+                    continue
+                if _bind(db, request_id, result, run_id=run_id,
+                         surface_generation=surface_generation):
+                    _leave_preparing(db, run_id)
+                    logger.info("런 %s 의 스레드를 백그라운드에서 연결했습니다", run_id)
+                else:
+                    logger.error("런 %s 스레드 생성 응답을 런에 묶지 못했습니다", run_id)
+                return
+            logger.error("런 %s 의 스레드 생성을 포기했습니다 — 다음 !덱아웃이 "
+                         "같은 세대로 다시 시도합니다", run_id)
+        finally:
+            with _pending_lock:
+                _pending.pop(run_id, None)
+            db.close()          # 이 스레드의 연결만 닫힌다 (스레드별 연결)
+
+    with _pending_lock:
+        running = _pending.get(run_id)
+        if running is not None and running.is_alive():
+            return False
+        worker = threading.Thread(target=work, name=f"surface-{run_id}", daemon=True)
+        _pending[run_id] = worker
+    worker.start()
+    return True
 
 #: 중앙봇 응답에서 스레드/메시지 id 를 찾을 때 볼 키들.
 #:
@@ -100,18 +171,28 @@ def fulfil_thread_request(db: Database, central, response: dict, *,
         return unavailable
 
     request_id = (response.get("metadata") or {}).get("request_id")
+    generation = int(request["surface_generation"])
+    create = dict(
+        logical_session_id=request["logical_session_id"],
+        surface_generation=generation,
+        parent_channel_id=parent_channel_id,
+        owner_user_id=int(request["owner_user_id"]),
+        # 이름은 여기서 정한다 — 가입 클릭처럼 같은 이벤트에서 계정이 막
+        # 생긴 경우, 표시 이름은 핸들러가 끝난 뒤에야 계정에 적힌다.
+        thread_name=thread_name(db, int(request["owner_user_id"])),
+        content=response.get("content", ""),
+        components=response.get("components") or [],
+    )
     try:
-        result = central.create_thread(
-            logical_session_id=request["logical_session_id"],
-            surface_generation=int(request["surface_generation"]),
-            parent_channel_id=parent_channel_id,
-            owner_user_id=int(request["owner_user_id"]),
-            # 이름은 여기서 정한다 — 가입 클릭처럼 같은 이벤트에서 계정이 막
-            # 생긴 경우, 표시 이름은 핸들러가 끝난 뒤에야 계정에 적힌다.
-            thread_name=thread_name(db, int(request["owner_user_id"])),
-            content=response.get("content", ""),
-            components=response.get("components") or [],
-        )
+        result = central.create_thread(**create)
+    except httpx.TransportError:
+        # 응답이 늦었거나 연결이 끊겼다 — Central이 이미 만들었을 수 있다.
+        logger.warning("런 %s 스레드 생성 응답이 늦어 백그라운드에서 마저 "
+                       "기다립니다", run_id)
+        _finish_in_background(db, run_id, request_id, generation,
+                              lambda timeout: central.create_thread(**create,
+                                                                    timeout=timeout))
+        return {"action": "reply_ephemeral", "content": SURFACE_PENDING_MESSAGE}
     except Exception:                                        # noqa: BLE001
         # 같은 `surface_generation` 으로 다시 부르는 것은 멱등하므로(§1.3.5),
         # 여기서 실패한 것을 되돌릴 필요가 없다.
@@ -401,16 +482,22 @@ def retry_surface(db: Database, central, run_id: int, *,
         presentation_revision=int(run["presentation_revision"]),
     )
     content, components = _reopened_first_message(db, run_id)
+    create = dict(
+        logical_session_id=run["logical_session_id"],
+        surface_generation=generation,
+        parent_channel_id=parent_channel_id,
+        owner_user_id=int(run["user_id"]),
+        thread_name=thread_name(db, int(run["user_id"])),
+        content=content,
+        components=components,
+    )
     try:
-        result = central.create_thread(
-            logical_session_id=run["logical_session_id"],
-            surface_generation=generation,
-            parent_channel_id=parent_channel_id,
-            owner_user_id=int(run["user_id"]),
-            thread_name=thread_name(db, int(run["user_id"])),
-            content=content,
-            components=components,
-        )
+        result = central.create_thread(**create)
+    except httpx.TransportError:
+        _finish_in_background(db, run_id, request_id, generation,
+                              lambda timeout: central.create_thread(**create,
+                                                                    timeout=timeout))
+        return None
     except Exception:                                        # noqa: BLE001
         logger.exception("런 %s 의 스레드 재시도가 실패했습니다", run_id)
         return None
@@ -550,16 +637,22 @@ def reopen_thread(db: Database, central, run_id: int, *,
         presentation_revision=int(run["presentation_revision"]),
     )
     content, components = _reopened_first_message(db, run_id)
+    recreate = dict(
+        logical_session_id=run["logical_session_id"],
+        surface_generation=generation,
+        parent_channel_id=parent_channel_id,
+        owner_user_id=int(run["user_id"]),
+        thread_name=thread_name(db, int(run["user_id"])),
+        content=content,
+        components=components,
+    )
     try:
-        result = central.recreate_thread(
-            logical_session_id=run["logical_session_id"],
-            surface_generation=generation,
-            parent_channel_id=parent_channel_id,
-            owner_user_id=int(run["user_id"]),
-            thread_name=thread_name(db, int(run["user_id"])),
-            content=content,
-            components=components,
-        )
+        result = central.recreate_thread(**recreate)
+    except httpx.TransportError:
+        _finish_in_background(db, run_id, request_id, generation,
+                              lambda timeout: central.recreate_thread(**recreate,
+                                                                      timeout=timeout))
+        return None
     except Exception:                                        # noqa: BLE001
         logger.exception("런 %s 의 스레드 재생성이 실패했습니다", run_id)
         return None
