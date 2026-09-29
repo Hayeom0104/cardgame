@@ -265,7 +265,7 @@ def _probe_target_prompt(session) -> tuple[bool, dict | None]:
     return False, None
 
 
-def test_the_target_select_screen_keeps_the_turn_image_and_says_what_to_pick(
+def test_the_target_select_screen_keeps_both_images_and_says_what_to_pick(
         ctx, db):
     """응답 경로 첨부는 replace만 지원한다(연동 가이드 §8). 대상 선택
     편집에 그림을 빼면 고르는 동안 전투 그림이 메시지에서 사라진다."""
@@ -293,4 +293,5 @@ def test_the_target_select_screen_keeps_the_turn_image_and_says_what_to_pick(
 
     select = prompt["components"][0]
     assert select.get("placeholder") == "대상을 고르세요"
-    assert [a["filename"] for a in prompt["attachments"]] == ["deckout_turn.png"]
+    assert [a["filename"] for a in prompt["attachments"]] == [
+        "deckout_situation.png", "deckout_turn.png"]

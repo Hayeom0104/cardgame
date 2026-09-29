@@ -82,28 +82,27 @@ def test_the_map_renders_as_one_image():
     assert attachment.height > attachment.width, "모바일 지도는 세로형이어야 합니다"
 
 
-def test_battle_images_are_split_into_two_messages(db, balance, version, user_id):
-    """내 턴은 조작 메시지에, 전황은 별도 메시지에 붙는다."""
+@pytest.mark.parametrize("action", ["edit", "reply"])
+def test_battle_images_share_one_message_with_enemies_above_the_hand(db, action):
+    """첨부 입력 순서와 무관하게 두 원본 PNG를 세로로 배치하고 조작을 유지한다."""
     from app.api import server
-    # 분리기는 활성 런의 표면 세대/리비전을 delivery intent에 고정한다.
-    db.execute(
-        "INSERT INTO runs (user_id, world_id, state, content_version_id, "
-        "logical_session_id, surface_generation, presentation_revision, "
-        "map_seed, rng_seed, run_currency, created_at, updated_at, last_activity_at) "
-        "VALUES (?, 'tutorial', 'battle', ?, 'split-test', 1, 2, 11, 12, 0, "
-        "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-        (user_id, version))
     response = {
-        "action": "edit", "content": "전투", "components": [],
+        "action": action, "content": "전투",
+        "components": [{"type": 1, "components": [
+            {"type": 2, "label": "턴 종료", "custom_id": "dko:end:1:1:2:"}]}],
+        "metadata": {"request_id": "existing-recovery-intent"},
         "attachments": [
-            {"filename": "deckout_situation.png", "data_b64": "a", "content_type": "image/png"},
             {"filename": "deckout_turn.png", "data_b64": "b", "content_type": "image/png"},
+            {"filename": "deckout_situation.png", "data_b64": "a", "content_type": "image/png"},
         ],
     }
-    result = server._split_battle_images(db, response, user_id)
-    assert result["action"] == "multi_action"
-    assert [child["attachments"][0]["filename"] for child in result["actions"]] == [
-        "deckout_turn.png", "deckout_situation.png"]
+    result = server._battle_response(db, response, 424242)
+    assert result["action"] == action
+    _assert_battle_layout(result)
+    assert [item["data_b64"] for item in result["attachments"]] == ["a", "b"]
+    assert result["components"] == response["components"]
+    assert result["metadata"] == response["metadata"]
+    assert "embeds" not in response, "원래 응답을 변경하지 않아야 합니다"
 
 
 def test_the_settlement_screen_shows_kept_and_lost():
@@ -380,9 +379,8 @@ def test_a_duplicate_event_after_a_committed_node_click_replays_the_live_screen(
                "channel_id": thread_id, "thread_id": thread_id,
                "custom_id": node_id, "values": [], "event_id": "evt-node-committed"}
     first = client_with_central.post("/event", json=payload).json()
-    assert first["action"] == "multi_action"
-    assert first["actions"][0]["action"] == "edit"
-    assert first["actions"][1]["action"] == "post_channel_message"
+    assert first["action"] == "edit"
+    _assert_battle_layout(first)
 
     run = server.state["db"].one("SELECT run_id, state FROM runs WHERE user_id = ?",
                                  (55510,))
@@ -396,6 +394,7 @@ def test_a_duplicate_event_after_a_committed_node_click_replays_the_live_screen(
     assert second.get("duplicate") is not True
     assert second["components"], "재전송 응답에 누를 수 있는 컨트롤이 없습니다"
     assert second["attachments"], "재전송 응답에 전투 그림이 없습니다"
+    _assert_battle_layout(second)
 
     # 그 컨트롤이 진짜로 눌리는지까지 확인한다 — 서비스 재시작 없이.
     battle_buttons = [c for row in second["components"]
@@ -466,7 +465,8 @@ def test_thread_resume_is_visible_and_rebuilds_images_without_advancing(client_w
     assert opened['attachments']
     node = opened['components'][0]['components'][0]['custom_id']
     battle = client.post('/event', json={**base, 'custom_id': node}).json()
-    assert battle['action'] == 'multi_action'
+    assert battle['action'] == 'edit'
+    _assert_battle_layout(battle)
     db = server.state['db']
     before = dict(db.one('SELECT * FROM runs WHERE user_id = ?', (uid,)))
     # 현재 스레드에서의 명령은 같은 스레드로 redirect만 보내면 복구가 안 된다.
@@ -479,9 +479,9 @@ def test_thread_resume_is_visible_and_rebuilds_images_without_advancing(client_w
         'raw_content': '!덱아웃', 'event_id': 'thread-resume-command',
     }).json()
     assert replay['action'] == 'reply'
-    assert len(replay['attachments']) == 2
+    _assert_battle_layout(replay)
     assert restored['action'] == 'reply'
-    assert len(restored['attachments']) == 2
+    _assert_battle_layout(restored)
     assert restored['components']
     assert dict(db.one('SELECT * FROM runs WHERE user_id = ?', (uid,))) == before
     client.post('/event', json={
@@ -500,7 +500,7 @@ def test_thread_resume_is_visible_and_rebuilds_images_without_advancing(client_w
 
 
 # =====================================================================
-# 전황 보드 — 전투당 메시지 하나를 고쳐 쓰고, 로그는 최근 5줄 큐 (오너 지시)
+# 전투 화면 — 같은 메시지를 고치고, 적 위/내 턴 아래, 로그는 최근 5줄 큐
 # =====================================================================
 def _enter_first_battle(client, uid):
     from app.api import server
@@ -527,77 +527,118 @@ def _first_control(action):
     return component['custom_id'], values
 
 
-def _deliver_board(client, child, thread_id, message_id):
-    """Central이 보드 메시지를 보낸 뒤 돌려주는 전송 결과 콜백."""
-    client.post('/event', json={
-        'type': 'message_delivery_result', 'request_id': child['metadata']['request_id'],
-        'action': child['action'], 'success': True, 'partial': False,
-        'channel_id': thread_id, 'message_id': message_id, 'thread_id': None})
+def _assert_battle_layout(response):
+    assert 'actions' not in response, "전투는 메시지 하나만 갱신해야 합니다"
+    assert [item['filename'] for item in response['attachments']] == [
+        'deckout_situation.png', 'deckout_turn.png']
+    assert [item['image']['url'] for item in response['embeds']] == [
+        'attachment://deckout_situation.png', 'attachment://deckout_turn.png']
+    assert response['components'], "같은 메시지 아래에 조작이 남아야 합니다"
 
 
 def _log_lines(content):
     return content.split('```')[1].strip().splitlines()
 
 
-def test_the_battle_board_is_edited_in_place_with_a_five_line_queue(client_with_central):
+def test_battle_updates_one_message_without_callbacks_and_keeps_the_last_five_lines(
+        client_with_central, monkeypatch):
     from app.api import server
+    from app.engine import battle as bt, lifecycle
 
-    base, start = _enter_first_battle(client_with_central, 55530)
-    board = start['actions'][1]
-    assert board['action'] == 'post_channel_message'
-    assert board['attachments'][0]['filename'] == 'deckout_situation.png'
-    _deliver_board(client_with_central, board, base['thread_id'], 777001)
-
+    # 전송 결과 콜백이 없어도 전투 시작/대상 선택/카드 사용/종료 전부 edit다.
+    monkeypatch.setattr(lifecycle.secrets, 'randbits', lambda bits: 11)
+    base, screen = _enter_first_battle(client_with_central, 55530)
+    _assert_battle_layout(screen)
     db = server.state['db']
     first_battle = db.one("SELECT MAX(battle_id) AS b FROM battles")['b']
-    screen = start['actions'][0]
-    edits = []
-    for _ in range(20):
+    saw_target = False
+    for _ in range(40):
         custom_id, values = _first_control(screen)
-        reply = client_with_central.post('/event', json={
+        screen = client_with_central.post('/event', json={
             **base, 'custom_id': custom_id, 'values': values}).json()
-        if reply['action'] != 'multi_action':
-            screen = reply
-            continue
-        screen, follow = reply['actions']
-        assert follow['action'] == 'upsert_user_safezone_message', \
-            "보드는 새로 올리지 않고 같은 메시지를 고쳐야 합니다"
-        assert follow['message_id'] == 777001
-        assert follow['attachments'][0]['filename'] == 'deckout_situation.png'
-        edits.append(_log_lines(follow['content']))
-        _deliver_board(client_with_central, follow, base['thread_id'], 777001)
+        assert screen['action'] == 'edit', screen.get('content')
+        assert 'actions' not in screen
+        if '대상을 선택하세요' in screen.get('content', ''):
+            saw_target = True
+        if len(screen.get('attachments', [])) == 2:
+            _assert_battle_layout(screen)
+        else:
+            assert screen['embeds'] == [], "다른 화면에 전투 embed가 남으면 안 됩니다"
+        logs = bt.recent_log(db, first_battle, 5)
+        if logs:
+            assert _log_lines(screen['content']) == logs
         run = db.one("SELECT state FROM runs WHERE user_id = 55530")
         if run['state'] not in ('battle', 'boss_battle'):
-            break                                  # 첫 전투가 끝났다
-    assert edits, "카드를 낸 뒤 보드가 고쳐져야 합니다"
-    for lines in edits:
-        assert 1 <= len(lines) <= 5
+            break
+    else:
+        pytest.fail("첫 전투가 끝나지 않았습니다")
+    assert saw_target, "대상 선택에서도 두 그림을 유지하는지 확인해야 합니다"
+    assert len(logs) == 5
+    assert _log_lines(screen['content']) == bt.recent_log(db, first_battle, 5)
+    assert db.one("SELECT COUNT(*) AS n FROM delivery_intents "
+                  "WHERE purpose LIKE 'battle_board:%'")['n'] == 0
 
-    # 큐 — 보드에는 이 전투 전체 로그 중 가장 최근 5줄만 남는다(마지막 일격 포함).
-    from app.engine import battle as bt
-    assert edits[-1] == bt.recent_log(db, first_battle, 5)
 
+def test_an_old_board_callback_cannot_restore_separate_battle_posts(client_with_central):
+    from app.api import server
+    from app.central import delivery
 
-def test_without_a_known_board_message_a_new_board_is_posted(client_with_central):
-    """콜백이 아직 안 왔으면 고칠 메시지를 모른다 — 새 보드를 올린다."""
-    base, start = _enter_first_battle(client_with_central, 55532)
-    custom_id, values = _first_control(start['actions'][0])
+    base, screen = _enter_first_battle(client_with_central, 55532)
+    db = server.state['db']
+    run = db.one("SELECT * FROM runs WHERE user_id = 55532")
+    battle_id = db.one("SELECT battle_id FROM battles WHERE run_id = ?",
+                       (run['run_id'],))['battle_id']
+    # 업데이트 전에 보낸 전황 보드 콜백이 뒤늦게 들어오는 경우.
+    delivery.record_intent(
+        db, request_id='old-board', run_id=run['run_id'],
+        purpose=f'battle_board:{battle_id}',
+        surface_generation=run['surface_generation'],
+        presentation_revision=run['presentation_revision'])
+    client_with_central.post('/event', json={
+        'type': 'message_delivery_result', 'request_id': 'old-board',
+        'action': 'post_channel_message', 'success': True, 'partial': False,
+        'channel_id': base['thread_id'], 'message_id': 777001, 'thread_id': None})
+    custom_id, values = _first_control(screen)
     reply = client_with_central.post('/event', json={
         **base, 'custom_id': custom_id, 'values': values}).json()
-    if reply['action'] == 'multi_action':
-        assert reply['actions'][1]['action'] == 'post_channel_message'
+    assert reply['action'] == 'edit'
+    _assert_battle_layout(reply)
+    current = db.one("SELECT canonical_message_id FROM runs WHERE run_id = ?",
+                     (run['run_id'],))
+    assert current['canonical_message_id'] == run['canonical_message_id']
 
 
-def test_a_click_that_changes_nothing_does_not_touch_the_board(client_with_central):
-    """새 행동이 없는 클릭(대상 선택 화면, 낡은 버튼 재클릭)은 보드를 건드리지 않는다."""
+def test_a_stale_click_replays_both_panels_without_advancing(client_with_central):
+    from app.api import server
+    from app.api import custom_id as cid
+
     base, start = _enter_first_battle(client_with_central, 55531)
-    _deliver_board(client_with_central, start['actions'][1], base['thread_id'], 777002)
-    custom_id, values = _first_control(start['actions'][0])
-    client_with_central.post('/event', json={**base, 'custom_id': custom_id,
-                                             'values': values})
-    stale = client_with_central.post('/event', json={**base, 'custom_id': custom_id,
-                                                     'values': values}).json()
-    assert stale['action'] != 'multi_action', stale
+    _assert_battle_layout(start)
+    db = server.state['db']
+    before = dict(db.one("SELECT * FROM runs WHERE user_id = 55531"))
+    log_count = db.one("SELECT COUNT(*) AS n FROM battle_log")['n']
+    # 전투에 들어오기 직전 지도의 버튼을 늦게 한 번 더 누른다.
+    stale_node = cid.build(cid.ACTION_NODE_CHOOSE, before['run_id'],
+                           before['surface_generation'],
+                           before['presentation_revision'] - 1,
+                           str(before['current_node_index']))
+    payload = {**base, 'custom_id': stale_node}
+    stale = client_with_central.post('/event', json=payload).json()
+    assert stale['action'] == 'edit'
+    _assert_battle_layout(stale)
+    assert dict(db.one("SELECT * FROM runs WHERE user_id = 55531")) == before
+    assert db.one("SELECT COUNT(*) AS n FROM battle_log")['n'] == log_count
+
+
+@pytest.mark.parametrize('attachments', [[], [{'filename': 'deckout_map.png'}]])
+def test_leaving_battle_clears_the_previous_image_embeds(db, attachments):
+    from app.api import server
+
+    response = {'action': 'edit', 'content': '지도', 'attachments': attachments}
+    rendered = server._battle_response(db, response, 424242)
+    assert rendered['embeds'] == []
+    assert rendered['attachments'] == attachments
+    assert 'embeds' not in response
 
 
 # =====================================================================
