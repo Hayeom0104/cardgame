@@ -209,7 +209,8 @@ def test_claiming_for_an_account_that_does_not_exist_is_refused(db, balance,
 def test_the_hub_offers_the_claim_button(ctx, user_id):
     screen = handlers.hub_screen(ctx, user_id)
     ids = [component["custom_id"] for component in screen.get("components", [])]
-    assert f"{hub.HUB_PREFIX}daily" in ids
+    from app.api.custom_id import to_base36
+    assert f"{hub.HUB_PREFIX}daily:{to_base36(user_id)}" in ids
     assert "출석" in screen["content"]
 
 
@@ -228,7 +229,7 @@ def test_the_button_disappears_once_claimed(ctx, user_id):
     hub.handle_hub(ctx, user_id, f"{hub.HUB_PREFIX}daily", [], event_id="evt-1")
     screen = handlers.hub_screen(ctx, user_id)
     ids = [component["custom_id"] for component in screen.get("components", [])]
-    assert f"{hub.HUB_PREFIX}daily" not in ids
+    assert not any(value.startswith(f"{hub.HUB_PREFIX}daily") for value in ids)
     assert "이미 받았습니다" in screen["content"] or "받았습니다" in screen["content"]
 
 
@@ -247,3 +248,29 @@ def test_recovery_knows_how_to_finish_an_attendance_claim():
     from app.engine import progression as pg
 
     assert att.CLAIM_TYPE in pg.local_handlers()
+
+
+def test_legacy_attendance_button_for_unknown_account_shows_join(ctx, db, central):
+    response = hub.handle_hub(ctx, 999999, f"{hub.HUB_PREFIX}daily", [])
+    assert response['action'] == 'reply_ephemeral'
+    assert '가입' in response['content']
+    assert response['components'][0]['custom_id'].startswith('dko:hub:join:')
+    assert central.add_calls == 0
+    assert db.one('SELECT 1 FROM accounts WHERE user_id = 999999') is None
+
+
+def test_attendance_button_is_owned_and_pays_only_once(ctx, db, user_id, central):
+    from app.api.custom_id import to_base36
+    from app.api.errors import NOT_OWNER
+    from app.content.seed import create_account
+    other = user_id + 1
+    create_account(db, other, ctx.content_version_id)
+    button = f'{hub.HUB_PREFIX}daily:{to_base36(user_id)}'
+    rejected = hub.handle_hub(ctx, other, button, [])
+    assert rejected['content'] == NOT_OWNER
+    assert central.add_calls == 0
+    first = hub.handle_hub(ctx, user_id, button, [], event_id='claim-first')
+    second = hub.handle_hub(ctx, user_id, button, [], event_id='claim-second')
+    assert first['action'] == 'reply_ephemeral'
+    assert '이미 받았습니다' in second['content']
+    assert central.add_calls == 1

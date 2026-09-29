@@ -70,15 +70,23 @@ def handle_hub(ctx, user_id: int, custom_id: str, values: list[str], *,
     action, _, argument = payload.partition(":")
     chosen = values[0] if values else argument
 
+    is_tree_nav = (action in handlers._HUB_CATEGORIES
+                   or action == handlers._HUB_BACK_ACTION)
+    is_owned_button = action == "join" or action in _QUICK_ACTIONS or is_tree_nav
+    if is_owned_button or (action == "daily" and argument):
+        if _user_from_payload(argument) != user_id:
+            return {"action": "reply_ephemeral", "content": errors.NOT_OWNER}
+
+    # 이전 공개 허브의 출석 버튼에는 사용자 ID가 없었다. 미가입자가 누르면
+    # AttendanceError가 /event 밖으로 빠져나갔다. 가입만 계정 검사에서 제외한다.
+    if action != "join" and ctx.db.one(
+            "SELECT 1 FROM accounts WHERE user_id = ?", (user_id,)) is None:
+        return {**handlers._registration_prompt(user_id), "action": "reply_ephemeral"}
+
     # A-1.1/A-1.2 — 공개 메시지에 뜨는 버튼이므로 소유권을 직접 대조한다.
     # 트리 버튼(카테고리 열기·뒤로 가기)도 같은 공개 메시지 위에 있으므로
     # 여기서 함께 대조한다.
-    is_tree_nav = (action in handlers._HUB_CATEGORIES
-                   or action == handlers._HUB_BACK_ACTION)
-    if action == "join" or action in _QUICK_ACTIONS or is_tree_nav:
-        target = _user_from_payload(argument)
-        if target is None or target != user_id:
-            return {"action": "reply_ephemeral", "content": errors.NOT_OWNER}
+    if is_owned_button:
         if action == "join":
             return handlers.handle_join(ctx, user_id)
         if action == handlers._HUB_BACK_ACTION:
@@ -126,7 +134,7 @@ def handle_hub(ctx, user_id: int, custom_id: str, values: list[str], *,
     try:
         message, refresh = _dispatch(ctx, user_id, action, chosen, argument,
                                      event_id=event_id)
-    except pg.ProgressionError as reason:
+    except (pg.ProgressionError, att.AttendanceError) as reason:
         # 평범한 거절(재화 부족, 선행 조건 미달)이다. 화면은 그대로 두고
         # 사유만 알린다 — 목록이 사라지면 무엇이 부족했는지 확인할 수 없다.
         logger.info("hub %s rejected for %s: %s", action, user_id, reason)

@@ -480,3 +480,50 @@ def test_a_live_run_screen_is_not_touched(db, balance, version, user_id):
 
     handlers.hub_screen(ctx, user_id)          # 만료되지 않은 런
     assert central.edits == []
+
+
+@pytest.mark.parametrize('status', [200, 409])
+def test_rejected_edit_preserves_revision_and_logs_only_safe_code(
+        db, balance, version, user_id, caplog, status):
+    import httpx
+    class ConflictingCentral(EditingCentral):
+        def edit_message(self, **kwargs):
+            result = {'detail': {'code': 'rejected_binding', 'private': 'DO-NOT-LOG-THIS'}}
+            if status == 409:
+                response = httpx.Response(409, json=result,
+                    request=httpx.Request('POST', 'http://central/v1/minigames/messages/edit'))
+                response.raise_for_status()
+            return result
+    central = ConflictingCentral()
+    ctx = handlers.HandlerContext(db=db, balance=balance, central=central, content_version_id=version)
+    run_id = surfaced_run(ctx, db, central, user_id)
+    before = dict(db.one('SELECT * FROM runs WHERE run_id = ?', (run_id,)))
+    assert not surfaces.close_run_surface(db, central, run_id, summary='정산 완료')
+    assert dict(db.one('SELECT * FROM runs WHERE run_id = ?', (run_id,))) == before
+    assert 'rejected_binding' in caplog.text
+    assert 'DO-NOT-LOG-THIS' not in caplog.text
+    assert db.one('SELECT status FROM delivery_queue WHERE run_id = ?', (run_id,))['status'] == 'failed'
+
+
+def test_failed_frame_retries_the_identical_payload_and_id(db, balance, version, user_id):
+    central = EditingCentral(edit_fails=True)
+    ctx = handlers.HandlerContext(db=db, balance=balance, central=central, content_version_id=version)
+    run_id = surfaced_run(ctx, db, central, user_id)
+    assert not surfaces.close_run_surface(db, central, run_id, summary='첫 화면')
+    central.edit_fails = False
+    assert surfaces.close_run_surface(db, central, run_id, summary='나중 화면')
+    assert central.edits[0] == central.edits[1]
+    assert central.edits[1]['content'] == '첫 화면'
+
+
+def test_an_edit_response_cannot_rewind_a_concurrent_game_revision(db, balance, version, user_id):
+    class RacingCentral(EditingCentral):
+        def edit_message(self, **kwargs):
+            db.execute('UPDATE runs SET presentation_revision = presentation_revision + 5')
+            return {'status': 'edited'}
+    central = RacingCentral()
+    ctx = handlers.HandlerContext(db=db, balance=balance, central=central, content_version_id=version)
+    run_id = surfaced_run(ctx, db, central, user_id)
+    before = db.one('SELECT presentation_revision FROM runs WHERE run_id = ?', (run_id,))[0]
+    assert not surfaces.close_run_surface(db, central, run_id, summary='종료')
+    assert db.one('SELECT presentation_revision FROM runs WHERE run_id = ?', (run_id,))[0] == before + 5

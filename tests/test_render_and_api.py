@@ -422,3 +422,59 @@ def test_shutdown_returns_truthful_counts_and_stops_intake(client):
         "type": "message", "user_id": 1, "command": "덱아웃", "args": [],
         "raw_content": "!덱아웃"})
     assert after.json()["action"] == "ignore"
+
+
+def test_thread_resume_is_visible_and_rebuilds_images_without_advancing(client_with_central):
+    from app.api import server
+    client = client_with_central
+    uid = 55520
+    unknown = client.post('/event', json={
+        'type': 'interaction', 'user_id': uid, 'guild_id': 1, 'channel_id': 5959,
+        'custom_id': 'dko:hub:daily', 'values': [],
+    })
+    assert unknown.status_code == 200
+    join_id = unknown.json()['components'][0]['components'][0]['custom_id']
+    entered = client.post('/event', json={
+        'type': 'interaction', 'user_id': uid, 'guild_id': 1, 'channel_id': 5959,
+        'custom_id': join_id, 'values': [],
+    }).json()
+    thread_id = entered['thread_id']
+    refresh_id = server.state['central'].initial_screen['components'][0]['custom_id']
+    base = {'type': 'interaction', 'user_id': uid, 'guild_id': 1,
+            'channel_id': thread_id, 'thread_id': thread_id, 'values': []}
+    opened = client.post('/event', json={**base, 'custom_id': refresh_id}).json()
+    assert opened['action'] == 'edit'
+    assert opened['attachments']
+    node = opened['components'][0]['components'][0]['custom_id']
+    battle = client.post('/event', json={**base, 'custom_id': node}).json()
+    assert battle['action'] == 'multi_action'
+    db = server.state['db']
+    before = dict(db.one('SELECT * FROM runs WHERE user_id = ?', (uid,)))
+    # 현재 스레드에서의 명령은 같은 스레드로 redirect만 보내면 복구가 안 된다.
+    restored = client.post('/event', json={
+        **base, 'type': 'message', 'command': '덱아웃', 'args': [],
+        'raw_content': '!덱아웃', 'event_id': 'thread-resume-command',
+    }).json()
+    replay = client.post('/event', json={
+        **base, 'type': 'message', 'command': '덱아웃', 'args': [],
+        'raw_content': '!덱아웃', 'event_id': 'thread-resume-command',
+    }).json()
+    assert replay['action'] == 'reply'
+    assert len(replay['attachments']) == 2
+    assert restored['action'] == 'reply'
+    assert len(restored['attachments']) == 2
+    assert restored['components']
+    assert dict(db.one('SELECT * FROM runs WHERE user_id = ?', (uid,))) == before
+    client.post('/event', json={
+        'type': 'message_delivery_result', 'success': True, 'partial': False,
+        'action': 'reply', 'request_id': restored['metadata']['request_id'],
+        'thread_id': thread_id, 'channel_id': thread_id, 'message_id': 987654,
+    })
+    assert dict(db.one('SELECT * FROM runs WHERE user_id = ?', (uid,))) == before
+    # 실패 안내도 본인의 스레드에서는 일반 메시지지만 타인의 조작은 거절한다.
+    invalid = client.post('/event', json={**base, 'custom_id': 'dko:bad'}).json()
+    assert invalid['action'] == 'reply'
+    other = client.post('/event', json={**base, 'user_id': uid + 1,
+                                        'custom_id': refresh_id}).json()
+    assert other['action'] == 'reply_ephemeral'
+    assert dict(db.one('SELECT * FROM runs WHERE user_id = ?', (uid,))) == before

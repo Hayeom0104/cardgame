@@ -570,3 +570,28 @@ def test_the_ladder_shares_one_counter(db, version, user_id):
     assert ach.is_completed(db, user_id, "ach_첫보스처치")
     assert ach.is_completed(db, user_id, "ach_보스3회처치")
     assert not ach.is_completed(db, user_id, "ach_보스10회처치")
+
+
+@pytest.mark.parametrize('old_revision', [1, 2])
+def test_delayed_canonical_callback_cannot_replace_a_newer_screen(db, run_id, old_revision):
+    for name, revision in [('old-screen', old_revision), ('new-screen', 2)]:
+        delivery.record_intent(db, request_id=name, run_id=run_id, purpose='canonical',
+                               surface_generation=1, presentation_revision=revision)
+    delivery.handle_delivery_result(db, {'request_id': 'new-screen', 'success': True,
+        'action': 'reply', 'thread_id': 777, 'message_id': 222})
+    delayed = delivery.handle_delivery_result(db, {'request_id': 'old-screen',
+        'success': True, 'action': 'reply', 'thread_id': 777, 'message_id': 111})
+    assert delayed['stale'] and not delayed['applied']
+    assert db.one('SELECT canonical_message_id FROM runs WHERE run_id = ?',
+                  (run_id,))['canonical_message_id'] == 222
+
+
+def test_auxiliary_image_callback_cannot_rebind_the_run(db, run_id):
+    db.execute('UPDATE runs SET thread_id = 777, canonical_message_id = 222 WHERE run_id = ?',
+               (run_id,))
+    delivery.record_intent(db, request_id='image', run_id=run_id, purpose='battle_situation',
+                           surface_generation=1, presentation_revision=2)
+    delivery.handle_delivery_result(db, {'request_id': 'image', 'success': True,
+        'action': 'post_channel_message', 'thread_id': 999, 'message_id': 333})
+    run = db.one('SELECT thread_id, canonical_message_id FROM runs WHERE run_id = ?', (run_id,))
+    assert tuple(run) == (777, 222)

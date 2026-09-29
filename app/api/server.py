@@ -92,6 +92,39 @@ def _split_battle_images(db: Database, response: dict, user_id: int) -> dict:
     return {"action": "multi_action", "actions": children}
 
 
+def _thread_response(db: Database, context, event, response: dict) -> dict:
+    """본인 런의 스레드에서는 공개 메시지로 응답하고 현재 화면을 복구한다.
+
+    Discord 스레드의 공개 메시지는 그 스레드 멤버에게만 보인다. 소유권
+    거절이나 부모 채널의 개인 준비 화면은 이 변환을 거치지 않는다.
+    """
+    channel_id = event.thread_id or event.channel_id
+    if not channel_id:
+        return response
+    run = db.one("SELECT * FROM runs WHERE thread_id = ? AND user_id = ? "
+                 "ORDER BY run_id DESC LIMIT 1", (channel_id, event.user_id))
+    if run is None:
+        return response
+    if (response.get("action") == "redirect"
+            and str(response.get("thread_id")) == str(run["thread_id"])):
+        # OOB edit가 409로 거절되어도, 이 명령의 정상 reply 경로로 PNG와
+        # 버튼을 받을 수 있다. 게임 로직을 다시 실행하거나 런을 지우지 않는다.
+        screen = handlers.current_screen(context, run["run_id"])
+        if screen is not None:
+            request_id = delivery.mint_request_id("resume")
+            delivery.record_intent(
+                db, request_id=request_id, run_id=run["run_id"], purpose="recovery_screen",
+                surface_generation=int(run["surface_generation"]),
+                presentation_revision=int(run["presentation_revision"]))
+            # 일반 reply는 Central의 service-initiated canonical binding을
+            # 옮기는 계약이 아니다. 보조 복구 메시지로 기록해 그 연결을 보존한다.
+            return {**screen, "action": "reply",
+                    "metadata": {"request_id": request_id}}
+    if response.get("action") == "reply_ephemeral":
+        return {**response, "action": "reply"}
+    return response
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if not settings.ingress_secret and not settings.allow_unauthenticated_local:
@@ -390,6 +423,15 @@ async def event(request: Request) -> JSONResponse:
         run_id = lifecycle.run_for_event(db, parsed.event_id)
         replay = handlers.current_screen(context, run_id) if run_id else None
         if replay is not None:
+            if isinstance(parsed, ev.MessageEvent):
+                run = db.one("SELECT thread_id, user_id FROM runs WHERE run_id = ?", (run_id,))
+                if run["user_id"] != parsed.user_id or not run["thread_id"]:
+                    return JSONResponse({"action": "ignore", "duplicate": True})
+                # 텍스트 명령에는 편집할 컴포넌트 메시지가 없다. 부모 채널은
+                # redirect, 본인 스레드 안에서는 새 공개 화면으로 복구한다.
+                replay = {"action": "redirect", "thread_id": run["thread_id"],
+                          "content": "런 스레드에서 이어서 진행해 주세요."}
+            replay = _thread_response(db, context, parsed, replay)
             if "components" in replay:
                 replay["components"] = to_action_rows(replay["components"])
             return JSONResponse(replay)
@@ -414,6 +456,8 @@ async def event(request: Request) -> JSONResponse:
     response = surfaces.fulfil_thread_request(
         db, state.get("central"), response,
         parent_channel_id=settings.parent_channel_id)
+
+    response = _thread_response(db, context, parsed, response)
 
     # Component Contract 2.0 — this HTTP response body IS the action Central
     # executes; it never passes through CentralClient. Handlers build a flat,

@@ -29,7 +29,11 @@
 
 from __future__ import annotations
 
+import copy
+import json
 import logging
+
+import httpx
 
 from app.central import delivery
 from app.db.connection import Database, utcnow
@@ -157,7 +161,7 @@ def _bind(db: Database, request_id: str | None, result: dict, *,
                        (int(thread_id), run_id))
         return run_id is not None
 
-    delivery.handle_delivery_result(db, {
+    outcome = delivery.handle_delivery_result(db, {
         "request_id": request_id,
         "action": "create_thread",
         "success": True,
@@ -166,7 +170,7 @@ def _bind(db: Database, request_id: str | None, result: dict, *,
         "message_id": _first(result or {}, MESSAGE_ID_KEYS),
         "channel_id": result.get("parent_channel_id"),
     })
-    return True
+    return bool(outcome.get("applied"))
 
 
 def push_frame(db: Database, central, run_id: int, *, content: str,
@@ -202,16 +206,27 @@ def push_frame(db: Database, central, run_id: int, *, content: str,
     target = current + 1
     request_id = delivery.frame_request_id(
         run_id, int(run["surface_generation"]), target)
-    payload = {"content": content, "components": components or []}
+    payload = {"content": content, "components": _frame_components(
+        components or [], run_id, int(run["surface_generation"]), current, target)}
     delivery.enqueue_frame(db, run_id=run_id, target_revision=target,
                            delivery_request_id=request_id, payload=payload)
 
+    # 전송 실패 재시도는 같은 ID와 이미 저장한 내용으로 보낸다. 새로 만든
+    # 화면으로 덮으면 Central의 already_applied 응답과 실제 내용이 달라진다.
+    db.execute("UPDATE delivery_queue SET status = 'queued' "
+               "WHERE delivery_request_id = ? AND status = 'failed'", (request_id,))
+
     frame = delivery.next_frame(db, run_id)
+    while frame is not None and (frame["delivery_request_id"] != request_id
+                                 or int(frame["target_revision"]) != target):
+        delivery.mark_frame(db, int(frame["queue_id"]), "discarded")
+        frame = delivery.next_frame(db, run_id)
     if frame is None:
         return False
+    payload = json.loads(frame["payload_json"])
 
     try:
-        central.edit_message(
+        result = central.edit_message(
             delivery_request_id=request_id,
             logical_session_id=run["logical_session_id"],
             expected_thread_id=int(run["thread_id"]),
@@ -219,22 +234,86 @@ def push_frame(db: Database, central, run_id: int, *, content: str,
             expected_surface_generation=int(run["surface_generation"]),
             expected_presentation_revision=current,
             new_presentation_revision=target,
-            content=content,
-            components=components or [],
+            content=payload["content"],
+            components=payload["components"],
         )
+    except httpx.HTTPStatusError as error:
+        # 응답 원문/헤더에는 비밀값이 있을 수 있다. 알려진 거절 코드만
+        # 기록하고 화면 번호나 연결 정보를 추측해서 덮어쓰지 않는다.
+        try:
+            code = _edit_outcome(error.response.json())
+        except ValueError:
+            code = "unknown"
+        logger.warning("런 %s 화면 갱신 거절: HTTP %s, code=%s, gen=%s, rev=%s→%s. "
+                       "스레드에서 !덱아웃으로 현재 화면을 다시 열 수 있습니다.",
+                       run_id, error.response.status_code, code,
+                       run["surface_generation"], current, target)
+        delivery.mark_frame(db, int(frame["queue_id"]), "failed")
+        return False
     except Exception:                                        # noqa: BLE001
         logger.exception("런 %s 의 마지막 화면 전송이 실패했습니다", run_id)
         delivery.mark_frame(db, int(frame["queue_id"]), "failed")
         return False
 
+    if _edit_outcome(result) not in {"edited", "already_applied"}:
+        logger.warning("런 %s 화면 갱신 미확인: code=%s", run_id, _edit_outcome(result))
+        delivery.mark_frame(db, int(frame["queue_id"]), "failed")
+        return False
+
     with db.tx() as conn:
-        conn.execute(
-            "UPDATE runs SET presentation_revision = ? WHERE run_id = ?",
-            (target, run_id))
+        updated = conn.execute(
+            "UPDATE runs SET presentation_revision = ? WHERE run_id = ? "
+            "AND presentation_revision = ? AND surface_generation = ? "
+            "AND thread_id = ? AND canonical_message_id = ?",
+            (target, run_id, current, run["surface_generation"], run["thread_id"],
+             run["canonical_message_id"]))
         conn.execute(
             "UPDATE delivery_queue SET status = 'sent', attempts = attempts + 1 "
             "WHERE queue_id = ?", (int(frame["queue_id"]),))
-    return True
+    return updated.rowcount == 1
+
+
+def _edit_outcome(payload) -> str:
+    """원문을 노출하지 않고 계약에 있는 성공/거절 코드만 추출한다."""
+    known = {"edited", "already_applied", "stale_generation", "stale_revision",
+             "thread_missing", "message_missing", "permission_denied",
+             "retryable_failure", "rejected_binding", "invalid_payload"}
+    if isinstance(payload, str):
+        return payload if payload in known else "unknown"
+    if isinstance(payload, dict):
+        for key in ("status", "code", "error", "detail"):
+            found = _edit_outcome(payload.get(key))
+            if found != "unknown":
+                return found
+    return "unknown"
+
+
+def _frame_components(components: list, run_id: int, generation: int,
+                      current: int, target: int) -> list:
+    """성공 후 저장할 revision으로 버튼과 select value를 함께 만든다."""
+    from app.api import custom_id as cid
+
+    def update(value):
+        if isinstance(value, list):
+            return [update(entry) for entry in value]
+        if not isinstance(value, dict):
+            return value
+        result = copy.deepcopy(value)
+        for key in ("custom_id", "value"):
+            if not isinstance(result.get(key), str):
+                continue
+            try:
+                parsed = cid.parse(result[key])
+            except cid.CustomIdError:
+                continue
+            if (parsed.run_id, parsed.generation, parsed.revision) == (run_id, generation, current):
+                result[key] = cid.build(parsed.action, run_id, generation, target, parsed.payload)
+        for key in ("components", "options"):
+            if key in result:
+                result[key] = update(result[key])
+        return result
+
+    return update(components)
 
 
 def close_run_surface(db: Database, central, run_id: int, *,

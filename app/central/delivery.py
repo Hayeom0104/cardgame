@@ -59,7 +59,8 @@ def handle_delivery_result(db: Database, payload: dict) -> dict:
     if not request_id:
         return {"handled": False, "reason": "no request_id"}
 
-    intent = db.one("SELECT * FROM delivery_intents WHERE request_id = ?", (request_id,))
+    intent = db.one("SELECT rowid AS intent_order, * FROM delivery_intents "
+                    "WHERE request_id = ?", (request_id,))
     if intent is None:
         logger.info("dropping delivery result for unknown request_id %s", request_id)
         return {"handled": False, "reason": "unknown request_id"}
@@ -72,7 +73,22 @@ def handle_delivery_result(db: Database, payload: dict) -> dict:
 
     run = (db.one("SELECT * FROM runs WHERE run_id = ?", (intent["run_id"],))
            if intent["run_id"] else None)
-    stale = bool(run and intent["surface_generation"] < run["surface_generation"])
+    stale = bool(run and intent["surface_generation"] != run["surface_generation"])
+    if run and intent["purpose"] == "canonical" and not stale:
+        latest = db.one(
+            "SELECT b.presentation_revision AS revision, i.rowid AS intent_order "
+            "FROM discord_bindings b JOIN delivery_intents i USING (request_id) "
+            "WHERE b.run_id = ? AND b.purpose = 'canonical' AND b.applied = 1 "
+            "AND b.surface_generation = ? "
+            "ORDER BY b.presentation_revision DESC, i.rowid DESC LIMIT 1",
+            (run["run_id"], run["surface_generation"]))
+        stale = bool(latest and (intent["presentation_revision"], intent["intent_order"])
+                     < (latest["revision"], latest["intent_order"]))
+        # 같은 세대의 부모 채널 응답이나 지연된 콜백으로 현재 스레드를
+        # 바꾸지 않는다. 그림용 보조 메시지도 연결 정보를 덮어쓸 수 없다.
+        destination = payload.get("thread_id") or payload.get("channel_id")
+        if run["thread_id"] and destination and str(destination) != str(run["thread_id"]):
+            stale = True
     should_apply = bool(payload.get("success")) and not stale
 
     with db.tx() as conn:
@@ -87,13 +103,13 @@ def handle_delivery_result(db: Database, payload: dict) -> dict:
              payload.get("channel_id"), payload.get("message_id"),
              payload.get("thread_id"), int(should_apply), utcnow()),
         )
-        if should_apply and run is not None:
+        if should_apply and run is not None and intent["purpose"] == "canonical":
             # This callback is the ONLY channel through which the service
             # learns a resulting message_id / thread_id.
             if payload.get("thread_id"):
                 conn.execute("UPDATE runs SET thread_id = ? WHERE run_id = ?",
                              (payload["thread_id"], run["run_id"]))
-            if payload.get("message_id") and intent["purpose"] == "canonical":
+            if payload.get("message_id"):
                 conn.execute(
                     "UPDATE runs SET canonical_message_id = ? WHERE run_id = ?",
                     (payload["message_id"], run["run_id"]),

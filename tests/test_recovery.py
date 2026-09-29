@@ -367,18 +367,19 @@ def test_a_map_screen_left_stale_is_pushed_with_working_buttons(db, balance,
     run = db.one("SELECT * FROM runs WHERE run_id = ?", (run_id,))
     assert run["state"] == lc.MAP_NAVIGATION
 
-    # push_frame 은 성공한 뒤에야 리비전을 올리므로(§16.7 CAS), 지금 이 순간의
-    # 컴포넌트를 먼저 읽어 둔다 — rerender 뒤에 다시 읽으면 이미 한 칸 앞선
-    # 리비전이라 custom_id 가 달라진다.
-    expected_ids = {component["custom_id"] for component in
-                    controls.game_map(db, run_id)}
-
     assert surfaces.rerender_stale_screen(db, balance, central, run_id)
     assert len(central.edits) == 1
     pushed = central.edits[0]
     assert pushed["components"]
+    expected_ids = {component["custom_id"] for component in controls.game_map(db, run_id)}
     pushed_ids = {component["custom_id"] for component in pushed["components"]}
     assert pushed_ids == expected_ids
+    ctx = handlers.HandlerContext(db=db, balance=balance, central=central,
+                                  content_version_id=version)
+    handlers.handle_interaction(ctx, ev.InteractionEvent(
+        user_id=user_id, guild_id=1, channel_id=run["thread_id"],
+        thread_id=run["thread_id"], custom_id=pushed["components"][0]["custom_id"]))
+    assert db.one("SELECT state FROM runs WHERE run_id = ?", (run_id,))["state"] == lc.BATTLE
 
 
 def test_a_battle_screen_left_stale_is_pushed_with_the_live_hand(db, balance,

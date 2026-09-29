@@ -797,7 +797,8 @@ def hub_screen(ctx: HandlerContext, user_id: int) -> dict:
             f"출석 {daily['streak']}일째 — 받을 것: 코인 {reward['coin']} · "
             f"카르타 {reward['carta']}")
         components.append({
-            "type": "button", "custom_id": f"{hub.HUB_PREFIX}daily",
+            "type": "button",
+            "custom_id": f"{hub.HUB_PREFIX}daily:{cid.to_base36(user_id)}",
             "label": "출석 보상 받기",
         })
     else:
