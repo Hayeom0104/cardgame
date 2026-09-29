@@ -18,12 +18,24 @@ SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 # Bumped whenever schema.sql changes shape. §18.9: startup fails closed when the
 # file on disk is older than what the code expects.
-EXPECTED_SCHEMA_VERSION = 10
+EXPECTED_SCHEMA_VERSION = 11
 
 #: §18.9 forward-only migrations, applied in one transaction each and recorded.
 #: `schema.sql` uses CREATE TABLE IF NOT EXISTS, so it never alters an existing
 #: table — anything that changes a table already on disk belongs here.
 MIGRATIONS: dict[int, tuple[str, ...]] = {
+    # `presentation_revision`은 버튼을 누를 때마다 오르는 로컬 CAS 카운터인데,
+    # 그 값을 Central의 `messages/edit` revision으로도 보내고 있었다. Central은
+    # 응답 경로 편집을 모르므로 첫 클릭 이후 모든 OOB 편집이 409
+    # (stale_revision)로 거절됐다. 둘을 분리한다. 기존 런은 지금 세대에서
+    # 실제로 성공한 프레임 수로 채운다 — Central은 성공마다 정확히 1 올린다.
+    11: (
+        "ALTER TABLE runs ADD COLUMN central_revision INTEGER NOT NULL DEFAULT 0",
+        "UPDATE runs SET central_revision = (SELECT COUNT(*) FROM delivery_queue q "
+        "WHERE q.run_id = runs.run_id AND q.status = 'sent' "
+        "AND q.delivery_request_id LIKE 'dko-frame-' || runs.run_id || '-g' "
+        "|| runs.surface_generation || '-r%')",
+    ),
     # 연동 가이드(2026-09-11) 확인 결과 — Central 프로필 API
     # (`GET /v1/users/{id}`)엔 표시 이름·아바타가 없고, `/event` 페이로드
     # 자체의 `username`/`avatar_url`이 진짜 출처다. 이벤트가 올 때마다 이

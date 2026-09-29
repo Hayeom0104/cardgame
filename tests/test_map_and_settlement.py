@@ -360,3 +360,50 @@ def test_clearing_advances_the_boss_defeated_achievement_ladder(db, balance, ver
         "WHERE user_id = ? AND achievement_id = 'ach_첫보스처치'", (user_id,))
     assert progress["current_value"] == 1
     assert progress["completed_at"] is not None
+
+
+# =====================================================================
+# 이벤트 장비 보상 — 장비 ID 없는 grant_equipment (버려진 야영지·피의 계약)
+# =====================================================================
+def _run_event_effects(db, balance, run_id, rng, effects):
+    from app.engine import effects as fx
+    from app.engine import statuses as st
+    from app.engine import targeting as tg
+
+    version = db.one("SELECT content_version_id FROM runs WHERE run_id = ?",
+                     (run_id,))["content_version_id"]
+    ctx = fx.EffectContext(
+        db=db, run_id=run_id, battle_id=None, round_no=0, balance=balance,
+        status_registry=st.StatusRegistry(db, version),
+        strategy_registry=tg.StrategyRegistry(db, version),
+        content_version_id=version, rng=rng, actor=None, targets=[],
+        host_context=fx.ops.CTX_EVENT)
+    return fx.execute_effects(effects, ctx)
+
+
+def test_an_event_equipment_grant_without_an_id_picks_a_real_item(db, balance, run_id,
+                                                                  rng):
+    _run_event_effects(db, balance, run_id, rng,
+                       [{"operator": "grant_equipment",
+                         "params": {"rarity_band": "low"}}])
+    row = db.one("SELECT equipment_def_id FROM run_inventory WHERE run_id = ?",
+                 (run_id,))
+    assert row is not None and row["equipment_def_id"]
+    assert db.one("SELECT 1 FROM equipment_defs WHERE equipment_def_id = ?",
+                  (row["equipment_def_id"],)) is not None
+
+
+@pytest.mark.parametrize("target", [sl.RUN_COMPLETED, sl.RUN_ABANDONED])
+def test_settlement_survives_an_equipment_row_without_an_id(db, balance, run_id, rng,
+                                                            user_id, target):
+    """예전 이벤트가 남긴 깨진 행 때문에 `!덱아웃 포기`가 500으로 터지고 런이
+    정산 도중 멈췄다 — 운영 DB에 이미 들어 있을 수 있는 행이다."""
+    _stock_inventory(db, run_id, count=2)
+    db.execute(
+        "INSERT INTO run_inventory (run_id, kind, equipment_def_id, tier, amount, "
+        "acquired_at_depth, acquired_at) VALUES (?, 'equipment', NULL, 1, 1, 5, ?)",
+        (run_id, utcnow()))
+    report = sl.settle_run_inventory(db, balance, rng, run_id=run_id,
+                                     target_state=target, op_key="settle:broken")
+    assert all(entry["equipment_def_id"] for entry in report["kept"] + report["lost"])
+    assert db.one("SELECT COUNT(*) FROM run_inventory WHERE run_id = ?", (run_id,))[0] == 0

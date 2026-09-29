@@ -595,3 +595,30 @@ def test_auxiliary_image_callback_cannot_rebind_the_run(db, run_id):
         'action': 'post_channel_message', 'thread_id': 999, 'message_id': 333})
     run = db.one('SELECT thread_id, canonical_message_id FROM runs WHERE run_id = ?', (run_id,))
     assert tuple(run) == (777, 222)
+
+
+@pytest.mark.parametrize("direction,delta", [(tx.DEDUCT, 0), (tx.GRANT, 0)])
+def test_a_zero_coin_transaction_never_calls_central_and_still_applies(
+        db, user_id, direction, delta):
+    """연동 가이드 §6 — Central은 amount=0을 거절한다. 관리자가 가격이나
+    비용을 0으로 바꾸면 그 구매가 coin_unknown에 갇혀 영영 끝나지 않았다."""
+    class ZeroRejectingCentral(FakeCentral):
+        def currency_add(self, user_id, amount, idempotency_key):
+            assert amount != 0, "amount=0 은 Central로 보내면 안 됩니다"
+            return super().currency_add(user_id, amount, idempotency_key)
+
+        def currency_deduct(self, user_id, amount, idempotency_key):
+            assert amount != 0, "amount=0 은 Central로 보내면 안 됩니다"
+            return super().currency_deduct(user_id, amount, idempotency_key)
+
+    central = ZeroRejectingCentral()
+    granted: list[dict] = []
+    tx.create_transaction(db, tx_id="zero", user_id=user_id, operation="hub_purchase",
+                          direction=direction, expected_coin_delta=delta,
+                          local_payload={"equipment_def_id": "eq_수련검"})
+    result = tx.run_transaction(db, central, tx_id="zero",
+                                apply_local=lambda _db, payload: granted.append(payload),
+                                kind="equipment")
+    assert result.status == tx.COMPLETED
+    assert len(granted) == 1
+    assert central.calls == []

@@ -54,6 +54,30 @@ MAX_ATTACHMENTS_PER_ACTION = 2
 MAX_PNG_BYTES = 4 * 1024 * 1024
 MAX_PNG_DIMENSION = 4096
 MAX_FILENAME_LENGTH = 128
+#: 디스코드 메시지 본문 한도. Central은 자르지 않고 그대로 보내므로 넘으면
+#: 메시지 자체가 거절된다.
+MAX_CONTENT_LENGTH = 2000
+
+
+def clamp_content(text: str | None) -> str | None:
+    """2000자를 넘는 본문을 줄 단위로 잘라 한도 안에 넣는다.
+
+    목록형 화면(장비·덱·도감 등)은 보유량에 비례해 길어진다 — 장비가 많은
+    플레이어의 `!덱아웃 장비`는 4천 자를 넘어 아예 뜨지 않았다."""
+    if not text or len(text) <= MAX_CONTENT_LENGTH:
+        return text
+    lines = text.split("\n")
+    kept: list[str] = []
+    used = 0
+    for index, line in enumerate(lines):
+        suffix = f"\n…외 {len(lines) - index}줄 생략"
+        if used + len(line) + 1 + len(suffix) > MAX_CONTENT_LENGTH:
+            if not kept:
+                return line[:MAX_CONTENT_LENGTH - 1] + "…"
+            return "\n".join(kept) + suffix
+        kept.append(line)
+        used += len(line) + 1
+    return "\n".join(kept)
 
 #: Component Contract 2.0 — outer rows are numeric type 1, buttons are 2,
 #: string selects are 3. Handlers build human-readable flat dicts
@@ -201,7 +225,7 @@ class CentralClient:
             "parent_channel_id": parent_channel_id,
             "owner_user_id": owner_user_id,
             "thread_name": thread_name,
-            "content": content,
+            "content": clamp_content(content),
             "embeds": embeds or [],
             "components": to_action_rows(components),
         })
@@ -223,15 +247,23 @@ class CentralClient:
 
     def recreate_thread(self, *, logical_session_id: str, surface_generation: int,
                         parent_channel_id: int, owner_user_id: int,
-                        thread_name: str) -> dict:
+                        thread_name: str, content: str = "",
+                        embeds: list | None = None,
+                        components: list | None = None) -> dict:
         """`surface_generation` increments ONLY on recreate, never reused or
-        decremented; a same-generation create is idempotent."""
+        decremented; a same-generation create is idempotent.
+
+        연동 가이드 §8 — create/recreate 요청에는 최소한 content·embeds·
+        components가 들어가야 한다. 예전엔 셋 다 빠져 있었다."""
         return self._post("/v1/minigames/threads/recreate", {
             "logical_session_id": logical_session_id,
             "surface_generation": surface_generation,
             "parent_channel_id": parent_channel_id,
             "owner_user_id": owner_user_id,
             "thread_name": thread_name,
+            "content": clamp_content(content),
+            "embeds": embeds or [],
+            "components": to_action_rows(components),
         })
 
     # =================================================================
@@ -263,7 +295,7 @@ class CentralClient:
             "expected_surface_generation": expected_surface_generation,
             "expected_presentation_revision": expected_presentation_revision,
             "new_presentation_revision": new_presentation_revision,
-            "content": content,
+            "content": clamp_content(content),
             "embeds": embeds or [],
             "components": to_action_rows(components),
             "attachment_policy": attachment_policy,

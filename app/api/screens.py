@@ -20,6 +20,7 @@ import json
 import logging
 
 from app.api import errors, visuals
+from app.central import surfaces
 from app.content.balance import Balance
 from app.db.connection import Database, utcnow
 from app.engine import gacha
@@ -414,7 +415,7 @@ def surface_request(db: Database, run_id: int, user_id: int) -> dict:
             "logical_session_id": run["logical_session_id"],
             "surface_generation": run["surface_generation"],
             "owner_user_id": user_id,
-            "thread_name": f"덱아웃 - {user_id}",
+            "thread_name": surfaces.thread_name(db, user_id),
         },
         "run_id": run_id,
     }

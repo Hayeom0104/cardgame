@@ -391,6 +391,31 @@ def test_a_stale_component_click_gets_the_live_screen_back(ctx, db, user_id):
     assert reply["components"], "재전송 화면에 누를 수 있는 컨트롤이 없습니다"
 
 
+def test_an_old_map_button_after_the_battle_started_gets_the_battle_back(ctx, db,
+                                                                         user_id):
+    """운영 신고 — 같은 이동 버튼의 두 번째 사본(예전 부모 채널 복제, 다른
+    기기에 남은 메시지)을 누르면 "지금은 할 수 없는 동작입니다"만 뜨고 누를
+    것이 없었다. 런이 이미 전투라 상태 검사가 revision 검사보다 먼저 거절했다."""
+    session = Session(ctx, user_id)
+    session.command()
+    session.command("시작")
+    if not any(c["custom_id"].startswith("dko:nd:") for c in session.components()):
+        session.press_first()                     # 스레드 첫 메시지의 지도 열기
+    old_node = next(c for c in session.components()
+                    if c["custom_id"].startswith("dko:nd:"))
+    session.press_first()                         # 이동 → 전투
+    assert session.state() == lc.BATTLE
+
+    reply = handlers.handle_interaction(ctx, ev.InteractionEvent(
+        event_id="old-node", user_id=user_id, guild_id=1,
+        channel_id=session.thread_id or 2, thread_id=session.thread_id,
+        custom_id=old_node["custom_id"], values=[]))
+
+    assert reply["action"] != "reply_ephemeral", reply
+    assert reply["components"], "현재 전투 화면의 조작이 돌아와야 합니다"
+    assert session.state() == lc.BATTLE          # 게임은 한 발짝도 더 가지 않았다
+
+
 def test_clearing_the_tutorial_opens_the_main_campaign(ctx, db, user_id):
     """§3.4.3 — 튜토리얼을 깨면 본편이 열려야 한다.
 

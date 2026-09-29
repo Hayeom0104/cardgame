@@ -119,6 +119,15 @@ def settle_run_inventory(db: Database, balance: Balance, rng: JournaledRng, *,
 
     entries = [dict(row) for row in db.query(
         "SELECT * FROM run_inventory WHERE run_id = ? ORDER BY entry_id", (run_id,))]
+    # 예전 이벤트 효과(`grant_equipment`에 장비 ID 없음)가 남긴 행은 계정으로
+    # 옮길 수 없다(NOT NULL) — 그대로 두면 정산이 매번 터져 런이 끝나지 않는다.
+    # 무엇이었는지 알 수 없으므로 지어내지 않고 건너뛴다.
+    broken = [entry for entry in entries
+              if entry["kind"] == "equipment" and not entry["equipment_def_id"]]
+    if broken:
+        logger.warning("런 %s 인벤토리에서 장비 ID 없는 항목 %d개를 건너뜁니다",
+                       run_id, len(broken))
+        entries = [entry for entry in entries if entry not in broken]
 
     report = {"kept": [], "lost": [], "tiered_down": [], "destroyed_by_tier_down": []}
     if not entries:

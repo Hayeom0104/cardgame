@@ -235,3 +235,62 @@ def test_no_screen_in_a_main_campaign_run_silently_fails_to_render(ctx, db, user
     final = session.play()
     assert final in (lc.RUN_COMPLETED, lc.RUN_DEFEATED, lc.RUN_ABANDONED,
                      lc.RUN_EXPIRED)
+
+
+# =====================================================================
+# 대상 선택 화면 — 그림이 사라지지 않고, 무엇을 고르는지 알려 준다
+# =====================================================================
+def _probe_target_prompt(session) -> tuple[bool, dict | None]:
+    """전투 중이면 손패 카드를 차례로 골라 본다. 대상이 필요한 카드는 대상
+    선택 화면을 돌려주고(상태 변화 없음), 필요 없는 카드는 그 자리에서
+    쓰인다 — 그러면 그게 이번 클릭이므로 세션 화면을 그 응답으로 옮긴다.
+
+    (눌렀는지, 대상 선택 화면)을 돌려준다."""
+    from app.api import events as ev
+
+    select = next((c for c in session.components()
+                   if c.get("placeholder") == "낼 카드를 고르세요"), None)
+    if select is None:
+        return False, None
+    for option in select.get("options") or []:
+        reply = handlers.handle_interaction(session.ctx, ev.InteractionEvent(
+            event_id=None, user_id=session.user_id, guild_id=1,
+            channel_id=session.thread_id or 2, thread_id=session.thread_id,
+            custom_id=select["custom_id"], values=[option["value"]]))
+        if reply.get("content") == "대상을 선택하세요.":
+            return True, reply
+        if reply.get("action") != "reply_ephemeral":
+            session.screen = reply
+            return True, None
+    return False, None
+
+
+def test_the_target_select_screen_keeps_the_turn_image_and_says_what_to_pick(
+        ctx, db):
+    """응답 경로 첨부는 replace만 지원한다(연동 가이드 §8). 대상 선택
+    편집에 그림을 빼면 고르는 동안 전투 그림이 메시지에서 사라진다."""
+    from app.content.seed import create_account
+
+    prompt = None
+    for attempt in range(5):                      # 지도는 매번 무작위다
+        user = 515000 + attempt
+        create_account(db, user, ctx.content_version_id)
+        session = Session(ctx, user)
+        session.command()
+        session.command("시작")
+        for _ in range(60):
+            if session.state() in (lc.RUN_COMPLETED, lc.RUN_DEFEATED,
+                                   lc.RUN_ABANDONED, lc.RUN_EXPIRED):
+                break
+            pressed, prompt = _probe_target_prompt(session)
+            if prompt is not None:
+                break
+            if not pressed:
+                session.press_first()
+        if prompt is not None:
+            break
+    assert prompt is not None, "다섯 판 동안 대상 선택이 한 번도 나오지 않았습니다"
+
+    select = prompt["components"][0]
+    assert select.get("placeholder") == "대상을 고르세요"
+    assert [a["filename"] for a in prompt["attachments"]] == ["deckout_turn.png"]

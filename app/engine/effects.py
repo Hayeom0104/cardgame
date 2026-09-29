@@ -524,16 +524,31 @@ def _op_grant_equipment(params: dict, ctx: EffectContext,
     from app.engine.settlement import drop_tier_for
 
     run = ctx.db.one(
-        "SELECT world_id, deepest_depth_reached, content_version_id FROM runs "
-        "WHERE run_id = ?", (ctx.run_id,))
+        "SELECT world_id, deepest_depth_reached, content_version_id, "
+        "current_node_index FROM runs WHERE run_id = ?", (ctx.run_id,))
     if run is None:
         return
+    equipment_id = params.get("equipment_id")
+    if equipment_id is None:
+        # 이벤트는 `rarity_band`만 주고 장비를 고르지 않는다. 예전엔 None을
+        # 그대로 넣어, 런이 끝나 정산할 때 계정으로 옮기다 NOT NULL로 터졌다
+        # (포기·클리어 모두 500, 런이 정산 도중에 멈춤). 전투 드롭
+        # (`nodes._drop_equipment`)과 같이 저널 RNG로 하나 고른다.
+        # 🔴 `rarity_band`의 장비 쪽 의미는 설계에 없다 — 지어내지 않고 무시한다.
+        defs = ctx.db.query(
+            "SELECT equipment_def_id FROM equipment_defs WHERE content_version_id = ? "
+            "ORDER BY equipment_def_id", (run["content_version_id"],))
+        if not defs:
+            return
+        equipment_id = ctx.rng.choice(
+            f"equipgrant:{ctx.run_id}:{run['current_node_index']}:{ctx.sequence}",
+            [row["equipment_def_id"] for row in defs])
     tier = drop_tier_for(ctx.db, run["content_version_id"], run["world_id"],
                          run["deepest_depth_reached"])
     ctx.db.execute(
         "INSERT INTO run_inventory (run_id, kind, equipment_def_id, tier, amount, "
         "acquired_at_depth, acquired_at) VALUES (?, 'equipment', ?, ?, 1, ?, ?)",
-        (ctx.run_id, params.get("equipment_id"), tier,
+        (ctx.run_id, equipment_id, tier,
          run["deepest_depth_reached"], utcnow()),
     )
 

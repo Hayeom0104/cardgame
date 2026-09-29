@@ -422,6 +422,25 @@ def test_shutdown_returns_truthful_counts_and_stops_intake(client):
         "type": "message", "user_id": 1, "command": "덱아웃", "args": [],
         "raw_content": "!덱아웃"})
     assert after.json()["action"] == "ignore"
+    assert client.get("/healthz").status_code == 503
+
+
+def test_the_service_accepts_again_after_the_shutdown_window(client, monkeypatch):
+    """연동 가이드 §5 — Central이 재시작하며 보낸 `/shutdown` 뒤에 Deckout이
+    살아 있으면 영구적인 드레인에 머물면 안 된다. 예전엔 Deckout을 따로
+    재시작할 때까지 모든 명령이 무시됐다."""
+    from app.api import server
+
+    clock = [1000.0]
+    monkeypatch.setattr(server.time, "monotonic", lambda: clock[0])
+    client.post("/shutdown", json={"timeout": 30})
+    message = {"type": "message", "user_id": 1, "command": "덱아웃", "args": [],
+               "raw_content": "!덱아웃"}
+    assert client.post("/event", json=message).json()["action"] == "ignore"
+
+    clock[0] += 31
+    assert client.get("/healthz").status_code == 200
+    assert client.post("/event", json=message).json()["action"] != "ignore"
 
 
 def test_thread_resume_is_visible_and_rebuilds_images_without_advancing(client_with_central):

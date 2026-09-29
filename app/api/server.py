@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hmac
 import logging
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -20,8 +21,8 @@ from fastapi.responses import JSONResponse
 from app.api import events as ev
 from app.api import handlers
 from app.central import delivery, surfaces
-from app.central.client import (CapabilityError, CentralClient, to_action_rows,
-                                validate_multi_action)
+from app.central.client import (CapabilityError, CentralClient, clamp_content,
+                                to_action_rows, validate_multi_action)
 from app.config import settings
 from app.content.balance import Balance
 from app.content.seed import remember_identity
@@ -47,6 +48,15 @@ def _verify_ingress_secret(request: Request) -> bool:
         return settings.allow_unauthenticated_local
     provided = request.headers.get(INGRESS_SECRET_HEADER, "")
     return hmac.compare_digest(provided.encode(), settings.ingress_secret.encode())
+
+
+def _clamp(response: dict) -> dict:
+    """나가기 직전 마지막 단계 — 본문 2000자 한도(자식 액션 포함)."""
+    if "content" in response:
+        response = {**response, "content": clamp_content(response["content"])}
+    if response.get("actions"):
+        response = {**response, "actions": [_clamp(child) for child in response["actions"]]}
+    return response
 
 
 def _split_battle_images(db: Database, response: dict, user_id: int) -> dict:
@@ -89,7 +99,10 @@ def _split_battle_images(db: Database, response: dict, user_id: int) -> dict:
     }
     children = [first, second]
     validate_multi_action(children)
-    return {"action": "multi_action", "actions": children}
+    # 연동 가이드 §8의 형식 그대로 — 클릭한 컴포넌트의 메시지를 첫 자식
+    # `edit`로 고친다고 Central에 명시한다(컴포넌트 상호작용 전용).
+    return {"action": "multi_action", "interaction_ack": "edit_component",
+            "actions": children}
 
 
 def _thread_response(db: Database, context, event, response: dict) -> dict:
@@ -188,6 +201,7 @@ async def lifespan(app: FastAPI):
         # 시작 시에도 비종료 트랜잭션을 기록된 상태에서 재개한다 (§17.4).
         resume_pending(db, state["central"], local_handlers())
     state["accepting"] = True
+    state.pop("drain_until", None)
 
     yield
 
@@ -352,9 +366,29 @@ from app.admin.routes import router as admin_router      # noqa: E402
 app.include_router(admin_router)
 
 
+def _accepting() -> bool:
+    """접수 중인가. `/shutdown` 뒤의 드레인은 Central이 준 `timeout`까지만이다.
+
+    연동 가이드 §5 — 응답 뒤에도 프로세스가 살아 있으면 영구적인 조용한
+    드레인에 머물면 안 된다. Central이 재시작할 때마다 `/shutdown`을 보내는데,
+    예전엔 Deckout 프로세스를 따로 재시작하기 전까지 모든 명령을 무시하고
+    `/healthz`도 503이었다 — 플레이어에게는 봇이 먹통인 것으로 보였다.
+    게임 상태는 매 조작마다 커밋되므로 창이 지나면 다시 받아도 안전하다.
+    """
+    if state.get("accepting"):
+        return True
+    resume_at = state.get("drain_until")
+    if resume_at is not None and time.monotonic() >= resume_at:
+        state["accepting"] = True
+        state.pop("drain_until", None)
+        logger.info("coordinated shutdown window elapsed; accepting events again")
+        return True
+    return False
+
+
 @app.get("/healthz")
 async def healthz() -> JSONResponse:
-    ready = bool(state.get("accepting") and state.get("content_version_id"))
+    ready = bool(_accepting() and state.get("content_version_id"))
     try:
         state["db"].one("SELECT 1")
     except Exception:
@@ -374,7 +408,7 @@ async def event(request: Request) -> JSONResponse:
 
     payload = await request.json()
 
-    if not state.get("accepting"):
+    if not _accepting():
         # §1.3.2 step 1 — stop accepting new commands/interactions.
         return JSONResponse({"action": "ignore"})
 
@@ -434,7 +468,7 @@ async def event(request: Request) -> JSONResponse:
             replay = _thread_response(db, context, parsed, replay)
             if "components" in replay:
                 replay["components"] = to_action_rows(replay["components"])
-            return JSONResponse(replay)
+            return JSONResponse(_clamp(replay))
         return JSONResponse({"action": "ignore", "duplicate": True})
 
     if isinstance(parsed, ev.MessageEvent):
@@ -479,7 +513,7 @@ async def event(request: Request) -> JSONResponse:
         # unable to say which run's screen to replay (see the lookup above).
         run_id = lifecycle.most_relevant_run_id(db, parsed.user_id)
         lifecycle.record_event(db, parsed.event_id, run_id)
-    return JSONResponse(response)
+    return JSONResponse(_clamp(response))
 
 
 @app.post("/shutdown")
@@ -498,6 +532,7 @@ async def shutdown(request: Request) -> dict:
     body = await request.json() if await request.body() else {}
     timeout = int(body.get("timeout", 30))
     state["accepting"] = False
+    state["drain_until"] = time.monotonic() + max(timeout, 0)
 
     db: Database = state["db"]
     saved = db.one(

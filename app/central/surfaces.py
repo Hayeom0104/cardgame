@@ -48,6 +48,15 @@ logger = logging.getLogger(__name__)
 #: 고칠 곳은 이 상수 하나다.
 THREAD_ID_KEYS = ("thread_id", "id", "channel_id")
 MESSAGE_ID_KEYS = ("message_id", "canonical_message_id")
+CENTRAL_REVISION_KEYS = ("presentation_revision", "current_presentation_revision")
+
+
+def thread_name(db: Database, user_id: int) -> str:
+    """스레드 제목. 디스코드 숫자 ID는 보이지 않게 하고(오너 지시) 이벤트가
+    알려 준 표시 이름을 쓴다. 디스코드 스레드 이름은 최대 100자다."""
+    row = db.one("SELECT display_name FROM accounts WHERE user_id = ?", (user_id,))
+    name = (row["display_name"] or "").strip() if row else ""
+    return f"덱아웃 - {name}"[:100] if name else "덱아웃 런"
 
 
 class SurfaceError(RuntimeError):
@@ -97,7 +106,9 @@ def fulfil_thread_request(db: Database, central, response: dict, *,
             surface_generation=int(request["surface_generation"]),
             parent_channel_id=parent_channel_id,
             owner_user_id=int(request["owner_user_id"]),
-            thread_name=request["thread_name"],
+            # 이름은 여기서 정한다 — 가입 클릭처럼 같은 이벤트에서 계정이 막
+            # 생긴 경우, 표시 이름은 핸들러가 끝난 뒤에야 계정에 적힌다.
+            thread_name=thread_name(db, int(request["owner_user_id"])),
             content=response.get("content", ""),
             components=response.get("components") or [],
         )
@@ -170,7 +181,16 @@ def _bind(db: Database, request_id: str | None, result: dict, *,
         "message_id": _first(result or {}, MESSAGE_ID_KEYS),
         "channel_id": result.get("parent_channel_id"),
     })
-    return bool(outcome.get("applied"))
+    applied = bool(outcome.get("applied"))
+    if applied and run_id is not None:
+        # 새 바인딩(생성·재생성)은 Central 쪽 편집 revision을 새로 시작한다.
+        # 응답이 값을 알려 주면 그것을, 아니면 0에서 — 가이드는 생성 요청에
+        # revision을 싣지 않고, 실제 운영 409(첫 클릭 이후에만 발생)도
+        # 0에서 시작한다는 것과 맞는다.
+        initial = _first(result or {}, CENTRAL_REVISION_KEYS)
+        db.execute("UPDATE runs SET central_revision = ? WHERE run_id = ?",
+                   (int(initial) if initial is not None else 0, run_id))
+    return applied
 
 
 def push_frame(db: Database, central, run_id: int, *, content: str,
@@ -225,6 +245,10 @@ def push_frame(db: Database, central, run_id: int, *, content: str,
         return False
     payload = json.loads(frame["payload_json"])
 
+    # Central의 revision은 로컬 CAS 카운터와 별개다 — 응답 경로 편집(클릭
+    # 응답)은 Central의 값을 올리지 않으므로, 로컬 값을 보내면 첫 클릭 이후
+    # 항상 stale_revision(409)이 난다.
+    central_current = int(run["central_revision"])
     try:
         result = central.edit_message(
             delivery_request_id=request_id,
@@ -232,8 +256,8 @@ def push_frame(db: Database, central, run_id: int, *, content: str,
             expected_thread_id=int(run["thread_id"]),
             expected_message_id=int(run["canonical_message_id"]),
             expected_surface_generation=int(run["surface_generation"]),
-            expected_presentation_revision=current,
-            new_presentation_revision=target,
+            expected_presentation_revision=central_current,
+            new_presentation_revision=central_current + 1,
             content=payload["content"],
             components=payload["components"],
         )
@@ -244,10 +268,11 @@ def push_frame(db: Database, central, run_id: int, *, content: str,
             code = _edit_outcome(error.response.json())
         except ValueError:
             code = "unknown"
-        logger.warning("런 %s 화면 갱신 거절: HTTP %s, code=%s, gen=%s, rev=%s→%s. "
-                       "스레드에서 !덱아웃으로 현재 화면을 다시 열 수 있습니다.",
+        logger.warning("런 %s 화면 갱신 거절: HTTP %s, code=%s, gen=%s, "
+                       "central_rev=%s→%s. 스레드에서 !덱아웃으로 현재 화면을 "
+                       "다시 열 수 있습니다.",
                        run_id, error.response.status_code, code,
-                       run["surface_generation"], current, target)
+                       run["surface_generation"], central_current, central_current + 1)
         delivery.mark_frame(db, int(frame["queue_id"]), "failed")
         return False
     except Exception:                                        # noqa: BLE001
@@ -261,6 +286,12 @@ def push_frame(db: Database, central, run_id: int, *, content: str,
         return False
 
     with db.tx() as conn:
+        # Central은 이 편집을 받아들였으므로 그쪽 revision은 로컬 게임
+        # 상태와 무관하게 확정이다. 로컬 CAS는 그 사이 클릭이 없었을 때만 올린다.
+        conn.execute(
+            "UPDATE runs SET central_revision = ? WHERE run_id = ? "
+            "AND central_revision = ? AND surface_generation = ?",
+            (central_current + 1, run_id, central_current, run["surface_generation"]))
         updated = conn.execute(
             "UPDATE runs SET presentation_revision = ? WHERE run_id = ? "
             "AND presentation_revision = ? AND surface_generation = ? "
@@ -326,6 +357,25 @@ def close_run_surface(db: Database, central, run_id: int, *,
     return push_frame(db, central, run_id, content=summary, components=[])
 
 
+def _reopened_first_message(db: Database, run_id: int) -> tuple[str, list]:
+    """다시 연 스레드의 첫 메시지 — 소유자 멘션과 지금 화면을 여는 버튼.
+
+    스레드 생성 API는 그림을 실을 수 없으므로(§1.3.5) 첫 화면은 이 버튼의
+    클릭 응답으로 보낸다. 예전엔 글자만 있고 누를 것이 없어서, 스레드가
+    다시 생겨도 플레이어는 무엇을 해야 할지 알 수 없었다."""
+    from app.api import custom_id as cid
+
+    run = db.one("SELECT user_id, surface_generation, presentation_revision "
+                 "FROM runs WHERE run_id = ?", (run_id,))
+    content = f"<@{run['user_id']}> 런을 이어서 진행합니다. 화면 열기를 눌러 주세요."
+    return content, [{
+        "type": "button", "label": "화면 열기",
+        "custom_id": cid.build(cid.ACTION_SCREEN_REFRESH, run_id,
+                               int(run["surface_generation"]),
+                               int(run["presentation_revision"]), ""),
+    }]
+
+
 def retry_surface(db: Database, central, run_id: int, *,
                   parent_channel_id: int) -> int | None:
     """§16.8 — 스레드를 얻지 못한 런의 화면을 **같은 세대로** 다시 만든다.
@@ -350,14 +400,16 @@ def retry_surface(db: Database, central, run_id: int, *,
         surface_generation=generation,
         presentation_revision=int(run["presentation_revision"]),
     )
+    content, components = _reopened_first_message(db, run_id)
     try:
         result = central.create_thread(
             logical_session_id=run["logical_session_id"],
             surface_generation=generation,
             parent_channel_id=parent_channel_id,
             owner_user_id=int(run["user_id"]),
-            thread_name=f"덱아웃 - {run['user_id']}",
-            content="런을 이어서 시작합니다.",
+            thread_name=thread_name(db, int(run["user_id"])),
+            content=content,
+            components=components,
         )
     except Exception:                                        # noqa: BLE001
         logger.exception("런 %s 의 스레드 재시도가 실패했습니다", run_id)
@@ -497,13 +549,16 @@ def reopen_thread(db: Database, central, run_id: int, *,
         surface_generation=generation,
         presentation_revision=int(run["presentation_revision"]),
     )
+    content, components = _reopened_first_message(db, run_id)
     try:
         result = central.recreate_thread(
             logical_session_id=run["logical_session_id"],
             surface_generation=generation,
             parent_channel_id=parent_channel_id,
             owner_user_id=int(run["user_id"]),
-            thread_name=f"덱아웃 - {run['user_id']}",
+            thread_name=thread_name(db, int(run["user_id"])),
+            content=content,
+            components=components,
         )
     except Exception:                                        # noqa: BLE001
         logger.exception("런 %s 의 스레드 재생성이 실패했습니다", run_id)

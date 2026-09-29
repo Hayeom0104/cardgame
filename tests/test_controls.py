@@ -147,11 +147,20 @@ def test_pressing_a_map_button_actually_resolves_the_node(ctx, db, run_id,
 
 def test_the_revision_moves_so_the_old_button_stops_working(ctx, db, run_id,
                                                             user_id):
-    """§16.7 — 같은 버튼을 두 번 누르면 두 번째는 거절되어야 한다."""
+    """§16.7 — 같은 버튼을 두 번 누르면 두 번째는 아무것도 실행하지 않아야 한다.
+
+    두 번째 클릭은 오류로 막다른 길을 만드는 대신 지금 화면을 돌려준다
+    (R3 B-02, 운영 신고 "지금은 할 수 없는 동작"). 거절의 본질은 게임이 두 번
+    진행되지 않는 것이다."""
     button = only_component({"components": controls.game_map(db, run_id)})
     press(ctx, user_id, button["custom_id"])
+    before = dict(db.one("SELECT state, presentation_revision, current_node_index "
+                         "FROM runs WHERE run_id = ?", (run_id,)))
     second = press(ctx, user_id, button["custom_id"])
-    assert second["action"] == "reply_ephemeral"
+    after = dict(db.one("SELECT state, presentation_revision, current_node_index "
+                        "FROM runs WHERE run_id = ?", (run_id,)))
+    assert after == before, "두 번째 클릭이 게임을 한 번 더 진행시켰습니다"
+    assert second["action"] == "reply_ephemeral" or second.get("components")
 
 
 # =====================================================================

@@ -527,3 +527,166 @@ def test_an_edit_response_cannot_rewind_a_concurrent_game_revision(db, balance, 
     before = db.one('SELECT presentation_revision FROM runs WHERE run_id = ?', (run_id,))[0]
     assert not surfaces.close_run_surface(db, central, run_id, summary='종료')
     assert db.one('SELECT presentation_revision FROM runs WHERE run_id = ?', (run_id,))[0] == before + 5
+
+
+# =====================================================================
+# 운영 409 회귀 — Central의 편집 revision은 로컬 CAS 카운터와 별개다
+# =====================================================================
+class RevisionCheckingCentral(EditingCentral):
+    """실제 Central처럼 바인딩마다 편집 revision을 0에서 시작하고, 정확히
+    current → current+1 인 편집만 받는다. 응답 경로의 클릭 편집은 이 값을
+    모른다 — 그래서 로컬 CAS 값을 보내면 409가 난다(운영 로그 재현)."""
+
+    def __init__(self):
+        super().__init__()
+        self.revision = 0
+
+    def edit_message(self, **kwargs):
+        import httpx
+
+        self.edits.append(kwargs)
+        if kwargs["expected_presentation_revision"] != self.revision:
+            request = httpx.Request("POST", "http://central/v1/minigames/messages/edit")
+            response = httpx.Response(409, json={"status": "stale_revision"},
+                                      request=request)
+            raise httpx.HTTPStatusError("409", request=request, response=response)
+        self.revision = kwargs["new_presentation_revision"]
+        return {"status": "edited"}
+
+
+def test_a_run_that_was_played_can_still_close_its_thread_screen(db, balance, version,
+                                                                 user_id):
+    """버튼을 몇 번 누른 뒤(로컬 CAS가 오른 뒤) 끝난 런의 화면을 닫는
+    편집이 Central에 받아들여져야 한다. 예전엔 로컬 값을 그대로 보내서
+    첫 클릭 이후 항상 409였고, 끝난 스레드에 살아 있는 버튼이 남았다."""
+    from app.engine import lifecycle as lc
+
+    central = RevisionCheckingCentral()
+    ctx = handlers.HandlerContext(db=db, balance=balance, central=central,
+                                  content_version_id=version)
+    run_id = surfaced_run(ctx, db, central, user_id)
+    for revision in range(4):                      # 플레이어가 네 번 누른 셈
+        lc.claim_mutation(db, run_id, revision)
+
+    assert surfaces.close_run_surface(db, central, run_id, summary="끝났습니다")
+    assert central.edits[-1]["expected_presentation_revision"] == 0
+    run = db.one("SELECT presentation_revision, central_revision FROM runs "
+                 "WHERE run_id = ?", (run_id,))
+    assert run["central_revision"] == 1
+    assert run["presentation_revision"] == 5
+
+
+def test_consecutive_frames_follow_central_s_revision(db, balance, version, user_id):
+    from app.engine import lifecycle as lc
+
+    central = RevisionCheckingCentral()
+    ctx = handlers.HandlerContext(db=db, balance=balance, central=central,
+                                  content_version_id=version)
+    run_id = surfaced_run(ctx, db, central, user_id)
+    lc.claim_mutation(db, run_id, 0)
+    assert surfaces.push_frame(db, central, run_id, content="하나")
+    lc.claim_mutation(db, run_id, 2)
+    assert surfaces.push_frame(db, central, run_id, content="둘")
+    assert [e["expected_presentation_revision"] for e in central.edits] == [0, 1]
+
+
+def test_a_new_thread_binding_restarts_central_s_revision(db, balance, version, user_id):
+    central = RevisionCheckingCentral()
+    ctx = handlers.HandlerContext(db=db, balance=balance, central=central,
+                                  content_version_id=version)
+    run_id = surfaced_run(ctx, db, central, user_id)
+    db.execute("UPDATE runs SET central_revision = 7 WHERE run_id = ?", (run_id,))
+    surfaces._bind(db, "dko-thread-new", {"thread_id": 424242, "message_id": 5},
+                   run_id=run_id, surface_generation=1)
+    # 알 수 없는 request_id는 적용되지 않으므로 값도 그대로여야 한다.
+    assert db.one("SELECT central_revision FROM runs WHERE run_id = ?",
+                  (run_id,))["central_revision"] == 7
+
+
+def test_migration_11_backfills_central_revision_from_sent_frames(tmp_path):
+    from app.db.connection import Database
+
+    db = Database(tmp_path / "old.db")
+    db.migrate()
+    db.execute(
+        "INSERT INTO runs (run_id, user_id, world_id, state, is_tutorial, "
+        "content_version_id, map_seed, rng_seed, rng_counter, deepest_depth_reached, "
+        "run_currency, logical_session_id, surface_generation, presentation_revision, "
+        "created_at, updated_at, last_activity_at) VALUES "
+        "(5, 1, 'w', 'run_abandoned', 0, 1, 1, 1, 0, 1, 0, 'dko-run-5', 2, 9, 't', 't', 't')")
+    for rid, status in (("dko-frame-5-g1-r3", "sent"), ("dko-frame-5-g2-r4", "sent"),
+                        ("dko-frame-5-g2-r6", "sent"), ("dko-frame-5-g2-r9", "failed")):
+        db.execute("INSERT INTO delivery_queue (run_id, target_revision, "
+                   "delivery_request_id, payload_json, status, created_at) "
+                   "VALUES (5, 0, ?, '{}', ?, 't')", (rid, status))
+    db.execute("ALTER TABLE runs DROP COLUMN central_revision")
+    db.execute("UPDATE schema_version SET version = 10")
+
+    assert db.migrate() == 11
+    # 지금 세대(2)에서 실제로 성공한 편집 두 번만 센다.
+    assert db.one("SELECT central_revision FROM runs WHERE run_id = 5")[0] == 2
+
+
+# =====================================================================
+# 스레드 제목 — 디스코드 숫자 ID를 드러내지 않는다 (오너 지시)
+# =====================================================================
+def test_the_thread_is_named_after_the_display_name_not_the_discord_id(
+        ctx, db, central, user_id):
+    db.execute("UPDATE accounts SET display_name = ? WHERE user_id = ?",
+               ("月冴", user_id))
+    surfaced_run(ctx, db, central, user_id)
+    name = central.create_calls[-1]["thread_name"]
+    assert name == "덱아웃 - 月冴"
+    assert str(user_id) not in name
+
+
+def test_an_unknown_display_name_never_falls_back_to_the_discord_id(
+        ctx, db, central, user_id):
+    surfaced_run(ctx, db, central, user_id)
+    name = central.create_calls[-1]["thread_name"]
+    assert str(user_id) not in name
+    assert name == "덱아웃 런"
+
+
+# =====================================================================
+# 다시 연 스레드의 첫 메시지 — 가이드 §8 필수 필드 + 누를 버튼
+# =====================================================================
+def test_a_reopened_thread_carries_a_button_that_opens_the_current_screen(
+        ctx, db, central, user_id):
+    """연동 가이드 §8 — recreate 요청에도 content·embeds·components가 필요하다.
+    예전엔 셋 다 빠져 있었고, 다시 생긴 스레드에는 누를 것이 없었다."""
+    from app.api import events as ev
+    from app.engine import lifecycle as lc
+
+    run_id = surfaced_run(ctx, db, central, user_id)
+    run = db.one("SELECT logical_session_id FROM runs WHERE run_id = ?", (run_id,))
+    lc.handle_thread_deleted(db, run["logical_session_id"])
+    thread_id = surfaces.reopen_thread(db, central, run_id,
+                                       parent_channel_id=PARENT_CHANNEL)
+
+    call = central.recreate_calls[-1]
+    assert f"<@{user_id}>" in call["content"]
+    button = call["components"][0]
+    reply = handlers.handle_interaction(ctx, ev.InteractionEvent(
+        event_id=None, user_id=user_id, guild_id=1, channel_id=thread_id,
+        thread_id=thread_id, custom_id=button["custom_id"], values=[]))
+    assert reply["action"] != "reply_ephemeral", reply
+    assert reply["components"], "현재 화면의 조작이 와야 합니다"
+
+
+def test_the_recreate_request_body_has_the_guide_s_required_fields():
+    """가이드 §8: create/recreate는 최소한 이 필드들을 싣는다."""
+    from app.central.client import CentralClient
+
+    sent = {}
+    client = CentralClient("http://central", "key")
+    client._post = lambda path, body: sent.update(path=path, body=body) or {}
+    client.recreate_thread(logical_session_id="dko-run-1", surface_generation=2,
+                           parent_channel_id=1, owner_user_id=2, thread_name="덱아웃 런",
+                           content="다시", components=[{"type": "button", "label": "a",
+                                                       "custom_id": "x"}])
+    body = sent["body"]
+    for key in ("logical_session_id", "surface_generation", "parent_channel_id",
+                "owner_user_id", "thread_name", "content", "embeds", "components"):
+        assert key in body, key
+    assert body["components"][0]["type"] == 1          # action row

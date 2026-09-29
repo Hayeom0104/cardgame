@@ -89,19 +89,23 @@ def check_gates(db: Database, balance: Balance, *, user_id: int, custom_id: Cust
         lc.expire_run(db, balance, run)
         raise RunExpiredError(run["run_id"])
 
-    # 2. LIVENESS
-    if allowed_states is not None and run["state"] not in allowed_states:
-        raise GateError(errors.ILLEGAL_STATE,
-                        reason=f"state {run['state']!r} does not permit this action")
-
     # 3. REVISION — also covers surface generation, since a recreated surface
     # invalidates every component rendered against the old one.
+    # LIVENESS보다 먼저 본다: 지도에서 이미 전투로 넘어간 뒤 예전 이동 버튼을
+    # 누르면 상태 검사에서 먼저 걸려 "지금은 할 수 없는 동작"만 뜨고 누를
+    # 것이 없었다. 낡은 버튼이면 상태와 무관하게 낡은 것이므로, 지금 화면을
+    # 돌려주는 StaleComponentError 경로로 보낸다.
     if int(custom_id.generation) != int(run["surface_generation"]):
         raise GateError(errors.STALE_REVISION,
                         reason=f"generation {custom_id.generation} != "
                                f"{run['surface_generation']}")
     if int(custom_id.revision) != int(run["presentation_revision"]):
         raise StaleComponentError(run["run_id"])
+
+    # 2. LIVENESS
+    if allowed_states is not None and run["state"] not in allowed_states:
+        raise GateError(errors.ILLEGAL_STATE,
+                        reason=f"state {run['state']!r} does not permit this action")
 
     # 4. LEGALITY — the caller supplies the predicate, because what counts as
     # legal is screen-specific (a target that just died, a card no longer in

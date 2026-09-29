@@ -146,6 +146,14 @@ def _run_deduct(db, central, row, apply_local, kind) -> TransactionResult:
     tx_id = row["tx_id"]
     amount = abs(int(row["expected_coin_delta"]))
 
+    if amount == 0 and row["status"] in (CREATED, COIN_UNKNOWN):
+        # 연동 가이드 §6 — Central은 amount=0을 무조건 거절한다. 보내면
+        # coin_unknown에 갇혀 재시작마다 재시도하고 로컬 효과는 영영 안
+        # 붙는다. (관리자가 가격·비용을 0으로 바꾸면 생긴다.)
+        _update(db, tx_id, status=COIN_DEDUCTED, central_status=APPLIED,
+                coin_applied_delta=0)
+        row = db.one("SELECT * FROM purchase_transactions WHERE tx_id = ?", (tx_id,))
+
     if row["status"] in (CREATED, COIN_UNKNOWN):
         # §17.3 rule 6: on coin_unknown NEVER refund speculatively — re-issue
         # the SAME key and let Central replay its prior result.
@@ -206,6 +214,12 @@ def _compensate(db, central, tx_id: str) -> TransactionResult:
 def _run_grant(db, central, row, apply_local, kind) -> TransactionResult:
     tx_id = row["tx_id"]
     amount = abs(int(row["expected_coin_delta"]))
+
+    if amount == 0 and row["status"] in (CREATED, COIN_UNKNOWN):
+        # 위 `_run_deduct`와 같은 이유 — 0원 지급은 Central이 거절한다.
+        _update(db, tx_id, status=COIN_GRANTED, central_status=APPLIED,
+                coin_applied_delta=0)
+        row = db.one("SELECT * FROM purchase_transactions WHERE tx_id = ?", (tx_id,))
 
     if row["status"] in (CREATED, COIN_UNKNOWN):
         try:

@@ -164,8 +164,10 @@ CREATE TABLE IF NOT EXISTS runs (
   ended_at                TEXT,
   end_reason              TEXT,
   boss_encounter_id       TEXT,
-  thread_deleted_at       TEXT                     -- R3 M-03: §16.8 terminal
-                                                   -- cleanup, once actually run
+  -- R3 M-03: §16.8 terminal cleanup, once actually run
+  thread_deleted_at       TEXT,
+  -- Central 바인딩의 messages/edit revision (로컬 CAS와 별개)
+  central_revision        INTEGER NOT NULL DEFAULT 0
 );
 -- §16.3 one active run per user, globally.
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_run ON runs (user_id)

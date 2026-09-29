@@ -1471,11 +1471,19 @@ def _on_card_select(ctx: HandlerContext, event: ev.InteractionEvent,
         return _resolve_card(ctx, gate.run, engine, unit, card_instance_id,
                             [t.battle_unit_id for t in selection["targets"]],
                             parsed)
+    # 응답 경로의 첨부는 replace만 지원한다(연동 가이드 §8). 그림 없이
+    # 편집하면 대상을 고르는 동안 전투 그림이 메시지에서 사라지므로, 이
+    # 메시지가 원래 들고 있던 `내 턴` 그림을 다시 싣는다.
+    turn_art = [attachment for attachment in visuals.battle(
+                    ctx.db, ctx.balance, battle_id=engine.battle_id, run=gate.run)
+                if attachment.get("filename") == "deckout_turn.png"]
     return {
         "action": "edit",
         "content": "대상을 선택하세요.",
+        "attachments": turn_art,
         "components": [{
             "type": "string_select",
+            "placeholder": "대상을 고르세요",
             "custom_id": cid.build(cid.ACTION_TARGET_SELECT, parsed.run_id,
                                    parsed.generation, parsed.revision,
                                    str(card_instance_id)),
