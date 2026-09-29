@@ -907,6 +907,12 @@ def render_map(nodes: list[dict], edges: list[tuple[int, int]], *,
 
     # ---- 칸 ----
     small = canvas.font("small")
+    # 갈 수 있는 칸에 왼쪽부터 번호를 단다 — 버튼(`controls.game_map`)도 같은
+    # 번호를 쓴다. 두 갈래가 모두 "전투"면 버튼이 똑같아 어느 쪽인지 고를 수
+    # 없었다(운영 신고). 다음 칸은 모두 같은 깊이이고, 한 깊이 안에서는
+    # node_index 순으로 왼쪽부터 놓인다.
+    choice_numbers = {index: number for number, index in
+                      enumerate(sorted(i for i in available if i in positions), 1)}
     for node in nodes:
         index = node["node_index"]
         if index not in positions:
@@ -960,10 +966,28 @@ def render_map(nodes: list[dict], edges: list[tuple[int, int]], *,
                          fill=theme.color("color_background")
                          if state in ("current", "open") else theme.color("color_muted"))
         label = kit.truncate(canvas.draw, node_type, small, 84)
-        canvas.draw.text((x - canvas.draw.textlength(label, font=small) / 2, y + r + 5),
+        label_x = x - canvas.draw.textlength(label, font=small) / 2
+        # 칸 이름 뒤에 바탕 판을 깐다 — 월드 배경 그림의 글씨(자리표시 그림의
+        # "튜토리얼" 캡션 등)와 겹치면 "튜보스리얼"처럼 읽혔다.
+        box = canvas.draw.textbbox((label_x, y + r + 5), label, font=small)
+        canvas.draw.rounded_rectangle((box[0] - 4, box[1] - 2, box[2] + 4, box[3] + 3),
+                                      radius=4, fill=theme.color("color_background"))
+        canvas.draw.text((label_x, y + r + 5),
                          label, font=small,
                          fill=theme.color("color_text")
                          if state in ("current", "open") else theme.color("color_muted"))
+
+        number = choice_numbers.get(index)
+        if number is not None:
+            badge = 11
+            bx, by = x + int(r * .78), y - int(r * .78)
+            canvas.draw.ellipse((bx - badge, by - badge, bx + badge, by + badge),
+                                fill=theme.color("color_selectable"),
+                                outline=theme.color("color_background"), width=2)
+            digit = str(number)
+            width = canvas.draw.textlength(digit, font=small)
+            canvas.draw.text((bx - width / 2, by - 8), digit, font=small,
+                             fill=theme.color("color_background"))
 
         if state == "past":
             canvas.draw.ellipse((x + r - 11, y - r - 1, x + r + 1, y - r + 11),

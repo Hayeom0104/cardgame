@@ -81,12 +81,15 @@ def game_map(db: Database, run_id: int) -> list[dict]:
     if not options:
         return []
     generation, revision = _surface(db, run_id)
+    # 지도 그림의 번호 배지와 같은 번호 — 왼쪽(작은 node_index)부터 1.
+    # 번호가 없으면 두 갈래가 모두 "전투"일 때 버튼이 똑같아 고를 수 없었다.
+    ordered = sorted(options, key=lambda node: node["node_index"])[:MAX_BUTTONS]
     return [{
         "type": "button",
         "custom_id": cid.build(cid.ACTION_NODE_CHOOSE, run_id, generation,
                                revision, str(node["node_index"])),
-        "label": f"{node['node_type']} (깊이 {node['depth']})"[:80],
-    } for node in options[:MAX_BUTTONS]]
+        "label": f"{number} · {node['node_type']} (깊이 {node['depth']})"[:80],
+    } for number, node in enumerate(ordered, 1)]
 
 
 # =====================================================================

@@ -648,3 +648,69 @@ def test_mixed_text_measures_the_same_width_it_draws():
     drawn = image.getbbox()
     measured = draw.textbbox((10, 10), text, font=font)
     assert abs(drawn[0] - measured[0]) <= 2 and abs(drawn[2] - measured[2]) <= 2
+
+
+# =====================================================================
+# `!종료` — 진행 중인 런 끝내기 (오너 지시)
+# =====================================================================
+def test_the_quit_command_ends_the_active_run_from_the_thread(client_with_central):
+    from app.api import server
+
+    base, _ = _enter_first_battle(client_with_central, 55540)
+    reply = client_with_central.post('/event', json={
+        **base, 'type': 'message', 'command': '종료', 'args': [],
+        'raw_content': '!종료'}).json()
+    assert reply['action'] == 'reply'
+    assert '포기했습니다' in reply['content']
+    run = server.state['db'].one("SELECT state FROM runs WHERE user_id = 55540")
+    assert run['state'] == 'run_abandoned'
+
+
+def test_the_quit_command_without_a_run_says_so(client_with_central):
+    from app.api import server
+    from app.content.seed import create_account
+
+    create_account(server.state['db'], 55541, server.state['content_version_id'])
+    server.state['db'].execute("UPDATE accounts SET tutorial_completed_at = 'x' "
+                               "WHERE user_id = 55541")
+    reply = client_with_central.post('/event', json={
+        'type': 'message', 'user_id': 55541, 'guild_id': 1, 'channel_id': 5959,
+        'command': '종료', 'args': [], 'raw_content': '!종료'}).json()
+    assert reply['content'] == '진행 중인 런이 없습니다.'
+
+
+def test_deckout_quit_subcommand_is_the_same(client_with_central):
+    from app.api import server
+
+    base, _ = _enter_first_battle(client_with_central, 55542)
+    client_with_central.post('/event', json={
+        **base, 'type': 'message', 'command': '덱아웃', 'args': ['종료'],
+        'raw_content': '!덱아웃 종료'})
+    run = server.state['db'].one("SELECT state FROM runs WHERE user_id = 55542")
+    assert run['state'] == 'run_abandoned'
+
+
+# =====================================================================
+# 지도 — 같은 종류의 갈림길을 번호로 구분
+# =====================================================================
+def test_map_buttons_are_numbered_left_to_right(db, balance, version, user_id):
+    from app.api import controls
+    from app.content.seed import STARTER_CHARACTER_ID, TUTORIAL_WORLD_ID
+    from app.engine import lifecycle as lc
+    from app.engine import map_gen
+
+    run_id = lc.create_run(db, balance, lc.RunBuildRequest(
+        user_id=user_id, world_id=TUTORIAL_WORLD_ID,
+        party_character_ids=[STARTER_CHARACTER_ID], is_tutorial=True), version)
+    first = map_gen.available_next_nodes(db, run_id, None)[0]
+    db.execute("UPDATE runs SET current_node_index = ?, state = 'map_navigation' "
+               "WHERE run_id = ?", (first["node_index"], run_id))
+    options = sorted(map_gen.available_next_nodes(db, run_id, first["node_index"]),
+                     key=lambda node: node["node_index"])
+    buttons = controls.game_map(db, run_id)
+    assert [b["label"].split(" · ")[0] for b in buttons] == \
+        [str(n) for n in range(1, len(options) + 1)]
+    assert [b["custom_id"].rsplit(":", 1)[1] for b in buttons] == \
+        [str(node["node_index"]) for node in options]
+    assert len({b["label"] for b in buttons}) == len(buttons), \
+        "같은 종류의 갈림길이라도 버튼 라벨은 서로 달라야 합니다"

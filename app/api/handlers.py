@@ -54,6 +54,9 @@ CMD_SHOP = "상점"
 CMD_ACHIEVEMENTS = "업적"
 CMD_PASSIVES = "패시브"
 CMD_HELP = "도움말"
+#: 오너 지시 — `!종료`(와 `!덱아웃 종료`)로 진행 중인 런을 끝낸다. `포기`와
+#: 같은 처리다. Central은 `!` 뒤 첫 단어를 `command`로 보낸다.
+CMD_QUIT = "종료"
 
 
 @dataclass
@@ -194,6 +197,8 @@ def handle_message(ctx: HandlerContext, event: ev.MessageEvent) -> dict:
         return _ephemeral("콘텐츠가 아직 준비되지 않았습니다.")
 
     subcommand = (event.args[0] if event.args else CMD_HUB)
+    if event.command == CMD_QUIT or subcommand == CMD_QUIT:
+        subcommand = CMD_ABANDON
 
     # 계정이 없으면 어떤 명령을 쳤든 가입부터 시킨다 — §4.6.5는 첫 명령에서
     # 계정을 조용히 만들었지만, 그러면 "가입"이라는 순간이 플레이어에게
@@ -687,7 +692,8 @@ _HELP_TEXT = (
     "연구   — 연구 트리\n"
     "상점   — 허브 상점\n"
     "업적   — 업적 목록\n"
-    "포기   — 진행 중인 런 포기 (런 진행 중에만 사용 가능)"
+    "포기   — 진행 중인 런 포기 (런 진행 중에만 사용 가능)\n\n"
+    "`!종료` — 진행 중인 런을 바로 끝냅니다 (포기와 같음, 스레드에서도 가능)"
 )
 
 
@@ -973,7 +979,7 @@ def abandon_run(ctx: HandlerContext, user_id: int) -> dict:
 
     run = lc.active_run_for(ctx.db, user_id)
     if run is None:
-        return _ephemeral(errors.ILLEGAL_STATE)
+        return _ephemeral("진행 중인 런이 없습니다.")
 
     sl.enter_settlement(ctx.db, run["run_id"], target_state=sl.RUN_ABANDONED,
                         end_reason="포기 명령")
