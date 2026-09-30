@@ -789,35 +789,32 @@ def test_every_party_size_fits_side_by_side(party):
     assert image.size == panels.ally_panel_size(theme)
 
 
-def test_a_full_body_character_is_not_cropped(tmp_path):
-    """contain — 머리끝(초록)과 발(빨강)이 모두 카드 안에 남아야 한다 (v8.54 §4)."""
-    import shutil
-
-    from PIL import Image, ImageDraw
-
+@pytest.mark.parametrize("source_size", [(40, 80), (400, 100), (30, 30)])
+def test_uploaded_character_fills_the_whole_art_slot(tmp_path, monkeypatch, source_size):
+    """세로·가로·작은 그림 모두 칸 전체를 채우고 82% 여백을 남기지 않는다."""
+    from PIL import Image
     from app.render import theme as theme_module
     from app.render.assets import AssetLibrary
 
-    art = Image.new("RGBA", (300, 700), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(art)
-    draw.rectangle((100, 0, 200, 12), fill=(0, 255, 0, 255))
-    draw.rectangle((100, 40, 200, 660), fill=(60, 90, 200, 255))
-    draw.rectangle((100, 686, 200, 699), fill=(255, 0, 0, 255))
+    monkeypatch.setattr("app.render.assets.ROOT", tmp_path)
     theme = theme_module.load()
     library = AssetLibrary(theme)
-    target = library.root / library.kind("character").directory / "zz_pytest_tall.png"
-    art.save(target)
-    try:
-        canvas = panels.Canvas(panels.ally_panel_size(theme), theme)
-        card = panels.render_character_card(
-            _card_unit(character_id="zz_pytest_tall"), canvas,
-            size=panels.character_card_size(theme))
-        colors = set(card.convert("RGB").getdata())
-        near = lambda rgb, ref: all(abs(a - b) < 40 for a, b in zip(rgb, ref))
-        assert any(near(c, (0, 255, 0)) for c in colors), "머리끝이 잘렸습니다"
-        assert any(near(c, (255, 0, 0)) for c in colors), "발끝이 잘렸습니다"
-    finally:
-        target.unlink()
+    target = library.expected_path("character", "fill_test")
+    target.parent.mkdir(parents=True)
+    Image.new("RGBA", source_size, (255, 0, 255, 255)).save(target)
+    canvas = panels.Canvas(panels.ally_panel_size(theme), theme, assets=library)
+    card = panels.render_character_card(
+        _card_unit(character_id="fill_test"), canvas,
+        size=panels.character_card_size(theme))
+    pixels = card.convert("RGB")
+    points = [(x, y) for y in range(card.height) for x in range(card.width)
+              if pixels.getpixel((x, y)) == (255, 0, 255)]
+    assert points
+    left, right = min(x for x, y in points), max(x for x, y in points)
+    top, bottom = min(y for x, y in points), max(y for x, y in points)
+    assert right - left + 1 == card.width - 20
+    assert bottom - top + 1 > card.height * 0.5
+    assert len(points) == (right - left + 1) * (bottom - top + 1)
 
 
 def test_the_acting_character_is_marked_in_the_battle_view(db, balance, version, user_id):

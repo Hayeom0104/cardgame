@@ -496,7 +496,7 @@ def render_character_card(unit: dict, canvas: Canvas, *, size: tuple[int, int],
     잘린 확대 컷으로 보였고, HP 바가 그림을 가로질렀다. 여기서는:
 
     · 위: 이름·성급 (행동 중이면 배지)
-    · 가운데: 그림 칸 — 캐릭터 전체가 보이게 `contain`, 칸 높이의 82%
+    · 가운데: 그림 칸 — 비율을 유지하며 `cover`로 빈틈없이 채움
     · 아래: HP 숫자·바, 방어·상태이상(최대 3개, 넘치면 +N) — 그림을 가리지 않는다
     """
     theme = canvas.theme
@@ -555,7 +555,7 @@ def render_character_card(unit: dict, canvas: Canvas, *, size: tuple[int, int],
     info_h = pad + name_h + 6 + bar_h + 8 + chip_h + pad
     info_top = height - info_h
 
-    # ---- 가운데: 그림 칸 (contain) ----
+    # ---- 가운데: 그림 칸 전체를 cover로 채운다 ----
     art_box = (pad, head, width - pad, info_top - 4)
     art_w, art_h = art_box[2] - art_box[0], art_box[3] - art_box[1]
     kit.panel(image, art_box,
@@ -563,11 +563,9 @@ def render_character_card(unit: dict, canvas: Canvas, *, size: tuple[int, int],
               bottom=kit.mix(kind_color if alive else theme.color("color_disabled"),
                              (0, 0, 0), 0.45),
               radius=max(2, radius - 4), border=None, shadow=False, highlight=False)
-    ratio = float(theme.get("character_card_art_ratio", 0.82))
-    target_h = max(1, round(art_h * ratio))
     art = canvas.assets.art(
         "character", str(unit.get("character_id", unit.get("name", ""))), label="",
-        rarity=tier, element=element, size=(art_w, target_h), fit="contain")
+        rarity=tier, element=element, size=(art_w, art_h), fit="cover")
     if not alive:
         alpha = art.getchannel("A") if art.mode == "RGBA" else None
         art = ImageOps.grayscale(art.convert("RGB")).convert("RGBA")
@@ -1786,7 +1784,7 @@ def render_characters(rows: list[dict]) -> Attachment:
         art = canvas.assets.art("character", str(entry.get("character_id", "")),
                                 label=str(entry.get("name", "")),
                                 rarity=entry.get("star_rank"),
-                                size=(card_width - 16, art_height), fit="contain")
+                                size=(card_width - 16, art_height), fit="cover")
         canvas.paste(art, (left + 8, top + 8))
         y = top + art_height + 16
         name = kit.truncate(canvas.draw, str(entry.get("name", "")),
