@@ -1764,44 +1764,45 @@ def render_hub(dashboard: dict, *, coin: int | None, daily: dict,
 
 
 def render_characters(rows: list[dict]) -> Attachment:
-    """보유 캐릭터 명단 — 성급과 다음 성급 비용 (§4.4)."""
-    canvas = Canvas(theme_module.load().size("prep_size"), palette="aurora")
-    canvas.title("캐릭터", right=f"보유 {len(rows)}")
-
-    portrait = (64, 64)
-    item_width, row_height = 420, 80
-    columns = max(1, (canvas.width - canvas.pad * 2 + canvas.gap)
-                  // (item_width + canvas.gap))
-    capacity_rows = max(1, (canvas.height - 56 - canvas.pad + canvas.gap)
-                        // (row_height + canvas.gap))
-    capacity = columns * capacity_rows
-
-    for index, entry in enumerate(rows[:capacity]):
+    """강화 캐릭터 탭: 세로 카드 다섯 장씩, 보유 수에 따라 행을 늘린다."""
+    theme = theme_module.load()
+    width, _ = theme.size("prep_size")
+    pad, gap = theme.int_("screen_padding"), theme.int_("tile_gap")
+    columns = max(1, min(5, (width - pad * 2 + gap) // (144 + gap)))
+    card_width = (width - pad * 2 - gap * (columns - 1)) // columns
+    art_height = round((card_width - 16) * 1.35)
+    card_height = art_height + 154
+    count_rows = max(1, (len(rows) + columns - 1) // columns)
+    height = 64 + count_rows * (card_height + gap) - gap + pad
+    canvas = Canvas((width, height), theme=theme, palette="aurora")
+    canvas.title("캐릭터 강화", right=f"보유 {len(rows)}")
+    if not rows:
+        canvas.label((pad, 80), "보유한 캐릭터가 없습니다.", color=canvas.muted)
+    for index, entry in enumerate(rows):
         column, slot = index % columns, index // columns
-        left = canvas.pad + column * (item_width + canvas.gap)
-        top = 56 + slot * (row_height + canvas.gap)
-        canvas.tile((left, top, left + item_width, top + row_height))
+        left = pad + column * (card_width + gap)
+        top = 64 + slot * (card_height + gap)
+        canvas.tile((left, top, left + card_width, top + card_height))
         art = canvas.assets.art("character", str(entry.get("character_id", "")),
                                 label=str(entry.get("name", "")),
-                                rarity=entry.get("star_rank"), size=portrait)
+                                rarity=entry.get("star_rank"),
+                                size=(card_width - 16, art_height), fit="contain")
         canvas.paste(art, (left + 8, top + 8))
-
-        text_left = left + portrait[0] + 18
-        star = "★" * int(entry.get("star_rank", 1))
-        canvas.label((text_left, top), f"{entry.get('name', '')} {star}"[:20])
-        canvas.label((text_left, top + 22),
-                     f"{entry.get('element', '')} · {entry.get('job_role', '')}",
-                     role="small", color=canvas.muted)
-        status = entry.get("status")
-        if status:
-            canvas.label((text_left, top + 44), str(status)[:28], role="small",
-                         color=canvas.accent if entry.get("status_ready")
-                         else canvas.muted)
-
-    hidden = len(rows) - capacity
-    if hidden > 0:
-        canvas.label((canvas.pad, canvas.height - 24), f"그 외 {hidden}명",
-                     role="small", color=canvas.muted)
+        y = top + art_height + 16
+        name = kit.truncate(canvas.draw, str(entry.get("name", "")),
+                            canvas.font(), card_width - 20)
+        canvas.label((left + 10, y), name)
+        canvas.label((left + 10, y + 26),
+                     "★" * int(entry.get("star_rank", 1)), color=canvas.accent)
+        detail = f"{entry.get('element', '')} · {entry.get('job_role', '')}"
+        detail = kit.truncate(canvas.draw, detail, canvas.font("small"), card_width - 20)
+        canvas.label((left + 10, y + 51), detail, role="small", color=canvas.muted)
+        canvas.draw.line((left + 10, y + 76, left + card_width - 10, y + 76), fill=canvas.border)
+        for line_index, line in enumerate(kit.wrap(
+                canvas.draw, str(entry.get("status") or ""), canvas.font("small"),
+                card_width - 20, max_lines=3)):
+            canvas.label((left + 10, y + 84 + line_index * 18), line, role="small",
+                         color=canvas.accent if entry.get("status_ready") else canvas.muted)
     return canvas.finish("deckout_characters.png")
 
 
