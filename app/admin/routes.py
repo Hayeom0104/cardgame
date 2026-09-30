@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
@@ -254,7 +254,7 @@ async def content_index(request: Request):
 
 
 @router.get("/content/{table}")
-async def content_table(request: Request, table: str):
+async def content_table(request: Request, table: str, selected: str | None = None):
     if (blocked := _guard(request)) is not None:
         return blocked
     db = _db(request)
@@ -266,6 +266,18 @@ async def content_table(request: Request, table: str):
 
     columns = [column for column in (rows[0].keys() if rows else [])
                if column != "content_version_id"]
+    art_tables = {"cards": "card", "characters": "character", "passive_cards": "passive"}
+    if table in art_tables:
+        keys = service.vs.CONTENT_TABLES[table]
+        chosen = next((row for row in rows if _key_parts(row, keys) == selected), None)
+        if selected is not None and chosen is None:
+            return HTMLResponse("해당 카드가 없습니다.", status_code=404)
+        chosen = chosen or (rows[0] if rows else None)
+        return _render(request, "card_workspace.html", table=table, rows=rows,
+                       version_id=version_id, keys=keys, selected=chosen,
+                       asset_kind=art_tables[table],
+                       selected_key=_key_parts(chosen, keys) if chosen else "",
+                       pretty={k: _pretty(v) for k, v in chosen.items()} if chosen else {})
     return _render(request, "content_table.html", table=table, rows=rows,
                    columns=columns, version_id=version_id,
                    keys=service.vs.CONTENT_TABLES[table])
@@ -471,6 +483,32 @@ async def assets_page(request: Request):
                    present=sum(1 for e in report if e["present"] and not e["problem"]),
                    missing=sum(1 for e in report if not e["present"]),
                    broken=sum(1 for e in report if e["problem"]))
+
+
+@router.get("/assets/{kind}/{entity_id}/preview")
+async def asset_preview(request: Request, kind: str, entity_id: str):
+    if (blocked := _guard(request)) is not None:
+        return blocked
+    if not service._safe_id(entity_id):
+        return Response(status_code=400)
+    from app.render.assets import AssetLibrary
+    from app.render.theme import load as load_theme
+    import io
+
+    def build():
+        try:
+            image = AssetLibrary(load_theme()).load(kind, entity_id, size=(720, 720), fit="contain")
+        except KeyError:
+            return None
+        if image is None:
+            return None
+        output = io.BytesIO()
+        image.save(output, format="PNG")
+        return output.getvalue()
+
+    data = await run_in_threadpool(build)
+    return Response(content=data or b"", status_code=200 if data else 404,
+                    media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
 @router.post("/assets/{kind}/{entity_id}")

@@ -498,3 +498,47 @@ def test_the_dashboard_never_touches_the_central_bot_contract(signed_in):
         "raw_content": "!덱아웃"})
     assert response.status_code == 200
     assert response.json()["action"] in ("reply", "reply_ephemeral", "redirect")
+
+
+def test_card_workspace_selects_card_and_preserves_published_values(signed_in):
+    from app.api import server
+    from urllib.parse import quote
+    published = server.state['content_version_id']
+    row = dict(_db().one('SELECT * FROM cards WHERE content_version_id = ? LIMIT 1', (published,)))
+    key = quote(row['card_id'], safe='')
+    response = signed_in.get('/admin/content/cards', params={'selected': key})
+    assert response.status_code == 200
+    assert 'id="card-detail"' in response.text
+    assert 'id="art-upload"' in response.text
+    assert 'data-column="name"' in response.text
+    result = signed_in.post(f'/admin/content/cards/{key}/save', json={'values': {'name': '편집된 카드'}})
+    assert result.json()['ok']
+    assert _db().one('SELECT name FROM cards WHERE content_version_id=? AND card_id=?', (published, row['card_id']))['name'] == row['name']
+    body = signed_in.get('/admin/content/cards', params={'selected': key}).text
+    assert '편집된 카드' in body
+    assert signed_in.get('/admin/content/cards', params={'selected': 'nonexistent'}).status_code == 404
+    for table in ('characters', 'passive_cards'):
+        assert 'id="card-preview"' in signed_in.get('/admin/content/' + table).text
+
+
+def test_asset_preview_shows_replacement_and_requires_auth(signed_in, tmp_path, monkeypatch):
+    import io
+    from PIL import Image
+    from app.render.assets import AssetLibrary
+    from app.render.theme import load
+    monkeypatch.setattr('app.render.assets.ROOT', tmp_path)
+    library = AssetLibrary(load())
+    url = '/admin/assets/card/card_preview_test'
+    for color in ('red', 'blue'):
+        buf = io.BytesIO()
+        Image.new('RGB', (24, 24), color).save(buf, format='PNG')
+        assert signed_in.post(url, content=buf.getvalue()).json()['ok']
+        response = signed_in.get(url + '/preview')
+        assert response.status_code == 200
+        assert response.headers['cache-control'] == 'no-store'
+        with Image.open(io.BytesIO(response.content)) as preview:
+            assert preview.getpixel((360, 360)) == library.load('card', 'card_preview_test', size=(720, 720), fit='contain').getpixel((360, 360))
+    assert signed_in.get('/admin/assets/card/absent/preview').status_code == 404
+    assert signed_in.get('/admin/assets/invalid/test/preview').status_code == 404
+    signed_in.cookies.clear()
+    assert signed_in.get(url + '/preview', follow_redirects=False).status_code == 303

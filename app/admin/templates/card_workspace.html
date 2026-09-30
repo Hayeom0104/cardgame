@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}카드 편집 · 덱아웃 관리{% endblock %}
+{% block body %}
+<style>
+.workspace {display:grid; grid-template-columns: minmax(220px, .8fr) minmax(0, 1.8fr); gap:20px; align-items:start}
+.card-list {max-height:75vh; overflow:auto; padding:8px}
+.card-choice {display:block; padding:12px; border-bottom:1px solid var(--line); color:var(--text); border-radius:6px}
+.card-choice[aria-current] {background:#39332a; box-shadow:inset 3px 0 var(--accent)}
+.card-choice small {display:block; color:var(--muted); overflow-wrap:anywhere}
+.card-art {width:100%; height:300px; object-fit:contain; background:#12141a; border-radius:8px}
+.edit-fields {display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px}
+.edit-fields .wide {grid-column:1/-1}
+.edit-fields label {display:block; margin-bottom:6px; overflow-wrap:anywhere}
+.edit-fields textarea {min-height:64px}
+.editor-actions {position:sticky; bottom:0; background:var(--panel); padding:14px 0; border-top:1px solid var(--line); margin-top:18px}
+#editor-status {white-space:pre-wrap}
+@media(max-width:760px){.workspace{grid-template-columns:1fr}.card-list{max-height:250px}.edit-fields{grid-template-columns:1fr}.card-art{height:240px}}
+</style>
+<h1>카드 편집</h1>
+<p class="sub">카드를 선택해 상세 정보와 그림을 수정하세요. 초안 v{{ version_id }}</p>
+<div class="row" style="margin-bottom:16px">
+  <a href="/admin/content/cards">행동 카드</a>
+  <a href="/admin/content/characters">캐릭터</a>
+  <a href="/admin/content/passive_cards">패시브</a>
+  <a href="/admin/content">전체 콘텐츠</a>
+</div>
+<div class="workspace">
+  <section aria-label="카드 목록">
+    <label for="card-search">이름·ID 검색</label>
+    <input id="card-search" type="text" placeholder="카드 찾기" style="margin:8px 0 12px">
+    <div class="panel card-list">
+      {% for item in rows %}
+      {% set item_key = item|keyparts(keys) %}
+      <a class="card-choice" href="?selected={{ item_key|urlencode }}#card-detail"
+         data-search="{{ ((item.name or '') ~ ' ' ~ item[keys[0]])|lower }}"
+         {% if item_key == selected_key %}aria-current="true"{% endif %}>
+        <strong>{{ item.name or item[keys[0]] }}</strong>
+        <small>{{ item[keys[0]] }}{% if item.element %} · {{ item.element }}{% endif %}</small>
+      </a>
+      {% else %}<p class="muted">등록된 카드가 없습니다.</p>{% endfor %}
+      <p id="no-results" class="muted" hidden>검색 결과가 없습니다.</p>
+    </div>
+  </section>
+  <section id="card-detail" class="panel" aria-label="선택한 카드 상세">
+    {% if selected %}
+    <h2 style="margin-top:0">{{ selected.name or selected[keys[0]] }}</h2>
+    <code>{{ selected[keys[0]] }}</code>
+    <div style="margin:16px 0">
+      <img id="card-preview" class="card-art" alt="{{ selected.name or selected[keys[0]] }} 그림">
+      <p id="preview-empty" class="muted" hidden>저장된 그림이 없거나 미리보기를 불러오지 못했습니다.</p>
+      <label for="art-upload">사진 변경</label>
+      <input id="art-upload" type="file" accept="image/png,image/jpeg,image/webp" style="display:block;margin-top:8px;max-width:100%">
+      <p class="muted">사진은 업로드 즉시 저장되며, 게임에서 새로 여는 화면부터 사용됩니다.</p>
+    </div>
+    <form id="card-form">
+      <div class="edit-fields">
+      {% set labels = {'name':'이름', 'cost':'비용', 'element':'속성', 'rarity_tier':'등급', 'category':'종류', 'description':'설명', 'effects_json':'효과 (JSON)', 'targeting_json':'대상 지정 (JSON)', 'base_hp':'기본 체력', 'base_attack':'기본 공격력', 'base_defense':'기본 방어력'} %}
+      {% for column, value in selected.items() %}
+      {% if column not in keys and column != 'content_version_id' %}
+        <div class="{% if column.endswith('_json') or column == 'description' %}wide{% endif %}">
+          <label for="field-{{ loop.index }}">{{ labels.get(column, column) }}</label>
+          {% if value is number %}
+          <input id="field-{{ loop.index }}" type="text" inputmode="decimal" data-column="{{ column }}" value="{{ pretty[column] }}">
+          {% else %}
+          <textarea id="field-{{ loop.index }}" data-column="{{ column }}" {% if column.endswith('_json') %}style="min-height:150px" spellcheck="false"{% endif %}>{{ pretty[column] }}</textarea>
+          {% endif %}
+        </div>
+      {% endif %}
+      {% endfor %}
+      </div>
+      <div class="editor-actions">
+        <button id="save-card" type="submit">상세 정보 저장</button>
+        <a href="/admin/content/{{ table }}/{{ selected_key }}" style="margin-left:12px">개별 편집·이력</a>
+        <p class="muted">상세 정보는 초안에 저장됩니다. <a href="/admin/versions">버전 검증·발행</a> 후 새 게임에 적용됩니다.</p>
+        <p id="editor-status" role="status" aria-live="polite"></p>
+      </div>
+    </form>
+    {% else %}<p class="muted">편집할 카드를 등록하면 이곳에 표시됩니다.</p>{% endif %}
+  </section>
+</div>
+<script>
+const search = document.getElementById('card-search');
+search.addEventListener('input', () => {
+  let count = 0;
+  document.querySelectorAll('.card-choice').forEach(item => {
+    const match = item.dataset.search.includes(search.value.trim().toLowerCase());
+    item.style.display = match ? '' : 'none';
+    if (match) count++;
+  });
+  document.getElementById('no-results').hidden = count !== 0;
+});
+{% if selected %}
+const assetUrl = '/admin/assets/' + {{ asset_kind|tojson }} + '/' + encodeURIComponent({{ selected[keys[0]]|tojson }});
+const saveUrl = '/admin/content/' + {{ table|tojson }} + '/' + {{ selected_key|tojson }} + '/save';
+const preview = document.getElementById('card-preview');
+const empty = document.getElementById('preview-empty');
+const status = document.getElementById('editor-status');
+let dirty = false;
+let uploading = false;
+window.addEventListener('beforeunload', event => { if (dirty || uploading) { event.preventDefault(); event.returnValue = ''; } });
+preview.onload = () => { preview.hidden = false; empty.hidden = true; };
+preview.onerror = () => { preview.hidden = true; empty.hidden = false; };
+function refreshPreview() { preview.src = assetUrl + '/preview?t=' + Date.now(); }
+refreshPreview();
+document.getElementById('card-form').addEventListener('input', () => { dirty = true; status.textContent = '저장하지 않은 변경 사항이 있습니다.'; });
+async function send(url, options) {
+  const response = await fetch(url, options);
+  if (response.redirected) throw new Error('로그인이 만료되었습니다. 다시 로그인하세요.');
+  let data;
+  try { data = await response.json(); } catch { throw new Error('서버 응답을 확인할 수 없습니다.'); }
+  if (!response.ok || !data.ok) throw new Error(data.message || '저장하지 못했습니다.');
+  return data;
+}
+document.getElementById('card-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = document.getElementById('save-card');
+  const inputs = [...document.querySelectorAll('[data-column]')];
+  if (button.disabled) return;
+  const values = Object.fromEntries(inputs.map(input => [input.dataset.column, input.value]));
+  button.disabled = true;
+  inputs.forEach(input => input.disabled = true);
+  status.textContent = '저장 중…';
+  try {
+    await send(saveUrl, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({values})});
+    dirty = false;
+    status.textContent = '초안에 저장했습니다. 버전 메뉴에서 검증·발행하세요.';
+  } catch(error) { status.textContent = error.message; }
+  finally { button.disabled = false; inputs.forEach(input => input.disabled = false); }
+});
+document.getElementById('art-upload').addEventListener('change', async event => {
+  const input = event.target;
+  const file = input.files[0];
+  if (!file) return;
+  input.disabled = true; uploading = true; status.textContent = '사진 업로드 중…';
+  try {
+    await send(assetUrl, {method:'POST', headers:{'Content-Type':'application/octet-stream'}, body:file});
+    refreshPreview(); status.textContent = '사진을 저장했습니다. 게임 화면을 다시 열어 확인하세요.';
+  } catch(error) { status.textContent = error.message; }
+  finally { input.disabled = false; input.value = ''; uploading = false; }
+});
+{% endif %}
+</script>
+{% endblock %}
