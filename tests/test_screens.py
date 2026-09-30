@@ -367,3 +367,57 @@ def test_the_pull_result_is_also_a_picture(db, balance, version, user_id):
         db, balance, user_id, f"{screens.GACHA_PREFIX}{banner['banner_id']}:single",
         version, event_id="evt-그림-1")
     assert result["attachments"][0]["filename"] == "deckout_gacha.png"
+
+
+# =====================================================================
+# 패시브 선택 — 운영 신고 "저장하고 다음 → 처리 중 문제가 발생했습니다"
+# =====================================================================
+def _to_passive_screen(db, balance, version, user_id):
+    for row in db.query("SELECT passive_card_id FROM passive_cards "
+                        "WHERE content_version_id = ?", (version,)):
+        db.execute("INSERT OR IGNORE INTO unlocked_passives (user_id, passive_card_id, "
+                   "unlocked_at) VALUES (?, ?, ?)", (user_id, row["passive_card_id"], utcnow()))
+    screens.handle_prep(db, balance, user_id, f"{screens.PREP_PREFIX}world",
+                        [WORLD_1_ID], version)
+    screens.handle_prep(db, balance, user_id, f"{screens.PREP_PREFIX}party",
+                        [STARTER_CHARACTER_ID, "char_aquel"], version)
+    screens.handle_prep(db, balance, user_id, f"{screens.PREP_PREFIX}deck_auto:1", [],
+                        version)
+    return screens.handle_prep(db, balance, user_id,
+                               f"{screens.PREP_PREFIX}deck_save:2", [], version)
+
+
+def _passive_select(screen):
+    return next(c for c in screen["components"] if c["type"] == "string_select")
+
+
+def test_the_passive_select_never_asks_for_zero_choices(db, balance, version, graduate):
+    """0개 선택 허용(`min_values: 0`)은 이 화면에만 있었고, 실패가 정확히 이
+    화면으로 넘어갈 때 났다. 안 고르는 길은 [건너뛰기]가 맡는다."""
+    screen = _to_passive_screen(db, balance, version, graduate)
+    select = _passive_select(screen)
+    assert select["min_values"] >= 1
+    assert 1 <= select["max_values"] <= len(select["options"]) <= 25
+    assert all(option.get("description", "x") for option in select["options"])
+    assert any(c.get("label") == "건너뛰기" for c in screen["components"])
+
+
+def test_every_passive_is_reachable_through_the_pages(db, balance, version, graduate):
+    screen = _to_passive_screen(db, balance, version, graduate)
+    seen = []
+    for _ in range(10):
+        seen += [option["value"] for option in _passive_select(screen)["options"]]
+        forward = next((c for c in screen["components"]
+                        if c.get("label") == "다음 목록 ▶"), None)
+        if forward is None:
+            break
+        step = forward["custom_id"]
+        screen = screens.handle_prep(db, balance, graduate, step, [], version)
+    unlocked = {row["passive_card_id"] for row in
+                lc.selectable_passives(db, graduate, version)}
+    assert set(seen) == unlocked
+
+    last = _passive_select(screen)["options"][-1]["value"]
+    result = screens.handle_prep(db, balance, graduate, f"{screens.PREP_PREFIX}passive",
+                                 [last], version)
+    assert "[4] 확정" in result["content"]

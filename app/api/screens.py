@@ -159,34 +159,60 @@ def deck_select_screen(db, user_id, content_version_id, draft, *, slot):
     return screen(db, user_id, content_version_id, draft, slot=slot)
 
 
+#: 패시브 선택창 한 페이지의 항목 수 — 디스코드 선택창 한도.
+PASSIVE_PAGE_SIZE = 25
+
+
 def passive_select_screen(db: Database, user_id: int, content_version_id: int,
-                          draft: dict) -> dict:
-    """[3] PASSIVE SELECT — `passive_slots`까지, 더 적어도 된다 (§6)."""
+                          draft: dict, *, page: int = 0) -> dict:
+    """[3] PASSIVE SELECT — `passive_slots`까지, 더 적어도 된다 (§6).
+
+    운영 신고("저장하고 다음" → 처리 중 문제): 이 선택창만 `min_values: 0`이었다.
+    가이드의 선택창 규칙(선택지 1~25개)에 0개 선택 허용은 없고, 실패는 정확히
+    이 화면으로 넘어갈 때 났다. 고르지 않는 길은 이미 [건너뛰기] 버튼이 있으므로
+    1개 이상으로 바꾼다. 패시브가 25개를 넘으면 26번째부터 고를 수 없던 것도
+    페이지로 나눈다.
+    """
     account = db.one("SELECT passive_slots FROM accounts WHERE user_id = ?",
                      (user_id,))
     slots = int(account["passive_slots"])
 
-    # 고를 것이 없으면 이 단계는 건너뛴다 — 빈 화면을 띄울 이유가 없다.
-    # 목록의 정의는 `lifecycle.selectable_passives` 한 곳에만 있고,
-    # `validate_build`도 같은 목록으로 검사한다.
+    # 고를 것이 없으면(또는 슬롯이 없으면) 이 단계는 건너뛴다 — 빈 화면을 띄울
+    # 이유가 없다. 목록의 정의는 `lifecycle.selectable_passives` 한 곳에만
+    # 있고, `validate_build`도 같은 목록으로 검사한다.
     passives = lc.selectable_passives(db, user_id, content_version_id)
-    if not passives:
+    if not passives or slots < 1:
         return confirm_screen(db, user_id, content_version_id, draft)
 
-    return {
-        "action": "edit",
-        "content": f"**준비 화면** — [3] 패시브 선택 (최대 {slots}개, 생략 가능)",
-        "components": [
-            {"type": "string_select", "custom_id": f"{PREP_PREFIX}passive",
-             "placeholder": "패시브를 선택하세요",
-             "min_values": 0, "max_values": min(slots, len(passives)),
-             "options": [{"label": row["name"], "value": row["passive_card_id"],
-                          "description": (row["description"] or "")[:100]}
-                         for row in passives[:25]]},
-            {"type": "button", "custom_id": f"{PREP_PREFIX}skip_passive",
-             "label": "건너뛰기"},
-        ],
-    }
+    pages = max(1, -(-len(passives) // PASSIVE_PAGE_SIZE))
+    page = min(max(int(page), 0), pages - 1)
+    shown = passives[page * PASSIVE_PAGE_SIZE:(page + 1) * PASSIVE_PAGE_SIZE]
+
+    def option(row) -> dict:
+        entry = {"label": str(row["name"])[:100], "value": row["passive_card_id"]}
+        description = (row["description"] or "").strip()[:100]
+        if description:
+            entry["description"] = description
+        return entry
+
+    title = f"**준비 화면** — [3] 패시브 선택 (최대 {slots}개, 생략 가능)"
+    if pages > 1:
+        title += f" · {page + 1}/{pages}쪽"
+    components = [
+        {"type": "string_select", "custom_id": f"{PREP_PREFIX}passive",
+         "placeholder": "패시브를 선택하세요",
+         "min_values": 1, "max_values": min(slots, len(shown)),
+         "options": [option(row) for row in shown]},
+        {"type": "button", "custom_id": f"{PREP_PREFIX}skip_passive",
+         "label": "건너뛰기"},
+    ]
+    if page > 0:
+        components.append({"type": "button", "label": "◀ 이전 목록",
+                           "custom_id": f"{PREP_PREFIX}passive_page:{page - 1}"})
+    if page < pages - 1:
+        components.append({"type": "button", "label": "다음 목록 ▶",
+                           "custom_id": f"{PREP_PREFIX}passive_page:{page + 1}"})
+    return {"action": "edit", "content": title, "components": components}
 
 
 def confirm_screen(db: Database, user_id: int, content_version_id: int,
@@ -320,6 +346,15 @@ def handle_prep(db: Database, balance: Balance, user_id: int, custom_id: str,
     if step.startswith("deck"):
         from app.api.deck_editor import handle
         return handle(db, balance, user_id, content_version_id, draft, step, values)
+
+    if step.startswith("passive_page:"):
+        if not draft["party"]:
+            return world_select_screen(db, user_id, content_version_id)
+        try:
+            page = int(step.partition(":")[2])
+        except ValueError:
+            return {"action": "edit", "content": errors.ILLEGAL_STATE}
+        return passive_select_screen(db, user_id, content_version_id, draft, page=page)
 
     if step in ("passive", "skip_passive"):
         if not draft["party"]:
